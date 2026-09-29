@@ -13,7 +13,6 @@ from syllo_eval.service import (
   ServiceFactory,
   build_db_manager,
   resolve_selected_metric_names_csv,
-  settings_metric_names,
 )
 from syllo_eval.datasets import (
   DatasetAlreadyExistsError,
@@ -283,11 +282,8 @@ def main(
 
   try:
     settings = Settings()
-    selected_metric_names = resolve_selected_metric_names_csv(
-      args.metrics,
-      settings_metric_names(settings),
-    )
     service = service_factory(settings)
+    selected_metric_names = resolve_selected_metric_names_csv(args.metrics, service.available_metric_names())
   except MetricSelectionError as err:
     parser.error(str(err))
   except Exception:
