@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "syllo-eval"
+version = "0.1.0"
+description = "Agent evaluation engine: canonical traces, metrics, and reports for Python, CLI, and HTTP consumers"
+authors = ["Lorenzo Antonelli <lorenzo.antonelli@syllotips.com>"]
+readme = "README.md"
+package-mode = true
+packages = [{include = "syllo_eval"}]
+exclude = ["syllo_eval/**/test_*.py", "syllo_eval/testing_database.py"]
+include = [{path = "syllo_eval/py.typed", format = ["sdist", "wheel"]}]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+pydantic = "^2.12.5"
+pydantic-settings = "^2.15.0"
+psycopg = {extras = ["pool"], version = "^3.3.3"}
+httpx = "^0.28.1"
+fastapi = "^0.115.0"
+uvicorn = "^0.30.0"
+langchain-core = "^1.2.12"
+langchain-openai = "^1.1.11"
+langchain-google-genai = "^4.2.1"
+python-dotenv = "^1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.15.7"
+mypy = "1.14.1"
+
+[tool.poetry.group.migrations.dependencies]
+alembic = "^1.18.5"
+sqlalchemy = "^2.0.36"
+
+[tool.ruff]
+line-length = 120
+indent-width = 2
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = ["\\.venv"]
