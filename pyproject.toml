@@ -1,8 +1,9 @@
 [tool.poetry]
 name = "syllo-eval"
-version = "0.3.0"
+version = "0.4.0"
 description = "Agent evaluation engine: canonical traces, metrics, and reports for Python, CLI, and HTTP consumers"
 authors = ["Lorenzo Antonelli <lorenzo.antonelli@syllotips.com>"]
+license = "MIT"
 readme = "README.md"
 package-mode = true
 packages = [{include = "syllo_eval"}]

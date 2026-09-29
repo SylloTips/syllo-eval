@@ -16,7 +16,9 @@ class ServiceFactoryTest(unittest.TestCase):
   def test_cli_builds_the_runtime_with_the_injected_factory(self):
     run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
     factory = MagicMock()
+    factory.return_value.available_metric_names.return_value = ['custom_metric']
     argv = ['--agent-name', 'demo-agent', '--agent-version-tag', 'v1', '--dataset-id', str(uuid4())]
+    argv += ['--metrics', 'custom_metric']
     with (
       patch.dict('os.environ', {}, clear=True),
       patch('syllo_eval.API.cli.load_settings_env'),
@@ -28,6 +30,7 @@ class ServiceFactoryTest(unittest.TestCase):
     factory.assert_called_once()
     self.assertIsInstance(factory.call_args.args[0], Settings)
     self.assertIs(run_mock.call_args.kwargs['service'], factory.return_value)
+    self.assertEqual(run_mock.call_args.kwargs['selected_metric_names'], ['custom_metric'])
 
   def test_app_builds_the_runtime_with_the_injected_factory(self):
     service = MagicMock(
