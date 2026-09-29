@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: pg-syllo-eval
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d pg-syllo-eval']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    ports:
+      - '5432:5432'
+    volumes:
+      - syllo-eval-db:/var/lib/postgresql
+
+volumes:
+  syllo-eval-db:

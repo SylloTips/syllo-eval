@@ -9,6 +9,9 @@ packages = [{include = "syllo_eval"}]
 exclude = ["syllo_eval/**/test_*.py", "syllo_eval/testing_database.py"]
 include = [{path = "syllo_eval/py.typed", format = ["sdist", "wheel"]}]
 
+[tool.poetry.scripts]
+syllo-eval = "syllo_eval.API.cli:main"
+
 [tool.poetry.dependencies]
 python = ">=3.12,<3.14"
 pydantic = "^2.12.5"

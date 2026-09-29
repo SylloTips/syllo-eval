@@ -21,9 +21,14 @@ poetry run ruff check .
 poetry run ruff format .
 poetry run mypy syllo_eval --check-untyped-defs --explicit-package-bases
 
-# Full suite; includes database integration tests
+# Focused tests (co-located unittest modules)
+poetry run python -m unittest syllo_eval.evaluation.test_trace_normalization
+
+# Full suite when the change warrants it; includes database integration tests
 poetry run python -m unittest discover -s . -p 'test_*.py'
 
+poetry run syllo-eval --help
+poetry run uvicorn syllo_eval.API.app:app --host 0.0.0.0 --port 8005
 poetry build
 ```
 
@@ -38,7 +43,8 @@ Repeat evaluation reuses stored traces and runs only metric planning and computa
 or construct callers/trace integrations.
 
 - **Public boundary:** `EvaluationService` serves library, CLI, and HTTP consumers. The package is `syllo_eval`,
-  distributed as `syllo-eval`. Downstream packages extend it by injecting callers, trace clients, adapters, and metrics.
+  distributed as `syllo-eval`; the CLI entry point is `syllo_eval.API.cli.main`. Downstream packages inject callers,
+  trace clients, adapters, and metrics, and pass a `service_factory` to `create_app()` and `main()`.
 - **Agent independence:** callers execute agents, source clients fetch records, adapters produce canonical traces,
   and metrics consume canonical observations. Agent-specific interpretation belongs in downstream adapters or custom
   metrics. The engine registers no caller by default.
@@ -78,7 +84,7 @@ or construct callers/trace integrations.
   outside deadlines. On cancellation, persist sample failure with shielding, then propagate cancellation.
 - Reports read persisted data. Use saved sample/metric plans for totals and coverage, including missing samples and metrics
   with zero computations. Keep agent usage separate from judge usage and deduplicate by trace/call identity.
-- Alembic migrations are manually applied raw SQL in `migrations/`, without ORM autogeneration. Never run migrations automatically
+- Alembic migrations are manually applied raw SQL in `syllo_eval/migrations/`, without ORM autogeneration. Never run migrations automatically
   from application startup or container commands. Confirm the database target before `poetry run alembic upgrade head`.
 
 ## Where to look
@@ -91,7 +97,11 @@ Paths below are relative to `syllo_eval/`, unless linked otherwise. Read only th
 | Execution, cancellation, repeats | `orchestration/evaluation_orchestrator.py`, `execution/sample_executor.py`, `execution/agent_caller/` |
 | Canonical models, adapters, ingestion | `model.py`, `trace_semantics.py`, `evaluation/trace_adapter.py`, `evaluation/trace_processor.py` |
 | Metrics, judges, reporting | `evaluation/metrics/`, `evaluation/metric_planner.py`, `evaluation/plan_executor.py`, `evaluation/judge/`, `evaluation/evaluation_report.py` |
-| Datasets, settings, persistence | `datasets/`, `settings.py`, `infrastructure/`, root `migrations/` |
+| Datasets, settings, persistence | `datasets/`, `settings.py`, `infrastructure/`, `migrations/` |
+
+Read [trace normalization](docs/trace-normalization.md) for adapter contracts and retrieval semantics.
+When adding a metric, follow the [add-metric skill](.agents/skills/add-metric/SKILL.md).
+See [the database diagram](docs/ER_diagram.mmd) for entity relationships.
 
 Do not append endpoint catalogs, field inventories, provider workarounds, release history, or agent-specific walkthroughs here.
 Keep those with their implementation or focused documentation, and link to them when useful.

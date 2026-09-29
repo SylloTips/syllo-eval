@@ -1,0 +1,145 @@
+---
+config:
+  layout: elk
+---
+erDiagram
+  direction LR
+
+  DATASET {
+    id id PK
+    string name
+  }
+  AGENT {
+    id id PK
+    string name UK
+    string version_tag UK
+  }
+  EVALUATION_RUN {
+    id id PK
+    id agent_id FK
+    id dataset_id FK
+    id source_run_id FK "NULLABLE"
+    enum status "RUNNING,COMPLETED,PARTIALLY_COMPLETED,FAILED"
+    timestamp start_time
+    timestamp end_time
+    json config "NULLABLE"
+  }
+  EVALUATION_RUN_METRIC {
+    id evaluation_run_id PK, FK
+    string metric PK, FK
+    timestamp created_at
+  }
+  EVALUATION_RUN_PLAN_SAMPLE {
+    id evaluation_run_id PK, FK
+    id sample_id PK, FK
+    timestamp created_at
+  }
+  SPAN_TYPE {
+    string name PK
+    string description "NULLABLE"
+  }
+  METRIC_TARGET_SPAN_TYPE {
+    id id PK
+    string metric FK
+    string span_type FK
+    enum targeting_mode "SINGLE, GROUP"
+  }
+  TRACE {
+    string external_id PK
+    int schema_version
+    string source
+    string adapter "NULLABLE"
+    timestamp start_time
+    timestamp end_time
+  }
+  GROUND_TRUTH {
+    id id PK
+    id sample_id FK, UK
+    string key UK "expected_output,expected_plan,relevant_document_ids,relevant_snippet_ids"
+    json ground_truth_value
+  }
+  EVALUATION_RUN_SAMPLE {
+    id id PK
+    id evaluation_run_id FK
+    id sample_id FK
+    string trace_id FK "NULLABLE"
+    enum status "RUNNING,COMPLETED,FAILED"
+    timestamp started_at "NULLABLE"
+    timestamp ended_at "NULLABLE"
+    string error_message "NULLABLE"
+    json metadata "NULLABLE"
+  }
+  SPAN_METRIC_COMPUTATION {
+    id id PK
+    id evaluation_run_sample_id FK
+    string metric FK
+    id ground_truth_id FK "NULLABLE"
+    enum targeting_mode "SINGLE, GROUP"
+    string target_span_type FK
+    float score "NULLABLE"
+    enum status "COMPLETED,FAILED,SKIPPED"
+    string reasoning "NULLABLE"
+    json metadata "NULLABLE"
+    string error_message "NULLABLE"
+    json raw_output "NULLABLE"
+  }
+  SINGLE_SPAN_METRIC_COMPUTATION {
+    id metric_computation_id PK
+    string span_id FK
+  }
+  GROUP_SPAN_METRIC_COMPUTATION_SPAN {
+    id metric_computation_id PK, FK
+    string span_id PK, FK
+  }
+  SAMPLE {
+    id id PK
+    id dataset_id FK
+    string input_prompt
+    string ground_truth_output "NULLABLE"
+  }
+  SPAN {
+    string external_id PK
+    string trace_id FK
+    id parent_span_id FK "NULLABLE"
+    string span_type FK
+    string name
+    timestamp start_time
+    timestamp end_time
+    enum status "success,error,unset"
+    json input_data
+    json output_data
+    json semantics
+    json metadata "NULLABLE"
+  }
+  METRIC {
+    string name PK
+    string description "NULLABLE"
+    boolean requires_ground_truth
+    string ground_truth_key "NULLABLE"
+  }
+
+  DATASET ||--|{ SAMPLE : "has"
+  AGENT ||--o{ EVALUATION_RUN : "evaluated in"
+  DATASET ||--o{ EVALUATION_RUN : "used in"
+  EVALUATION_RUN |o--o{ EVALUATION_RUN : "repeated from"
+  EVALUATION_RUN ||--|{ EVALUATION_RUN_SAMPLE : "generates"
+  EVALUATION_RUN ||--o{ EVALUATION_RUN_METRIC : "snapshots metric"
+  METRIC ||--o{ EVALUATION_RUN_METRIC : "snapshotted in"
+  EVALUATION_RUN ||--o{ EVALUATION_RUN_PLAN_SAMPLE : "plans"
+  SAMPLE ||--o{ EVALUATION_RUN_PLAN_SAMPLE : "planned in"
+  SAMPLE ||--o{ EVALUATION_RUN_SAMPLE : "appears in"
+  EVALUATION_RUN_SAMPLE |o--o| TRACE : "produces"
+  TRACE ||--o{ SPAN : "contains"
+  SPAN ||--o{ SPAN : "parent of"
+  METRIC ||--o{ SPAN_METRIC_COMPUTATION : "scored in"
+  SPAN_TYPE ||--o{ SPAN_METRIC_COMPUTATION : "targeted by"
+  EVALUATION_RUN_SAMPLE ||--o{ SPAN_METRIC_COMPUTATION : "has"
+  GROUND_TRUTH ||--o{ SPAN_METRIC_COMPUTATION : "used by"
+  SPAN_METRIC_COMPUTATION ||--o| SINGLE_SPAN_METRIC_COMPUTATION : "extends (SINGLE)"
+  SPAN_METRIC_COMPUTATION ||--o{ GROUP_SPAN_METRIC_COMPUTATION_SPAN : "extends (GROUP)"
+  SPAN ||--o| SINGLE_SPAN_METRIC_COMPUTATION : "scored by"
+  SPAN ||--o{ GROUP_SPAN_METRIC_COMPUTATION_SPAN : "part of group"
+  METRIC ||--o{ METRIC_TARGET_SPAN_TYPE : "targets"
+  SPAN_TYPE ||--o{ SPAN : "typed as"
+  SPAN_TYPE ||--o{ METRIC_TARGET_SPAN_TYPE : "targeted by"
+  SAMPLE ||--o{ GROUND_TRUTH : "has"
