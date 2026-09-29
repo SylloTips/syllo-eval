@@ -171,6 +171,7 @@ def create_app(
   service: EvaluationService | None = None,
   dataset_service: DatasetService | None = None,
   service_factory: ServiceFactory = EvaluationService,
+  title: str = 'syllo-eval',
 ) -> FastAPI:
   @asynccontextmanager
   async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -200,7 +201,7 @@ def create_app(
       await runtime_service.close()
 
   app = FastAPI(
-    title='syllo-eval',
+    title=title,
     description='Manage datasets, start evaluation runs, list their status, poll reports, and cancel running runs.',
     version='1.2.0',
     lifespan=lifespan,

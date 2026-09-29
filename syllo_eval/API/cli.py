@@ -69,9 +69,9 @@ def _parse_existing_file(value: str) -> Path:
   return path
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-    prog='syllo-eval',
+    prog=prog,
     description='Run an evaluation for one agent/dataset by calling the agent for each sample.',
   )
   parser.add_argument(
@@ -204,8 +204,8 @@ async def _list_datasets(service: DatasetService, *, limit: int, offset: int) ->
     await service.close()
 
 
-def build_dataset_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(prog='syllo-eval dataset', description='Manage evaluation datasets.')
+def build_dataset_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(prog=f'{prog} dataset', description='Manage evaluation datasets.')
   subparsers = parser.add_subparsers(dest='command', required=True)
 
   import_parser = subparsers.add_parser('import', help='Import a dataset JSON file as a new dataset.')
@@ -235,9 +235,9 @@ def build_dataset_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def build_repeat_parser() -> argparse.ArgumentParser:
+def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-    prog='syllo-eval repeat',
+    prog=f'{prog} repeat',
     description='Repeat an evaluation by recomputing metrics over stored traces.',
   )
   parser.add_argument('source_run_id', type=_parse_uuid, help='Source evaluation run UUID.')
@@ -267,15 +267,17 @@ def build_repeat_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def main(argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService) -> int:
+def main(
+  argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService, prog: str = 'syllo-eval'
+) -> int:
   load_settings_env(override=False)
   raw_argv = list(argv) if argv is not None else sys.argv[1:]
   if raw_argv[:1] == ['repeat']:
-    return _main_repeat(raw_argv[1:], service_factory)
+    return _main_repeat(raw_argv[1:], service_factory, prog)
   if raw_argv[:1] == ['dataset']:
-    return _main_dataset(raw_argv[1:])
+    return _main_dataset(raw_argv[1:], prog)
 
-  parser = build_parser()
+  parser = build_parser(prog)
   args = parser.parse_args(raw_argv)
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
@@ -328,8 +330,8 @@ def main(argv: Sequence[str] | None = None, service_factory: ServiceFactory = Ev
   return _exit_code_for_status(run.status)
 
 
-def _main_dataset(argv: Sequence[str]) -> int:
-  parser = build_dataset_parser()
+def _main_dataset(argv: Sequence[str], prog: str) -> int:
+  parser = build_dataset_parser(prog)
   args = parser.parse_args(argv)
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
@@ -381,8 +383,8 @@ def _main_dataset(argv: Sequence[str]) -> int:
     return 1
 
 
-def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory) -> int:
-  parser = build_repeat_parser()
+def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:
+  parser = build_repeat_parser(prog)
   args = parser.parse_args(argv)
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 

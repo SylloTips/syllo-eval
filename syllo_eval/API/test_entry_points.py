@@ -1,3 +1,4 @@
+import io
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,6 +44,19 @@ class ServiceFactoryTest(unittest.TestCase):
     self.assertIsInstance(factory.call_args.args[0], Settings)
     service.initialize.assert_awaited_once()
     service.close.assert_awaited_once()
+
+  def test_cli_and_app_use_the_given_program_name(self):
+    for argv, expected in [(['--help'], 'usage: my-eval '), (['dataset', '--help'], 'usage: my-eval dataset ')]:
+      with (
+        self.subTest(argv=argv),
+        patch('syllo_eval.API.cli.load_settings_env'),
+        patch('sys.stdout', new_callable=io.StringIO) as stdout,
+        self.assertRaises(SystemExit),
+      ):
+        main(argv, prog='my-eval')
+      self.assertTrue(stdout.getvalue().startswith(expected), stdout.getvalue()[:60])
+
+    self.assertEqual(create_app(service=MagicMock(), title='my-eval').title, 'my-eval')
 
   def test_excluded_root_span_names_are_normalized(self):
     env = {'PHOENIX_REQUEST_ID_EXCLUDED_ROOT_SPAN_NAMES': '[" Helper_Root "]'}
