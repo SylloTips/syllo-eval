@@ -93,7 +93,7 @@ Paths below are relative to `syllo_eval/`, unless linked otherwise. Read only th
 
 | Task | Start here |
 |---|---|
-| Service/API/CLI assembly | `service.py`, `API/config.py`, `API/app.py`, `API/cli.py` |
+| Service/API/CLI assembly | `service.py`, `API/app.py`, `API/cli.py` |
 | Execution, cancellation, repeats | `orchestration/evaluation_orchestrator.py`, `execution/sample_executor.py`, `execution/agent_caller/` |
 | Canonical models, adapters, ingestion | `model.py`, `trace_semantics.py`, `evaluation/trace_adapter.py`, `evaluation/trace_processor.py` |
 | Metrics, judges, reporting | `evaluation/metrics/`, `evaluation/metric_planner.py`, `evaluation/plan_executor.py`, `evaluation/judge/`, `evaluation/evaluation_report.py` |

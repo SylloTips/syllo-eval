@@ -16,6 +16,7 @@ from syllo_eval.service import (
   EvaluationService,
   MetricSelectionError,
   RepeatNotAllowedError,
+  ServiceFactory,
 )
 from syllo_eval.datasets import (
   DatasetAlreadyExistsError,
@@ -25,10 +26,9 @@ from syllo_eval.datasets import (
 )
 from syllo_eval.evaluation.evaluation_report import EvaluationReport, EvaluationReportNotAvailableError
 from syllo_eval.infrastructure.exceptions import NotFoundError
-from syllo_eval.logging_utils import configure_logging
+from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import EvaluationStatus
-from syllo_eval.API.config import AppSettings, ServiceFactory, build_evaluation_service
-from syllo_eval.settings import load_settings_env
+from syllo_eval.settings import Settings, load_settings_env
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ DATASET_CONFLICT_RESPONSE: dict[int | str, dict[str, Any]] = {
 def create_app(
   service: EvaluationService | None = None,
   dataset_service: DatasetService | None = None,
-  service_factory: ServiceFactory = build_evaluation_service,
+  service_factory: ServiceFactory = EvaluationService,
 ) -> FastAPI:
   @asynccontextmanager
   async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -187,9 +187,8 @@ def create_app(
       return
 
     load_settings_env(override=False)
-    settings = AppSettings.from_env()
-    configure_logging(settings.logging)
-    runtime_service = service_factory(settings.engine)
+    configure_logging(LoggingSettings.from_env())
+    runtime_service = service_factory(Settings())
     try:
       await runtime_service.initialize()
       app.state.evaluation_service = runtime_service

@@ -10,6 +10,7 @@ from uuid import UUID
 from syllo_eval.service import (
   EvaluationService,
   MetricSelectionError,
+  ServiceFactory,
   build_db_manager,
   resolve_selected_metric_names_csv,
   settings_metric_names,
@@ -22,10 +23,9 @@ from syllo_eval.datasets import (
   DatasetService,
   load_dataset_json,
 )
-from syllo_eval.API.config import AppSettings, ServiceFactory, build_evaluation_service
 from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import EvaluationRun, EvaluationStatus
-from syllo_eval.settings import load_settings_env
+from syllo_eval.settings import Settings, load_settings_env
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ def build_repeat_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def main(argv: Sequence[str] | None = None, service_factory: ServiceFactory = build_evaluation_service) -> int:
+def main(argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService) -> int:
   load_settings_env(override=False)
   raw_argv = list(argv) if argv is not None else sys.argv[1:]
   if raw_argv[:1] == ['repeat']:
@@ -280,12 +280,12 @@ def main(argv: Sequence[str] | None = None, service_factory: ServiceFactory = bu
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = AppSettings.from_env()
+    settings = Settings()
     selected_metric_names = resolve_selected_metric_names_csv(
       args.metrics,
-      settings_metric_names(settings.engine),
+      settings_metric_names(settings),
     )
-    service = service_factory(settings.engine)
+    service = service_factory(settings)
   except MetricSelectionError as err:
     parser.error(str(err))
   except Exception:
@@ -334,8 +334,8 @@ def _main_dataset(argv: Sequence[str]) -> int:
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = AppSettings.from_env()
-    service = DatasetService(db_manager=build_db_manager(settings.engine))
+    settings = Settings()
+    service = DatasetService(db_manager=build_db_manager(settings))
 
     if args.command == 'import':
       payload = load_dataset_json(args.dataset_path)
@@ -387,13 +387,13 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory) -> int:
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = AppSettings.from_env()
+    settings = Settings()
     selected_metric_names = None if args.metrics is None else [metric.strip() for metric in args.metrics.split(',')]
   except Exception:
     logger.exception('Evaluation repeat failed')
     return 1
 
-  service = service_factory(settings.engine)
+  service = service_factory(settings)
   try:
     run = asyncio.run(
       _repeat(

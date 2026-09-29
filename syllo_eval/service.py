@@ -1,6 +1,6 @@
 import logging
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -663,6 +663,9 @@ class EvaluationService:
     if self._settings.orbitals.api_key is None:
       return None
     return OrbitalsClaimExtractorClient(self._settings.orbitals)
+
+
+ServiceFactory = Callable[[Settings], EvaluationService]
 
 
 def _build_sample_status_counts(

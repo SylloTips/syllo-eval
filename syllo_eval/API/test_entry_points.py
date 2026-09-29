@@ -7,19 +7,11 @@ from fastapi.testclient import TestClient
 
 from syllo_eval.API.app import create_app
 from syllo_eval.API.cli import main
-from syllo_eval.API.config import AppSettings, build_evaluation_service
 from syllo_eval.model import EvaluationStatus
 from syllo_eval.settings import Settings
 
 
 class ServiceFactoryTest(unittest.TestCase):
-  def test_default_factory_registers_no_callers(self):
-    settings = Settings()
-    with patch('syllo_eval.API.config.EvaluationService') as service:
-      build_evaluation_service(settings)
-
-    service.assert_called_once_with(settings=settings)
-
   def test_cli_builds_the_runtime_with_the_injected_factory(self):
     run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
     factory = MagicMock()
@@ -55,5 +47,5 @@ class ServiceFactoryTest(unittest.TestCase):
   def test_excluded_root_span_names_are_normalized(self):
     env = {'PHOENIX_REQUEST_ID_EXCLUDED_ROOT_SPAN_NAMES': '[" Helper_Root "]'}
     with patch.dict('os.environ', env, clear=True):
-      settings = AppSettings.from_env()
-    self.assertEqual(settings.engine.phoenix.request_id_excluded_root_span_names, ('helper_root',))
+      settings = Settings()
+    self.assertEqual(settings.phoenix.request_id_excluded_root_span_names, ('helper_root',))
