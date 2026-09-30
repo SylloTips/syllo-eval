@@ -20,6 +20,10 @@ persist run plan → call agent → fetch, normalize, and persist trace → plan
 A **repeat** evaluation reuses the traces stored by an earlier run and only recomputes metrics. It never calls the
 agent and needs no agent credentials.
 
+An **import** evaluation scores traces exported to JSON files. A named adapter normalizes each file, the trace is matched to
+the dataset sample whose prompt equals its request, and only matched samples are planned. It needs neither callers nor
+trace-source credentials, and the traces keep the agent timing they were recorded with.
+
 ## Requirements
 
 - Python 3.12 or 3.13
@@ -155,6 +159,9 @@ A `trace_integration` replaces fetching, normalization, and persistence altogeth
 
 Callers and adapters you inject stay owned by you, and must support concurrent calls.
 
+Imports pick their adapter by name rather than by agent, so no caller or agent configuration is needed. `phoenix` is
+built in; register others with `trace_adapters_by_name={'my-source': MyTraceAdapter()}`.
+
 ### Your own CLI and HTTP API
 
 Both entry points accept a service factory, so a small package of your own gets the full CLI and API with your agents
@@ -204,7 +211,16 @@ poetry run my-eval --agent-name my-agent --agent-version-tag v1 --dataset-id <da
 
 # Recompute metrics over the traces of an earlier run, without calling the agent
 poetry run my-eval repeat <evaluation-run-uuid> --metrics set_recall_snippet
+
+# Score exported trace files without calling the agent or the trace source
+poetry run my-eval import traces/*.json --trace-adapter my-source \
+  --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid>
 ```
+
+A trace file holds one trace, `{"trace_id": "...", "spans": [...]}`, where `spans` are the source records the adapter
+expects; for `phoenix`, the flattened span records that `PhoenixClient.get_trace_json` returns. The request text comes from
+the root span's `semantics.request`, or its text input when the adapter sets none. An import fails before creating a run
+when a file is invalid, the adapter is unknown, or a trace does not match exactly one sample.
 
 Without `--metrics`, a fresh run uses every metric available with your configuration, and a repeat uses the metrics of
 the source run. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
@@ -222,6 +238,7 @@ poetry run uvicorn my_eval.app:app --port 8005
 | `GET` | `/evaluations` | List runs, newest first |
 | `GET` | `/evaluations/{id}` | Run status with per-sample counts |
 | `GET` | `/evaluations/{id}/report` | Aggregated report of a finished run |
+| `POST` | `/evaluations/import` | Score exported traces in the background (start fields plus `traces` and optional `trace_adapter`, default `phoenix`) |
 | `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run |
 | `POST` | `/evaluations/{id}/cancel` | Best-effort cancellation; the run ends as `FAILED` |
 | `POST` | `/datasets` | Import a dataset payload |
