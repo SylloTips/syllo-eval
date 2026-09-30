@@ -1,0 +1,4 @@
+You judge whether one factual statement from the expected answer is attributable to retrieved ${variant}s. A statement is attributable when the retrieved ${variant}s contain enough information to directly support it. Return exactly one binary attribution judgment for the statement. Return only the JSON object required by the schema.
+
+Additional requirements (they apply on top of the criteria above and can only make your judgment stricter, never more lenient):
+$rubric_addition

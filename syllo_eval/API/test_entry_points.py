@@ -42,8 +42,11 @@ class ServiceFactoryTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as directory:
       trace_path = Path(directory) / 'trace.json'
       trace_path.write_text('{"trace_id": "trace-1", "spans": [{"name": "root"}]}')
+      additions_path = Path(directory) / 'additions.json'
+      additions_path.write_text('{"answer_correctness_judge": "Cite a source."}')
       argv = ['import', str(trace_path), '--agent-name', 'demo-agent', '--agent-version-tag', 'v1']
       argv += ['--dataset-id', str(uuid4()), '--trace-adapter', 'custom-source', '--metrics', 'custom_metric']
+      argv += ['--rubric-additions', str(additions_path)]
       with patch.dict('os.environ', {}, clear=True), patch('syllo_eval.API.cli.load_settings_env'):
         exit_code = main(argv, service_factory=MagicMock(return_value=service))
 
@@ -53,6 +56,7 @@ class ServiceFactoryTest(unittest.TestCase):
     self.assertEqual(
       (kwargs['trace_adapter_name'], kwargs['selected_metric_names']), ('custom-source', ['custom_metric'])
     )
+    self.assertEqual(kwargs['rubric_additions'], {'answer_correctness_judge': 'Cite a source.'})
     service.close.assert_awaited_once()
 
   def test_app_builds_the_runtime_with_the_injected_factory(self):

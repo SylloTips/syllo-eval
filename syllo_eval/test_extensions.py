@@ -575,6 +575,49 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(create_args.args[0].selected_metric_names, ['custom_metric'])
     phoenix.assert_not_called()
 
+  async def test_repeat_inherits_or_replaces_validated_rubric_additions(self) -> None:
+    agent = Agent(id=uuid4(), name='custom-agent', version_tag='v1')
+    source_run = _run(agent.id, config={'rubric_additions': {'answer_correctness_judge': 'Cite a source.'}})
+    repositories = _fake_repositories(agent=agent)
+    repositories.evaluation_runs.get_by_id.return_value = source_run
+    repositories.evaluation_run_metrics.list_metrics.return_value = [
+      'answer_correctness_judge',
+      'plan_correctness_judge',
+    ]
+    repositories.evaluation_run_samples.list_by_evaluation_run.return_value = [
+      EvaluationRunSample(
+        id=uuid4(),
+        evaluation_run_id=source_run.id,
+        sample_id=uuid4(),
+        trace_id='t',
+        status=EvaluationSampleStatus.COMPLETED,
+      )
+    ]
+    orchestrator = MagicMock(create_run=AsyncMock(return_value=_run()))
+    service = EvaluationService(
+      settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')), db_manager=cast(DatabaseManager, object())
+    )
+
+    async def snapshot(rubric_additions: dict[str, str] | None) -> dict[str, Any]:
+      await service.repeat_evaluation(source_run_id=source_run.id, rubric_additions=rubric_additions)
+      return cast(Any, orchestrator.create_run.await_args).args[0].config
+
+    with (
+      patch('syllo_eval.service.UnitOfWork', return_value=_AsyncRepositoryContext(repositories)),
+      patch('syllo_eval.service.build_llm_judge_client', return_value=MagicMock(aclose=AsyncMock())),
+      patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock),
+      patch('syllo_eval.service.EvaluationOrchestrator', return_value=orchestrator),
+    ):
+      inherited = await snapshot(None)
+      self.assertEqual(inherited['rubric_additions'], {'answer_correctness_judge': 'Cite a source.'})
+      self.assertEqual(inherited['prompt_versions'], {'answer_correctness_judge': 'v1', 'plan_correctness_judge': 'v1'})
+      replaced = await snapshot({' Plan_Correctness_Judge ': ' Be strict. '})
+      self.assertEqual(replaced['rubric_additions'], {'plan_correctness_judge': 'Be strict.'})
+      self.assertEqual((await snapshot({}))['rubric_additions'], {})
+      for invalid in ({'llm_calls': 'x'}, {'answer_correctness_judge': ' '}):
+        with self.subTest(invalid), self.assertRaises(MetricSelectionError):
+          await snapshot(invalid)
+
   async def test_explicit_caller_mapping_dispatches_by_agent_name(self) -> None:
     caller = MagicMock()
     caller.call = AsyncMock(return_value='request-1')

@@ -52,6 +52,9 @@ binds each to exactly one sample by prompt, persists them, then scores them like
 - **Metrics:** built-ins and custom instances can be mixed. Keep built-in inventory in `evaluation/metrics/available.py`;
   the in-memory registry owns implementations, the planner owns span selection/grouping, and the executor owns
   computation status and persistence. Preserve custom span types, selection hooks, and group targets.
+- **Judge prompts:** built-in wording lives in versioned templates under `evaluation/metrics/prompts/`; change it by adding a
+  new version and bumping the metric's `prompt_version`. Keep prompts cache-friendly: fixed text first, sample values last,
+  and run-level rubric additions at the end of the system prompt. Additions only add requirements; never replace the rubric.
 - **Traces:** validate identities, parent graphs, timestamps, and semantic references before transactional persistence.
   Namespace source IDs when necessary. Identical ingestion is idempotent; conflicting snapshots must not overwrite repeat inputs.
   Missing observations differ from observed empty values; never invent retrieval membership, ranks, step links, or timing.

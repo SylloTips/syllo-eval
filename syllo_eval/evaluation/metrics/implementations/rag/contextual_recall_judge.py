@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from syllo_eval.evaluation.judge.batch import judge_batch
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
   RetrievedItem,
@@ -34,11 +35,13 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   """Scores whether expected-answer statements are supported by retrieved context."""
 
   variant: str = ''
+  prompt_version = 'v1'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient):
+  def __init__(self, *, judge_client: LlmJudgeClient, rubric_addition: str | None = None):
     self._judge_client = judge_client
+    self._rubric_addition = rubric_addition
 
   @property
   def target_span_types(self) -> tuple[str, ...]:
@@ -96,37 +99,26 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     return self._build_result(retrieved_items, judgments, responses)
 
   def build_decomposition_system_prompt(self) -> str:
-    return (
-      'You decompose an expected answer into atomic factual statements. '
-      'Each statement must be self-contained, independently verifiable, and minimal in scope. '
-      'Do not infer facts that are not stated in the expected answer, including entity-type claims such as '
-      '"X is a person". If the expected answer is a name, list, fragment, or value, preserve each answer item '
-      'verbatim instead of rewriting it into an inferred sentence. '
-      'Return only the JSON object required by the schema.'
-    )
+    return render_prompt(f'contextual_recall/{self.prompt_version}/decomposition_system.md')
 
   def build_decomposition_user_prompt(self, ground_truth: GroundTruth) -> str:
-    return (
-      'Decompose the expected answer into atomic factual statements.\n\n'
-      f'Expected answer:\n{ground_truth.ground_truth_value["expected_output"]}'
+    return render_prompt(
+      f'contextual_recall/{self.prompt_version}/decomposition_user.md',
+      expected_answer=ground_truth.ground_truth_value['expected_output'],
     )
 
   def build_system_prompt(self) -> str:
-    return (
-      f'You judge whether one factual statement from the expected answer is attributable to '
-      f'retrieved {self.variant}s. A statement is attributable when the retrieved {self.variant}s '
-      f'contain enough information to directly support it. Return exactly one binary attribution '
-      f'judgment for the statement. Return only the JSON object required by the schema.'
+    return render_prompt(
+      f'contextual_recall/{self.prompt_version}/system.md', variant=self.variant, rubric_addition=self._rubric_addition
     )
 
   def build_user_prompt(self, span: Span, retrieved_items: list[RetrievedItem], claim: str) -> str:
-    rendered_items = '\n\n'.join(item.render_for_prompt(rank) for rank, item in enumerate(retrieved_items, 1))
-    sections = [
-      f'Judge whether the statement is attributable to the retrieved {self.variant}s.',
-      f'Retrieved {self.variant}s:\n{rendered_items}',
-      f'Statement:\n{claim}',
-    ]
-    return '\n\n'.join(sections)
+    return render_prompt(
+      f'contextual_recall/{self.prompt_version}/user.md',
+      variant=self.variant,
+      items='\n\n'.join(item.render_for_prompt(rank) for rank, item in enumerate(retrieved_items, 1)),
+      claim=claim,
+    )
 
   async def _decompose_claims(self, ground_truth: GroundTruth) -> LlmJudgeResponse[ContextualRecallClaims]:
     return await self._judge_client.judge(

@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from math import ceil, floor
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ from syllo_eval.model import (
   Span,
 )
 
-_REPORT_VERSION = '1.3'
+_REPORT_VERSION = '1.4'
 _TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens')
 _FAILURE_PHASES = ('agent_call', 'trace_fetch', 'metric_compute', 'unknown')
 _FAILURE_PHASE_SET = set(_FAILURE_PHASES)
@@ -41,6 +42,7 @@ class EvaluationReportRun(BaseModel):
   end_time: datetime | None
   duration_seconds: float | None
   samples_processed: int
+  config: dict[str, Any] | None = None
 
 
 class EvaluationReportAgent(BaseModel):
@@ -307,6 +309,7 @@ def _compose_report(
       end_time=run.end_time,
       duration_seconds=run_duration,
       samples_processed=len(run_samples),
+      config=run.config,
     ),
     agent=EvaluationReportAgent(id=agent.id, name=agent.name, version_tag=agent.version_tag),
     dataset=EvaluationReportDataset(id=dataset.id, name=dataset.name, total_samples=total_samples),
