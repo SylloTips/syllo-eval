@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
 
+from pydantic import TypeAdapter, ValidationError
+
 from syllo_eval.service import (
   EvaluationService,
   MetricSelectionError,
@@ -69,6 +71,21 @@ def _parse_existing_file(value: str) -> Path:
   return path
 
 
+def _parse_rubric_additions(value: str) -> dict[str, str]:
+  try:
+    return TypeAdapter(dict[str, str]).validate_json(_parse_existing_file(value).read_bytes())
+  except ValidationError as err:
+    raise argparse.ArgumentTypeError(f'Invalid rubric additions file {value}: {err}') from err
+
+
+def _add_rubric_additions_argument(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument(
+    '--rubric-additions',
+    type=_parse_rubric_additions,
+    help='JSON file mapping LLM-judge metric names to extra requirements that make grading stricter.',
+  )
+
+
 def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
     prog=prog,
@@ -129,6 +146,7 @@ def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     default=None,
     help='If set, write the JSON evaluation report to this path after the run finishes.',
   )
+  _add_rubric_additions_argument(parser)
   return parser
 
 
@@ -146,6 +164,7 @@ async def _run(
   sample_compute_timeout: float | None,
   selected_metric_names: Sequence[str],
   report_path: Path | None,
+  rubric_additions: dict[str, str] | None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
@@ -157,6 +176,7 @@ async def _run(
       sample_trace_timeout=sample_trace_timeout,
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
+      rubric_additions=rubric_additions,
     )
     await _write_report(service, run, report_path)
     return run
@@ -185,6 +205,7 @@ async def _import(service: EvaluationService, args: argparse.Namespace) -> Evalu
       max_concurrent_tasks=args.max_concurrent_tasks,
       sample_compute_timeout=args.sample_compute_timeout_seconds,
       selected_metric_names=None if args.metrics is None else args.metrics.split(','),
+      rubric_additions=args.rubric_additions,
     )
     run = await started.execute()
     await _write_report(service, run, args.report_path)
@@ -199,12 +220,14 @@ async def _repeat(
   max_concurrent_tasks: int | None,
   sample_compute_timeout: float | None,
   selected_metric_names: Sequence[str] | None,
+  rubric_additions: dict[str, str] | None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
     started = await service.repeat_evaluation(
       source_run_id=source_run_id,
       metrics=selected_metric_names,
+      rubric_additions=rubric_additions,
       max_concurrent_tasks=max_concurrent_tasks,
       sample_compute_timeout=sample_compute_timeout,
     )
@@ -289,6 +312,7 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     default=None,
     help='Logging level.',
   )
+  _add_rubric_additions_argument(parser)
   return parser
 
 
@@ -318,6 +342,7 @@ def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     help='Maximum number of concurrent metric computations per sample.',
   )
   parser.add_argument('--report-path', type=Path, default=None, help='If set, write the JSON report to this path.')
+  _add_rubric_additions_argument(parser)
   parser.add_argument(
     '--log-level',
     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -367,6 +392,7 @@ def main(
         sample_compute_timeout=args.sample_compute_timeout_seconds,
         selected_metric_names=selected_metric_names,
         report_path=report_path,
+        rubric_additions=args.rubric_additions,
       )
     )
   except Exception:
@@ -489,6 +515,7 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
         max_concurrent_tasks=args.max_concurrent_tasks,
         sample_compute_timeout=args.sample_compute_timeout_seconds,
         selected_metric_names=selected_metric_names,
+        rubric_additions=args.rubric_additions,
       )
     )
   except Exception:

@@ -63,7 +63,9 @@ class _ServiceStub:
     agent_version_tag: str,
     dataset_id,
     selected_metric_names,
+    rubric_additions=None,
   ):
+    del rubric_additions
     self.calls.append(
       {
         'agent_name': agent_name,
@@ -82,9 +84,8 @@ class _ServiceStub:
       raise self._error
     return self._started_evaluation
 
-  async def repeat_evaluation(self, *, source_run_id, metrics, **kwargs):
-    del kwargs
-    self.repeat_calls.append({'source_run_id': source_run_id, 'metrics': metrics})
+  async def repeat_evaluation(self, *, source_run_id, metrics, rubric_additions=None):
+    self.repeat_calls.append({'source_run_id': source_run_id, 'metrics': metrics, 'rubric_additions': rubric_additions})
     if self._error is not None:
       raise self._error
     return self._started_evaluation
@@ -356,13 +357,25 @@ class TestEvaluationApi(unittest.TestCase):
     ):
       response = client.post(
         f'/evaluations/{source_run_id}/repeat',
-        json={'metrics': ['llm_calls']},
+        json={
+          'metrics': ['answer_correctness_judge'],
+          'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
+        },
       )
 
     self.assertEqual(response.status_code, 202)
     self.assertEqual(response.json()['evaluation_run_id'], str(run.id))
     self.assertEqual(response.json()['source_run_id'], str(source_run_id))
-    self.assertEqual(service.repeat_calls, [{'source_run_id': source_run_id, 'metrics': ['llm_calls']}])
+    self.assertEqual(
+      service.repeat_calls,
+      [
+        {
+          'source_run_id': source_run_id,
+          'metrics': ['answer_correctness_judge'],
+          'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
+        }
+      ],
+    )
     self.assertEqual(len(scheduled_tasks), 1)
 
   def test_post_repeat_returns_409_when_repeat_is_not_allowed(self) -> None:
@@ -435,7 +448,7 @@ class TestEvaluationApi(unittest.TestCase):
       response = client.get('/openapi.json')
 
     self.assertEqual(response.status_code, 200)
-    self.assertEqual(response.json()['info']['version'], '1.3.0')
+    self.assertEqual(response.json()['info']['version'], '1.4.0')
 
   def test_startup_fails_orphaned_running_evaluations(self) -> None:
     service = _ServiceStub()

@@ -41,6 +41,7 @@ class StartEvaluationRequest(BaseModel):
   agent_version_tag: NonEmptyStr
   dataset_id: UUID
   metrics: list[str] | None = None
+  rubric_additions: dict[str, str] | None = None
 
 
 class ImportEvaluationRequest(StartEvaluationRequest):
@@ -50,6 +51,7 @@ class ImportEvaluationRequest(StartEvaluationRequest):
 
 class RepeatEvaluationRequest(BaseModel):
   metrics: list[str] | None = None
+  rubric_additions: dict[str, str] | None = None
 
 
 class StartEvaluationResponse(BaseModel):
@@ -216,7 +218,7 @@ def create_app(
   app = FastAPI(
     title=title,
     description='Manage datasets, start evaluation runs, list their status, poll reports, and cancel running runs.',
-    version='1.3.0',
+    version='1.4.0',
     lifespan=lifespan,
     openapi_tags=[
       {
@@ -285,6 +287,7 @@ def create_app(
         agent_version_tag=request.agent_version_tag,
         dataset_id=request.dataset_id,
         selected_metric_names=request.metrics,
+        rubric_additions=request.rubric_additions,
       )
     except (MetricSelectionError, AgentCallerSelectionError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
@@ -320,6 +323,7 @@ def create_app(
         traces=request.traces,
         trace_adapter_name=request.trace_adapter,
         selected_metric_names=request.metrics,
+        rubric_additions=request.rubric_additions,
       )
     except (MetricSelectionError, TraceImportError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
@@ -350,6 +354,7 @@ def create_app(
       started = await evaluation_service.repeat_evaluation(
         source_run_id=evaluation_run_id,
         metrics=request.metrics,
+        rubric_additions=request.rubric_additions,
       )
     except NotFoundError as err:
       raise _build_not_found_http_exception(evaluation_run_id) from err
