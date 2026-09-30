@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -57,6 +58,7 @@ class EvaluationOrchestrator:
     max_concurrent_samples: int = 5,
     sample_trace_timeout_seconds: float | None = None,
     sample_compute_timeout_seconds: float | None = None,
+    imported_trace_ids: Mapping[UUID, str] | None = None,
   ) -> None:
     if max_concurrent_samples < 1:
       raise ValueError(f'max_concurrent_samples must be >= 1, got {max_concurrent_samples}')
@@ -70,6 +72,7 @@ class EvaluationOrchestrator:
     self._max_concurrent_samples = max_concurrent_samples
     self._sample_trace_timeout_seconds = sample_trace_timeout_seconds
     self._sample_compute_timeout_seconds = sample_compute_timeout_seconds
+    self._imported_trace_ids = imported_trace_ids
 
   async def run(self, config: EvaluationConfig) -> EvaluationRun:
     evaluation_run = await self.create_run(config)
@@ -107,6 +110,7 @@ class EvaluationOrchestrator:
           return current_run
 
         planned_sample_ids = await self._fetch_planned_sample_ids(current_run.id)
+        fresh = current_run.source_run_id is None and self._imported_trace_ids is None
         if (
           not planned_sample_ids
           and current_run.source_run_id is None
@@ -114,7 +118,7 @@ class EvaluationOrchestrator:
         ):
           samples = await self._fetch_samples(current_run.dataset_id)
           planned_sample_ids = [sample.id for sample in samples]
-        elif current_run.source_run_id is None:
+        elif fresh:
           samples = await self._fetch_samples_by_ids(planned_sample_ids)
         else:
           samples = []
@@ -128,16 +132,18 @@ class EvaluationOrchestrator:
           )
           return await self._finalize_run(current_run.id, EvaluationStatus.FAILED)
 
-        if current_run.source_run_id is None:
+        if fresh:
           agent = await self._fetch_agent(current_run.agent_id)
           outcomes = await self._execute_samples(current_run.id, agent, samples)
         else:
-          source_run_samples = await self._fetch_source_run_samples(current_run.source_run_id)
-          traces_by_sample_id = {
-            run_sample.sample_id: run_sample.trace_id
-            for run_sample in source_run_samples
-            if run_sample.trace_id is not None
-          }
+          if current_run.source_run_id is None:
+            traces_by_sample_id = dict(self._imported_trace_ids or {})
+          else:
+            traces_by_sample_id = {
+              run_sample.sample_id: run_sample.trace_id
+              for run_sample in await self._fetch_source_run_samples(current_run.source_run_id)
+              if run_sample.trace_id is not None
+            }
           recompute_items = [
             (sample_id, traces_by_sample_id[sample_id])
             for sample_id in planned_sample_ids
