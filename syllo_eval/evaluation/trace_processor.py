@@ -31,18 +31,26 @@ class TraceProcessor:
     if trace_id is None:
       raise ValueError(f'No trace found for request_id={request_id}')
     records = await self.trace_client.get_trace_json(trace_id)
-    normalized = self.adapter.normalize(trace_id, records)
-    # Validate even when an injected adapter used model_construct or mutated its result.
-    result = TraceProcessingResult.model_validate(normalized.model_dump())
+    result = normalize_trace(self.adapter, trace_id, records)
     async with TransactionalUnitOfWork(self.db_manager) as uow:
-      existing = await uow.traces.get_by_id(result.trace.external_id)
-      if existing is not None:
-        stored = TraceProcessingResult(trace=existing, spans=await uow.spans.list_by_trace(existing.external_id))
-        if stored != result:
-          raise ValueError('Trace already exists with different normalized content; use a new trace identity')
-        return stored
-      await uow.traces.create(result.trace)
-      for span_type in sorted({span.span_type for span in result.spans}):
-        await uow.span_types.upsert_from_registry(SpanType(name=span_type))
-      await uow.spans.bulk_create(result.spans)
-    return result
+      return await persist_trace(uow, result)
+
+
+def normalize_trace(adapter: TraceAdapter, trace_id: str, records: list[dict[str, Any]]) -> TraceProcessingResult:
+  normalized = adapter.normalize(trace_id, records)
+  # Validate even when an injected adapter used model_construct or mutated its result.
+  return TraceProcessingResult.model_validate(normalized.model_dump())
+
+
+async def persist_trace(uow: TransactionalUnitOfWork, result: TraceProcessingResult) -> TraceProcessingResult:
+  existing = await uow.traces.get_by_id(result.trace.external_id)
+  if existing is not None:
+    stored = TraceProcessingResult(trace=existing, spans=await uow.spans.list_by_trace(existing.external_id))
+    if stored != result:
+      raise ValueError('Trace already exists with different normalized content; use a new trace identity')
+    return stored
+  await uow.traces.create(result.trace)
+  for span_type in sorted({span.span_type for span in result.spans}):
+    await uow.span_types.upsert_from_registry(SpanType(name=span_type))
+  await uow.spans.bulk_create(result.spans)
+  return result

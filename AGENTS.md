@@ -40,7 +40,8 @@ or migrations: tests may load `.env`.
 
 Fresh evaluation: **persist run plan → call agent → fetch/normalize/persist trace → plan metrics → compute/persist results**.
 Repeat evaluation reuses stored traces and runs only metric planning and computation; it must not require agent credentials
-or construct callers/trace integrations.
+or construct callers/trace integrations. Import evaluation normalizes exported traces with an adapter selected by name,
+binds each to exactly one sample by prompt, persists them, then scores them like a repeat.
 
 - **Public boundary:** `EvaluationService` serves library, CLI, and HTTP consumers. The package is `syllo_eval`,
   distributed as `syllo-eval`; the CLI entry point is `syllo_eval.API.cli.main`. Downstream packages inject callers,
@@ -95,7 +96,7 @@ Paths below are relative to `syllo_eval/`, unless linked otherwise. Read only th
 |---|---|
 | Service/API/CLI assembly | `service.py`, `API/app.py`, `API/cli.py` |
 | Execution, cancellation, repeats | `orchestration/evaluation_orchestrator.py`, `execution/sample_executor.py`, `execution/agent_caller/` |
-| Canonical models, adapters, ingestion | `model.py`, `trace_semantics.py`, `evaluation/trace_adapter.py`, `evaluation/trace_processor.py` |
+| Canonical models, adapters, ingestion | `model.py`, `trace_semantics.py`, `evaluation/trace_adapter.py`, `evaluation/trace_processor.py`, `evaluation/trace_import.py` |
 | Metrics, judges, reporting | `evaluation/metrics/`, `evaluation/metric_planner.py`, `evaluation/plan_executor.py`, `evaluation/judge/`, `evaluation/evaluation_report.py` |
 | Datasets, settings, persistence | `datasets/`, `settings.py`, `infrastructure/`, `migrations/` |
 

@@ -10,6 +10,9 @@ from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, Spa
 from syllo_eval.evaluation.metric_planner import MetricPlanner
 from syllo_eval.evaluation.metric_registry import MetricRegistry
 from syllo_eval.evaluation.plan_executor import PlanExecutor
+from syllo_eval.evaluation.test_trace_import import phoenix_trace
+from syllo_eval.evaluation.trace_adapter import PhoenixTraceAdapter
+from syllo_eval.evaluation.trace_import import TraceImportError
 from syllo_eval.evaluation.trace_processor import TraceProcessingResult
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.model import (
@@ -85,6 +88,14 @@ class _AsyncRepositoryContext:
     del exc_type, exc, tb
 
 
+class _RecordingTransaction(_AsyncRepositoryContext):
+  exit_type: type[BaseException] | None = None
+
+  async def __aexit__(self, exc_type, exc, tb) -> None:
+    del exc, tb
+    self.exit_type = exc_type
+
+
 class _MemoryPersistence:
   """Small persistence boundary for the public-service extension test."""
 
@@ -137,7 +148,14 @@ class _MemoryRepositoryContext:
       update_status=AsyncMock(side_effect=self._update_run_sample),
       list_by_evaluation_run=AsyncMock(side_effect=lambda run_id: persistence.run_samples_by_run.get(run_id, [])),
     )
+    self.traces = SimpleNamespace(
+      get_by_id=AsyncMock(side_effect=lambda trace_id: persistence.traces_by_id.get(trace_id)),
+      create=AsyncMock(side_effect=lambda trace: persistence.traces_by_id.setdefault(trace.external_id, trace)),
+    )
     self.spans = SimpleNamespace(
+      bulk_create=AsyncMock(
+        side_effect=lambda spans: persistence.spans_by_id.update({span.external_id: span for span in spans})
+      ),
       list_by_trace=AsyncMock(
         side_effect=lambda trace_id: [span for span in persistence.spans_by_id.values() if span.trace_id == trace_id]
       ),
@@ -408,6 +426,91 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(repeated_computations[0].status, MetricComputationStatus.COMPLETED)
     self.assertEqual(repeated_sample.trace_id, 'trace-request-1')
     self.assertEqual(repeated_computations[0].score, 0.75)
+
+  async def test_imported_traces_are_normalized_by_named_adapter_scored_and_repeatable(self) -> None:
+    dataset_id = uuid4()
+    agent = Agent(id=uuid4(), name='custom-agent', version_tag='v1')
+    sample = Sample(id=uuid4(), dataset_id=dataset_id, input_prompt='question')
+    persistence = _MemoryPersistence(agent, sample)
+    metric = _EndToEndMetric()
+    adapter = MagicMock(wraps=PhoenixTraceAdapter())
+    service = EvaluationService(
+      settings=Settings(),
+      db_manager=cast(DatabaseManager, object()),
+      custom_metrics=[metric],
+      include_builtin_metrics=False,
+      trace_adapters_by_name={'Custom-Source': adapter},
+    )
+
+    def memory_uow(_db_manager: Any) -> _AsyncRepositoryContext:
+      return _AsyncRepositoryContext(_MemoryRepositoryContext(persistence))
+
+    with (
+      patch('syllo_eval.service.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.service.PhoenixClient') as phoenix_factory,
+      patch('syllo_eval.service.TransactionalUnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_registry.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_registry.TransactionalUnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_planner.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.plan_executor.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.execution.sample_executor.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.orchestration.evaluation_orchestrator.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.orchestration.evaluation_orchestrator.TransactionalUnitOfWork', side_effect=memory_uow),
+    ):
+      imported = await (
+        await service.import_evaluation(
+          agent_name='custom-agent',
+          agent_version_tag='v1',
+          dataset_id=dataset_id,
+          traces=[phoenix_trace('trace-1', 'question')],
+          trace_adapter_name='custom-source',
+          selected_metric_names=['custom_metric'],
+        )
+      ).execute()
+      repeated = await (await service.repeat_evaluation(source_run_id=imported.id)).execute()
+      phoenix_factory.assert_not_called()
+
+    adapter.normalize.assert_called_once()
+    self.assertEqual(imported.status, EvaluationStatus.COMPLETED)
+    self.assertEqual(persistence.run_plan_sample_ids[imported.id], [sample.id])
+    self.assertIn('trace-1', persistence.traces_by_id)
+    for run in (imported, repeated):
+      run_sample = persistence.run_samples_by_run[run.id][0]
+      self.assertEqual((run_sample.status, run_sample.trace_id), (EvaluationSampleStatus.COMPLETED, 'trace-1'))
+    self.assertEqual(repeated.status, EvaluationStatus.COMPLETED)
+    self.assertEqual(metric.span_ids, ['trace-1-root', 'trace-1-root'])
+
+  async def test_import_stores_all_traces_in_one_transaction_that_a_conflict_rolls_back(self) -> None:
+    dataset_id = uuid4()
+    samples = [Sample(id=uuid4(), dataset_id=dataset_id, input_prompt=prompt) for prompt in ('first', 'second')]
+    persistence = _MemoryPersistence(Agent(id=uuid4(), name='custom-agent', version_tag='v1'), samples[0])
+    persistence.samples_by_id[samples[1].id] = samples[1]
+    stored = PhoenixTraceAdapter().normalize('trace-2', phoenix_trace('trace-2', 'other').spans)
+    persistence.traces_by_id['trace-2'] = stored.trace
+    persistence.spans_by_id.update({span.external_id: span for span in stored.spans})
+    transaction = _RecordingTransaction(_MemoryRepositoryContext(persistence))
+    service = EvaluationService(
+      settings=Settings(), db_manager=cast(DatabaseManager, object()), custom_metrics=[_CustomMetric()]
+    )
+
+    with (
+      patch(
+        'syllo_eval.service.UnitOfWork',
+        side_effect=lambda _db: _AsyncRepositoryContext(_MemoryRepositoryContext(persistence)),
+      ),
+      patch('syllo_eval.service.TransactionalUnitOfWork', return_value=transaction) as transactional_uow,
+      self.assertRaisesRegex(TraceImportError, 'Trace trace-2 could not be stored'),
+    ):
+      await service.import_evaluation(
+        agent_name='custom-agent',
+        agent_version_tag='v1',
+        dataset_id=dataset_id,
+        traces=[phoenix_trace('trace-1', 'first'), phoenix_trace('trace-2', 'second')],
+        selected_metric_names=['custom_metric'],
+      )
+
+    transactional_uow.assert_called_once()
+    self.assertIs(transaction.exit_type, TraceImportError)
 
   async def test_unexecuted_evaluation_handle_closes_prepared_resources(self) -> None:
     expected_run = _run()

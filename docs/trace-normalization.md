@@ -15,6 +15,8 @@ EvaluationService(
 )
 ```
 
+- Imports select an adapter by name from `trace_adapters_by_name`, plus the built-in `phoenix`; the file's `spans`
+  reach `normalize` unchanged.
 - Unregistered agents use `PhoenixTraceAdapter`, which decodes telemetry and status but infers no agent-specific semantics.
 - The processor validates the whole bundle and persists it transactionally. Identical re-ingestion is idempotent;
   a changed interpretation needs a new trace identity. Namespace source IDs another provider could reuse.

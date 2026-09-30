@@ -12,6 +12,7 @@ from syllo_eval.API.app import _drain_evaluation_tasks, create_app
 from syllo_eval.service import AgentCallerSelectionError, MetricSelectionError, RepeatNotAllowedError
 from syllo_eval.datasets import DatasetAlreadyExistsError, DatasetImportSummary, DatasetListPage
 from syllo_eval.evaluation.evaluation_report import EvaluationReportNotAvailableError
+from syllo_eval.evaluation.trace_import import TraceImportError
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import Dataset, DatasetSummary, EvaluationRun, EvaluationStatus
 
@@ -71,6 +72,12 @@ class _ServiceStub:
         'selected_metric_names': selected_metric_names,
       }
     )
+    if self._error is not None:
+      raise self._error
+    return self._started_evaluation
+
+  async def import_evaluation(self, **kwargs):
+    self.calls.append(kwargs)
     if self._error is not None:
       raise self._error
     return self._started_evaluation
@@ -301,6 +308,40 @@ class TestEvaluationApi(unittest.TestCase):
           json={'agent_name': 'demo-agent', 'agent_version_tag': 'v-test', 'dataset_id': str(uuid4())},
         )
 
+  def test_post_import_passes_traces_and_adapter_and_maps_import_errors_to_400(self) -> None:
+    run = self._build_run()
+    body = {
+      'agent_name': 'demo-agent',
+      'agent_version_tag': 'v-test',
+      'dataset_id': str(run.dataset_id),
+      'trace_adapter': 'custom-source',
+      'traces': [{'trace_id': 'trace-1', 'spans': [{'name': 'root'}]}],
+    }
+    service = _ServiceStub(started_evaluation=_EvaluationHandleStub(run))
+    scheduled_tasks: list[_FakeTask] = []
+
+    with (
+      patch('syllo_eval.API.app._create_evaluation_task', side_effect=self._build_task_factory(scheduled_tasks)),
+      TestClient(create_app(service=cast(Any, service))) as client,
+    ):
+      response = client.post('/evaluations/import', json=body)
+
+    self.assertEqual(response.status_code, 202)
+    self.assertEqual(response.json()['evaluation_run_id'], str(run.id))
+    self.assertEqual(len(scheduled_tasks), 1)
+    call = service.calls[0]
+    self.assertEqual((call['trace_adapter_name'], call['dataset_id']), ('custom-source', run.dataset_id))
+    self.assertEqual([trace.trace_id for trace in cast(Any, call['traces'])], ['trace-1'])
+
+    error_service = _ServiceStub(error=TraceImportError('Trace trace-1 request matches 0 dataset samples'))
+    with TestClient(create_app(service=cast(Any, error_service))) as client:
+      response = client.post('/evaluations/import', json=body)
+      empty_response = client.post('/evaluations/import', json={**body, 'traces': []})
+
+    self.assertEqual(response.status_code, 400)
+    self.assertEqual(response.json(), {'detail': 'Trace trace-1 request matches 0 dataset samples'})
+    self.assertEqual(empty_response.status_code, 422)
+
   def test_post_repeat_returns_202_with_source_run_identifier(self) -> None:
     source_run_id = uuid4()
     run = self._build_run()
@@ -387,14 +428,14 @@ class TestEvaluationApi(unittest.TestCase):
     self.assertEqual(response.status_code, 200)
     self.assertEqual(service.list_calls, [{'limit': 50, 'offset': 0, 'status': EvaluationStatus.RUNNING}])
 
-  def test_openapi_spec_version_is_1_2(self) -> None:
+  def test_openapi_spec_version_is_1_3(self) -> None:
     app = create_app(service=cast(Any, _ServiceStub()))
 
     with TestClient(app) as client:
       response = client.get('/openapi.json')
 
     self.assertEqual(response.status_code, 200)
-    self.assertEqual(response.json()['info']['version'], '1.2.0')
+    self.assertEqual(response.json()['info']['version'], '1.3.0')
 
   def test_startup_fails_orphaned_running_evaluations(self) -> None:
     service = _ServiceStub()

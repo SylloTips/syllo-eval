@@ -22,6 +22,7 @@ from syllo_eval.datasets import (
   DatasetService,
   load_dataset_json,
 )
+from syllo_eval.evaluation.trace_import import load_trace_file
 from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import EvaluationRun, EvaluationStatus
 from syllo_eval.settings import Settings, load_settings_env
@@ -157,11 +158,36 @@ async def _run(
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
     )
-    if report_path is not None:
-      report = await service.get_evaluation_report(run.id)
-      report_path.parent.mkdir(parents=True, exist_ok=True)
-      report_path.write_text(report.model_dump_json(indent=2))
-      logger.info('Evaluation report written to %s', report_path)
+    await _write_report(service, run, report_path)
+    return run
+  finally:
+    await service.close()
+
+
+async def _write_report(service: EvaluationService, run: EvaluationRun, report_path: Path | None) -> None:
+  if report_path is None:
+    return
+  report = await service.get_evaluation_report(run.id)
+  report_path.parent.mkdir(parents=True, exist_ok=True)
+  report_path.write_text(report.model_dump_json(indent=2))
+  logger.info('Evaluation report written to %s', report_path)
+
+
+async def _import(service: EvaluationService, args: argparse.Namespace) -> EvaluationRun:
+  try:
+    await service.initialize()
+    started = await service.import_evaluation(
+      agent_name=args.agent_name,
+      agent_version_tag=args.agent_version_tag,
+      dataset_id=args.dataset_id,
+      traces=[load_trace_file(path) for path in args.trace_paths],
+      trace_adapter_name=args.trace_adapter,
+      max_concurrent_tasks=args.max_concurrent_tasks,
+      sample_compute_timeout=args.sample_compute_timeout_seconds,
+      selected_metric_names=None if args.metrics is None else args.metrics.split(','),
+    )
+    run = await started.execute()
+    await _write_report(service, run, args.report_path)
     return run
   finally:
     await service.close()
@@ -266,6 +292,41 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   return parser
 
 
+def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(
+    prog=f'{prog} import',
+    description='Evaluate exported trace JSON files without calling the agent or the trace source.',
+  )
+  parser.add_argument('trace_paths', nargs='+', type=_parse_existing_file, help='Trace JSON files: {trace_id, spans}.')
+  parser.add_argument('--agent-name', required=True, type=_parse_non_empty, help='Agent name recorded for the run.')
+  parser.add_argument('--agent-version-tag', required=True, type=_parse_non_empty, help='Agent version tag.')
+  parser.add_argument('--dataset-id', required=True, type=_parse_uuid, help='Dataset UUID the traces answer.')
+  parser.add_argument(
+    '--trace-adapter', default='phoenix', type=_parse_non_empty, help='Registered adapter that normalizes the spans.'
+  )
+  parser.add_argument('--metrics', help='Optional comma-separated metrics. Defaults to all available metrics.')
+  parser.add_argument(
+    '--sample-compute-timeout-seconds',
+    type=float,
+    default=None,
+    help='Optional timeout in seconds for metric computation per sample.',
+  )
+  parser.add_argument(
+    '--max-concurrent-tasks',
+    type=int,
+    default=None,
+    help='Maximum number of concurrent metric computations per sample.',
+  )
+  parser.add_argument('--report-path', type=Path, default=None, help='If set, write the JSON report to this path.')
+  parser.add_argument(
+    '--log-level',
+    choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+    default=None,
+    help='Logging level.',
+  )
+  return parser
+
+
 def main(
   argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService, prog: str = 'syllo-eval'
 ) -> int:
@@ -275,6 +336,8 @@ def main(
     return _main_repeat(raw_argv[1:], service_factory, prog)
   if raw_argv[:1] == ['dataset']:
     return _main_dataset(raw_argv[1:], prog)
+  if raw_argv[:1] == ['import']:
+    return _main_import(raw_argv[1:], service_factory, prog)
 
   parser = build_parser(prog)
   args = parser.parse_args(raw_argv)
@@ -377,6 +440,32 @@ def _main_dataset(argv: Sequence[str], prog: str) -> int:
   except Exception:
     logger.exception('Dataset command failed')
     return 1
+
+
+def _main_import(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:
+  args = build_import_parser(prog).parse_args(argv)
+  configure_logging(LoggingSettings.from_env(level_override=args.log_level))
+
+  try:
+    run = asyncio.run(_import(service_factory(Settings()), args))
+  except Exception:
+    logger.exception('Evaluation import failed')
+    return 1
+
+  print(
+    json.dumps(
+      {
+        'evaluation_run_id': str(run.id),
+        'status': run.status.value,
+        'agent_name': args.agent_name,
+        'agent_version_tag': args.agent_version_tag,
+        'dataset_id': str(run.dataset_id),
+        'start_time': run.start_time.isoformat(),
+        'end_time': run.end_time.isoformat() if run.end_time else None,
+      }
+    )
+  )
+  return _exit_code_for_status(run.status)
 
 
 def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:

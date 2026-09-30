@@ -20,8 +20,14 @@ from syllo_eval.evaluation.metrics.available import (
 )
 from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.evaluation.plan_executor import PlanExecutor
-from syllo_eval.evaluation.trace_adapter import TraceAdapter
-from syllo_eval.evaluation.trace_processor import TraceIntegration, TraceProcessor, TraceSourceClient
+from syllo_eval.evaluation.trace_adapter import PhoenixTraceAdapter, TraceAdapter
+from syllo_eval.evaluation.trace_import import (
+  ImportedTrace,
+  TraceImportError,
+  match_traces_to_samples,
+  normalize_imported_trace,
+)
+from syllo_eval.evaluation.trace_processor import TraceIntegration, TraceProcessor, TraceSourceClient, persist_trace
 from syllo_eval.execution.agent_caller import AgentCallDispatcher, AgentCaller
 from syllo_eval.execution.sample_executor import SampleExecutor
 from syllo_eval.infrastructure import DatabaseConfig, DatabaseManager
@@ -29,7 +35,7 @@ from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConfigurationError, NotFoundError
 from syllo_eval.infrastructure.llm_judge import build_llm_judge_client
 from syllo_eval.infrastructure.orbitals import OrbitalsClaimExtractorClient
-from syllo_eval.infrastructure.unit_of_work import UnitOfWork
+from syllo_eval.infrastructure.unit_of_work import TransactionalUnitOfWork, UnitOfWork
 from syllo_eval.model import EvaluationRun, EvaluationRunSample, EvaluationSampleStatus, EvaluationStatus
 from syllo_eval.orchestration.evaluation_orchestrator import EvaluationConfig, EvaluationOrchestrator
 from syllo_eval.settings import EvaluationSettings, Settings
@@ -135,10 +141,10 @@ def _reject_bad_metric_names(names: Sequence[str]) -> None:
     seen.add(key)
 
 
-def _normalize_caller_names(callers: Mapping[str, AgentCaller]) -> dict[str, AgentCaller]:
-  normalized = {name.strip().lower(): caller for name, caller in callers.items()}
-  if len(normalized) != len(callers) or '' in normalized:
-    raise ValueError('Agent caller names must be non-empty and unique after normalization')
+def _normalize_names[T](values: Mapping[str, T], kind: str) -> dict[str, T]:
+  normalized = {name.strip().lower(): value for name, value in values.items()}
+  if len(normalized) != len(values) or '' in normalized:
+    raise ValueError(f'{kind} names must be non-empty and unique after normalization')
   return normalized
 
 
@@ -240,6 +246,7 @@ class EvaluationService:
     trace_client: TraceSourceClient | None = None,
     trace_adapters_by_agent_name: Mapping[str, TraceAdapter] | None = None,
     trace_integration: TraceIntegration | None = None,
+    trace_adapters_by_name: Mapping[str, TraceAdapter] | None = None,
   ):
     if trace_client is not None and trace_integration is not None:
       raise ValueError('Supply either trace_client or trace_integration, not both')
@@ -248,12 +255,13 @@ class EvaluationService:
     self._db_manager = db_manager if db_manager is not None else build_db_manager(self._settings)
     self._custom_metrics = tuple(custom_metrics)
     self._include_builtin_metrics = include_builtin_metrics
-    self._callers = _normalize_caller_names(callers_by_agent_name or {})
+    self._callers = _normalize_names(callers_by_agent_name or {}, 'Agent caller')
     self._agent_call_dispatcher = AgentCallDispatcher(self._callers)
-    adapters = trace_adapters_by_agent_name or {}
-    self._trace_adapters = {name.strip().lower(): adapter for name, adapter in adapters.items()}
-    if len(self._trace_adapters) != len(adapters) or '' in self._trace_adapters:
-      raise ValueError('Trace adapter names must be non-empty and unique after normalization')
+    self._trace_adapters = _normalize_names(trace_adapters_by_agent_name or {}, 'Trace adapter')
+    self._import_adapters = {
+      'phoenix': PhoenixTraceAdapter(),
+      **_normalize_names(trace_adapters_by_name or {}, 'Import trace adapter'),
+    }
     if trace_integration is not None and self._trace_adapters:
       raise ValueError('Supply trace adapters or a trace integration, not both')
     self._trace_client = trace_client
@@ -419,6 +427,58 @@ class EvaluationService:
 
     return EvaluationHandle(run=run, _execution=execution, agent_name=agent_name, agent_version_tag=agent_version_tag)
 
+  async def import_evaluation(
+    self,
+    *,
+    agent_name: str,
+    agent_version_tag: str,
+    dataset_id: UUID,
+    traces: Sequence[ImportedTrace],
+    trace_adapter_name: str = 'phoenix',
+    max_concurrent_samples: int | None = None,
+    max_concurrent_tasks: int | None = None,
+    sample_compute_timeout: float | None = None,
+    selected_metric_names: Sequence[str] | None = None,
+  ) -> EvaluationHandle:
+    """Evaluate exported traces without calling the agent; only samples with a trace are planned."""
+    resolved_metric_names = resolve_selected_metric_names(selected_metric_names, self.available_metric_names())
+    adapter = self._import_adapters.get(trace_adapter_name.strip().lower())
+    if adapter is None:
+      raise TraceImportError(
+        f'Unknown trace adapter {trace_adapter_name!r}. Valid adapters: {", ".join(self._import_adapters)}'
+      )
+    results = [normalize_imported_trace(adapter, trace) for trace in traces]
+    async with UnitOfWork(self._db_manager) as uow:
+      samples = await uow.samples.list_by_dataset(dataset_id)
+    trace_ids_by_sample_id = match_traces_to_samples(results, samples)
+    async with TransactionalUnitOfWork(self._db_manager) as uow:
+      for result in results:
+        try:
+          await persist_trace(uow, result)
+        except ValueError as err:
+          raise TraceImportError(f'Trace {result.trace.external_id} could not be stored: {err}') from err
+    async with UnitOfWork(self._db_manager) as uow:
+      agent = await uow.agents.get_or_create_by_name_and_version(name=agent_name, version_tag=agent_version_tag)
+
+    execution = await self._build_execution_from_plan(
+      agent_id=agent.id,
+      dataset_id=dataset_id,
+      selected_metric_names=resolved_metric_names,
+      planned_sample_ids=list(trace_ids_by_sample_id),
+      max_concurrent_samples=max_concurrent_samples,
+      max_concurrent_tasks=max_concurrent_tasks,
+      sample_trace_timeout=None,
+      sample_compute_timeout=sample_compute_timeout,
+      imported_trace_ids=trace_ids_by_sample_id,
+    )
+    try:
+      run = await execution.create_run()
+    except BaseException:
+      await execution.close()
+      raise
+
+    return EvaluationHandle(run=run, _execution=execution, agent_name=agent_name, agent_version_tag=agent_version_tag)
+
   async def repeat_evaluation(
     self,
     *,
@@ -514,6 +574,7 @@ class EvaluationService:
     source_run_id: UUID | None = None,
     agent_call_dispatcher: AgentCallDispatcher | None = None,
     trace_adapter: TraceAdapter | None = None,
+    imported_trace_ids: Mapping[UUID, str] | None = None,
   ) -> _PreparedEvaluationExecution:
     overrides = {
       'max_concurrent_samples': max_concurrent_samples,
@@ -529,7 +590,8 @@ class EvaluationService:
     )
     max_concurrent_samples = options.max_concurrent_samples
     max_concurrent_tasks = options.max_concurrent_tasks
-    sample_trace_timeout = options.sample_trace_timeout if source_run_id is None else None
+    uses_stored_traces = source_run_id is not None or imported_trace_ids is not None
+    sample_trace_timeout = None if uses_stored_traces else options.sample_trace_timeout
     sample_compute_timeout = options.sample_compute_timeout
     async with AsyncExitStack() as resources:
       judge_client = None
@@ -570,7 +632,7 @@ class EvaluationService:
       await metric_registry.sync_with_persistence()
 
       trace_processor = None
-      if source_run_id is None:
+      if not uses_stored_traces:
         trace_processor = self._trace_integration
         if trace_processor is None:
           trace_client = self._trace_client
@@ -598,6 +660,7 @@ class EvaluationService:
         max_concurrent_samples=max_concurrent_samples,
         sample_trace_timeout_seconds=sample_trace_timeout,
         sample_compute_timeout_seconds=sample_compute_timeout,
+        imported_trace_ids=imported_trace_ids,
       )
       execution = _PreparedEvaluationExecution(orchestrator=orchestrator, config=config, resources=resources.pop_all())
     return execution
