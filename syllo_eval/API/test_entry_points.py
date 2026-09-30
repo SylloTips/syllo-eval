@@ -1,6 +1,9 @@
 import io
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -31,6 +34,26 @@ class ServiceFactoryTest(unittest.TestCase):
     self.assertIsInstance(factory.call_args.args[0], Settings)
     self.assertIs(run_mock.call_args.kwargs['service'], factory.return_value)
     self.assertEqual(run_mock.call_args.kwargs['selected_metric_names'], ['custom_metric'])
+
+  def test_cli_import_loads_trace_files_and_passes_the_adapter(self):
+    run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
+    service = MagicMock(initialize=AsyncMock(), close=AsyncMock())
+    service.import_evaluation = AsyncMock(return_value=MagicMock(execute=AsyncMock(return_value=run)))
+    with tempfile.TemporaryDirectory() as directory:
+      trace_path = Path(directory) / 'trace.json'
+      trace_path.write_text('{"trace_id": "trace-1", "spans": [{"name": "root"}]}')
+      argv = ['import', str(trace_path), '--agent-name', 'demo-agent', '--agent-version-tag', 'v1']
+      argv += ['--dataset-id', str(uuid4()), '--trace-adapter', 'custom-source', '--metrics', 'custom_metric']
+      with patch.dict('os.environ', {}, clear=True), patch('syllo_eval.API.cli.load_settings_env'):
+        exit_code = main(argv, service_factory=MagicMock(return_value=service))
+
+    self.assertEqual(exit_code, 0)
+    kwargs = cast(Any, service.import_evaluation.await_args).kwargs
+    self.assertEqual([trace.trace_id for trace in kwargs['traces']], ['trace-1'])
+    self.assertEqual(
+      (kwargs['trace_adapter_name'], kwargs['selected_metric_names']), ('custom-source', ['custom_metric'])
+    )
+    service.close.assert_awaited_once()
 
   def test_app_builds_the_runtime_with_the_injected_factory(self):
     service = MagicMock(

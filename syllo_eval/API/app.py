@@ -25,6 +25,7 @@ from syllo_eval.datasets import (
   DatasetService,
 )
 from syllo_eval.evaluation.evaluation_report import EvaluationReport, EvaluationReportNotAvailableError
+from syllo_eval.evaluation.trace_import import ImportedTrace, TraceImportError
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import EvaluationStatus
@@ -40,6 +41,11 @@ class StartEvaluationRequest(BaseModel):
   agent_version_tag: NonEmptyStr
   dataset_id: UUID
   metrics: list[str] | None = None
+
+
+class ImportEvaluationRequest(StartEvaluationRequest):
+  trace_adapter: NonEmptyStr = 'phoenix'
+  traces: list[ImportedTrace] = Field(min_length=1)
 
 
 class RepeatEvaluationRequest(BaseModel):
@@ -142,6 +148,13 @@ METRIC_SELECTION_ERROR_RESPONSE: dict[int | str, dict[str, Any]] = {
   }
 }
 
+IMPORT_ERROR_RESPONSE: dict[int | str, dict[str, Any]] = {
+  status.HTTP_400_BAD_REQUEST: {
+    'model': ErrorResponse,
+    'description': 'Unknown metric or adapter, or traces that cannot be normalized or matched to samples.',
+  }
+}
+
 REPEAT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
   **NOT_FOUND_RESPONSE,
   **METRIC_SELECTION_ERROR_RESPONSE,
@@ -203,7 +216,7 @@ def create_app(
   app = FastAPI(
     title=title,
     description='Manage datasets, start evaluation runs, list their status, poll reports, and cancel running runs.',
-    version='1.2.0',
+    version='1.3.0',
     lifespan=lifespan,
     openapi_tags=[
       {
@@ -274,6 +287,41 @@ def create_app(
         selected_metric_names=request.metrics,
       )
     except (MetricSelectionError, AgentCallerSelectionError) as err:
+      raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+
+    _register_evaluation_task(app, started.run.id, _create_evaluation_task(started))
+
+    return StartEvaluationResponse(
+      evaluation_run_id=started.run.id,
+      status=_project_status(started.run.status),
+      agent_name=request.agent_name,
+      agent_version_tag=request.agent_version_tag,
+      dataset_id=request.dataset_id,
+    )
+
+  @app.post(
+    '/evaluations/import',
+    response_model=StartEvaluationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=IMPORT_ERROR_RESPONSE,
+    tags=['evaluations'],
+    summary='Import Evaluation',
+    description=(
+      'Normalizes exported traces with a registered adapter, matches them to dataset samples by prompt, '
+      'and scores them asynchronously without calling the agent.'
+    ),
+  )
+  async def import_evaluation(request: ImportEvaluationRequest) -> StartEvaluationResponse:
+    try:
+      started = await app.state.evaluation_service.import_evaluation(
+        agent_name=request.agent_name,
+        agent_version_tag=request.agent_version_tag,
+        dataset_id=request.dataset_id,
+        traces=request.traces,
+        trace_adapter_name=request.trace_adapter,
+        selected_metric_names=request.metrics,
+      )
+    except (MetricSelectionError, TraceImportError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
 
     _register_evaluation_task(app, started.run.id, _create_evaluation_task(started))
