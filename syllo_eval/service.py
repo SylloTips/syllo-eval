@@ -614,6 +614,7 @@ class EvaluationService:
         selected_metric_names=list(selected_metric_names),
         planned_sample_ids=list(planned_sample_ids),
         config=self._build_run_config_snapshot(
+          selected_metric_names=selected_metric_names,
           max_concurrent_samples=max_concurrent_samples,
           max_concurrent_tasks=max_concurrent_tasks,
           sample_trace_timeout=sample_trace_timeout,
@@ -697,6 +698,7 @@ class EvaluationService:
   def _build_run_config_snapshot(
     self,
     *,
+    selected_metric_names: Sequence[str],
     max_concurrent_samples: int,
     max_concurrent_tasks: int,
     sample_trace_timeout: float | None,
@@ -720,6 +722,12 @@ class EvaluationService:
       'max_concurrent_tasks': max_concurrent_tasks,
       'sample_trace_timeout_seconds': sample_trace_timeout,
       'sample_compute_timeout_seconds': sample_compute_timeout,
+      'prompt_versions': {
+        metric_class.metric_name: version
+        for metric_class in (BUILTIN_METRICS if self._include_builtin_metrics else ())
+        if metric_class.metric_name in selected_metric_names
+        and (version := getattr(metric_class, 'prompt_version', None)) is not None
+      },
     }
 
   def _build_claim_extractor_client(self) -> ClaimExtractorClient | None:

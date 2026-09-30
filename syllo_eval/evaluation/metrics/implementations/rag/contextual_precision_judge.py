@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from syllo_eval.evaluation.judge.batch import judge_batch
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
   RetrievedItem,
@@ -30,6 +31,7 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
   """Scores whether relevant retrieved items appear early in the ranked list."""
 
   variant: str = ''
+  prompt_version = 'v1'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
 
@@ -109,21 +111,16 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
     )
 
   def build_system_prompt(self) -> str:
-    return (
-      f'You judge whether one ranked retrieved {self.variant} is relevant to producing the expected answer. '
-      f'A {self.variant} is relevant when it contains information that directly supports, verifies, or is necessary '
-      f'for the expected answer. Return exactly one binary relevance judgment for the {self.variant}. '
-      'Return only the JSON object required by the schema.'
-    )
+    return render_prompt(f'contextual_precision/{self.prompt_version}/system.md', variant=self.variant)
 
   def build_user_prompt(self, span: Span, ground_truth: GroundTruth, rank: int, item: RetrievedItem) -> str:
-    sections = [
-      f'Judge the relevance of this retrieved {self.variant} for the expected answer.',
-      f'Sample input:\n{span.semantics.request or "<empty>"}',
-      f'Expected answer:\n{ground_truth.ground_truth_value["expected_output"]}',
-      f'Retrieved {self.variant}:\n{item.render_for_prompt(rank)}',
-    ]
-    return '\n\n'.join(sections)
+    return render_prompt(
+      f'contextual_precision/{self.prompt_version}/user.md',
+      variant=self.variant,
+      request=span.semantics.request or '<empty>',
+      expected_answer=ground_truth.ground_truth_value['expected_output'],
+      item=item.render_for_prompt(rank),
+    )
 
   async def _judge_retrieved_item(
     self,
