@@ -3,9 +3,11 @@ Unit of Work pattern implementation.
 """
 
 import logging
-from typing import Optional, Any, AsyncContextManager
+from contextlib import AbstractAsyncContextManager
+from functools import cached_property
+from typing import Optional, Any
 
-from psycopg import AsyncConnection, AsyncTransaction
+from psycopg import AsyncConnection
 
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.repositories.agent_repository import AgentRepository
@@ -34,218 +36,133 @@ from syllo_eval.infrastructure.repositories.span_metric_computation_repository i
   MetricComputationRepository,
 )
 from syllo_eval.infrastructure.repositories.span_repository import SpanRepository
+from syllo_eval.infrastructure.repositories.base import BaseRepository
 
 logger = logging.getLogger(__name__)
 
 
 class UnitOfWork:
   """
-  Unit of Work pattern for coordinating repository operations.
+  Single entry point for repository access.
 
-  Provides a single entry point for all repository access and
-  manages transaction boundaries across multiple operations.
+  Repositories acquire a pooled connection per operation, so a plain unit of work is not atomic. Use
+  `TransactionalUnitOfWork` for changes that must commit or roll back together.
 
   Usage:
       async with UnitOfWork(db_manager) as uow:
           agent = await uow.agents.get_by_id(agent_id)
           samples = await uow.samples.list_by_dataset(dataset_id)
-          # All operations in same transaction
   """
 
   def __init__(self, db_manager: DatabaseManager):
-    """
-    Initialize Unit of Work.
-
-    Args:
-        db_manager: Database manager for connection handling
-    """
     self.db_manager = db_manager
-    self._connection: Optional[AsyncConnection[Any]] = None
 
-    self._agents: Optional[AgentRepository] = None
-    self._datasets: Optional[DatasetRepository] = None
-    self._evaluation_runs: Optional[EvaluationRunRepository] = None
-    self._evaluation_run_metrics: Optional[EvaluationRunMetricRepository] = None
-    self._evaluation_run_plan_samples: Optional[EvaluationRunPlanSampleRepository] = None
-    self._samples: Optional[SampleRepository] = None
-    self._metrics: Optional[MetricRepository] = None
-    self._span_types: Optional[SpanTypeRepository] = None
-    self._spans: Optional[SpanRepository] = None
-    self._traces: Optional[TraceRepository] = None
-    self._evaluation_run_samples: Optional[EvaluationRunSampleRepository] = None
-    self._metric_target_span_types: Optional[MetricTargetSpanTypeRepository] = None
-    self._ground_truths: Optional[GroundTruthRepository] = None
-    self._metric_computations: Optional[MetricComputationRepository] = None
+  def _active_connection(self) -> Optional[AsyncConnection[Any]]:
+    return None
 
-  @property
+  @cached_property
   def agents(self) -> AgentRepository:
-    """Get Agent repository."""
-    if self._agents is None:
-      self._agents = AgentRepository(self.db_manager, self._connection)
-    return self._agents
+    return AgentRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def datasets(self) -> DatasetRepository:
-    """Get Dataset repository."""
-    if self._datasets is None:
-      self._datasets = DatasetRepository(self.db_manager, self._connection)
-    return self._datasets
+    return DatasetRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def evaluation_runs(self) -> EvaluationRunRepository:
-    """Get EvaluationRun repository."""
-    if self._evaluation_runs is None:
-      self._evaluation_runs = EvaluationRunRepository(self.db_manager, self._connection)
-    return self._evaluation_runs
+    return EvaluationRunRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def evaluation_run_metrics(self) -> EvaluationRunMetricRepository:
-    """Get EvaluationRunMetric repository."""
-    if self._evaluation_run_metrics is None:
-      self._evaluation_run_metrics = EvaluationRunMetricRepository(self.db_manager, self._connection)
-    return self._evaluation_run_metrics
+    return EvaluationRunMetricRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def evaluation_run_plan_samples(self) -> EvaluationRunPlanSampleRepository:
-    """Get EvaluationRunPlanSample repository."""
-    if self._evaluation_run_plan_samples is None:
-      self._evaluation_run_plan_samples = EvaluationRunPlanSampleRepository(self.db_manager, self._connection)
-    return self._evaluation_run_plan_samples
+    return EvaluationRunPlanSampleRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def samples(self) -> SampleRepository:
-    """Get Sample repository."""
-    if self._samples is None:
-      self._samples = SampleRepository(self.db_manager, self._connection)
-    return self._samples
+    return SampleRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def metrics(self) -> MetricRepository:
-    """Get Metric repository."""
-    if self._metrics is None:
-      self._metrics = MetricRepository(self.db_manager, self._connection)
-    return self._metrics
+    return MetricRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def span_types(self) -> SpanTypeRepository:
-    """Get SpanType repository."""
-    if self._span_types is None:
-      self._span_types = SpanTypeRepository(self.db_manager, self._connection)
-    return self._span_types
+    return SpanTypeRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def spans(self) -> SpanRepository:
-    """Get Span repository."""
-    if self._spans is None:
-      self._spans = SpanRepository(self.db_manager, self._connection)
-    return self._spans
+    return SpanRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def traces(self) -> TraceRepository:
-    """Get Trace repository."""
-    if self._traces is None:
-      self._traces = TraceRepository(self.db_manager, self._connection)
-    return self._traces
+    return TraceRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def evaluation_run_samples(self) -> EvaluationRunSampleRepository:
-    """Get EvaluationRunSample repository."""
-    if self._evaluation_run_samples is None:
-      self._evaluation_run_samples = EvaluationRunSampleRepository(self.db_manager, self._connection)
-    return self._evaluation_run_samples
+    return EvaluationRunSampleRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def metric_target_span_types(self) -> MetricTargetSpanTypeRepository:
-    """Get MetricTargetSpanType repository."""
-    if self._metric_target_span_types is None:
-      self._metric_target_span_types = MetricTargetSpanTypeRepository(self.db_manager, self._connection)
-    return self._metric_target_span_types
+    return MetricTargetSpanTypeRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def ground_truths(self) -> GroundTruthRepository:
-    """Get GroundTruth repository."""
-    if self._ground_truths is None:
-      self._ground_truths = GroundTruthRepository(self.db_manager, self._connection)
-    return self._ground_truths
+    return GroundTruthRepository(self.db_manager, self._active_connection())
 
-  @property
+  @cached_property
   def metric_computations(self) -> MetricComputationRepository:
-    """Get MetricComputation repository."""
-    if self._metric_computations is None:
-      self._metric_computations = MetricComputationRepository(self.db_manager, self._connection)
-    return self._metric_computations
+    return MetricComputationRepository(self.db_manager, self._active_connection())
 
   @property
   def span_metric_computations(self) -> MetricComputationRepository:
-    """Get MetricComputation repository using the table-aligned name."""
+    """Table-aligned alias for `metric_computations`."""
     return self.metric_computations
 
   async def __aenter__(self):
-    """Enter async context (no-op, repos manage their own connections)."""
     return self
 
   async def __aexit__(self, exc_type, exc_val, exc_tb):
-    """Exit async context (no-op, repos manage their own connections)."""
     pass
 
 
 class TransactionalUnitOfWork(UnitOfWork):
   """
-  Transactional Unit of Work that wraps all operations in a single transaction.
+  Unit of work whose repositories share one `DatabaseManager.transaction()`.
+
+  Commits on success and rolls back on exception or cancellation. Instances are single-use: access repositories only
+  inside the `async with` block and do not keep repository references after it exits.
 
   Usage:
       async with TransactionalUnitOfWork(db_manager) as uow:
           agent = await uow.agents.create(agent)
           run = await uow.evaluation_runs.create(run)
-          # Both committed together or both rolled back
   """
 
   def __init__(self, db_manager: DatabaseManager):
-    """
-    Initialize Transactional Unit of Work.
-
-    Args:
-        db_manager: Database manager for connection handling
-    """
     super().__init__(db_manager)
-    self._connection_ctx: Optional[AsyncContextManager[AsyncConnection[Any]]] = None
-    self._transaction_conn: Optional[AsyncConnection[Any]] = None
-    self._transaction: Optional[AsyncContextManager[AsyncTransaction]] = None
+    self._transaction: AbstractAsyncContextManager[AsyncConnection[Any]] = db_manager.transaction()
+    self._connection: Optional[AsyncConnection[Any]] = None
+    self._entered = False
+
+  def _active_connection(self) -> AsyncConnection[Any]:
+    if self._connection is None:
+      raise RuntimeError('TransactionalUnitOfWork repositories are only available inside its async with block')
+    return self._connection
 
   async def __aenter__(self):
-    """
-    Enter transactional context.
-
-    Opens a transaction that all repository operations will use.
-    """
-    self._connection_ctx = self.db_manager.get_async_connection()
-    self._transaction_conn = await self._connection_ctx.__aenter__()
-    self._transaction = self._transaction_conn.transaction()
-    await self._transaction.__aenter__()
-    self._connection = self._transaction_conn
-
-    logger.debug('Started transactional unit of work')
+    if self._entered:
+      raise RuntimeError('TransactionalUnitOfWork is single-use')
+    self._entered = True
+    self._connection = await self._transaction.__aenter__()
     return self
 
   async def __aexit__(self, exc_type, exc_val, exc_tb):
-    """
-    Exit transactional context.
-
-    Commits transaction on success, rolls back on exception.
-    """
-    try:
-      if exc_type is not None:
-        logger.warning(f'Rolling back transaction due to {exc_type.__name__}: {exc_val}')
-        if self._transaction is not None:
-          await self._transaction.__aexit__(exc_type, exc_val, exc_tb)
-      else:
-        if self._transaction is not None:
-          logger.debug('Committing transaction')
-          await self._transaction.__aexit__(None, None, None)
-    finally:
-      self._connection = None
-      if self._connection_ctx is not None:
-        await self._connection_ctx.__aexit__(exc_type, exc_val, exc_tb)
-      self._connection_ctx = None
-      self._transaction_conn = None
-      self._transaction = None
+    self._connection = None
+    for name in [name for name, value in vars(self).items() if isinstance(value, BaseRepository)]:
+      del self.__dict__[name]
+    if exc_type is not None:
+      logger.warning('Rolling back transaction due to %s: %s', exc_type.__name__, exc_val)
+    return await self._transaction.__aexit__(exc_type, exc_val, exc_tb)
