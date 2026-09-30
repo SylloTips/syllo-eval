@@ -29,7 +29,13 @@ class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
       'You are grading an agent answer against the expected answer for a benchmark sample. '
       'Return a score between 0.0 and 1.0 where 1.0 means fully correct, 0.0 means incorrect, '
       'irrelevant, contradictory, or missing. Focus on semantic correctness instead of exact wording, '
-      'but penalize hallucinations and material omissions. Return only the JSON object required by the schema.'
+      'but penalize hallucinations and material omissions.\n\n'
+      'Scoring guidance:\n'
+      '- 1.0 = fully correct\n'
+      '- 0.7 = mostly correct with only minor omissions\n'
+      '- 0.4 = partially correct but misses important details\n'
+      '- 0.0 = wrong, unsupported, contradictory, or no answer\n\n'
+      'Return only the JSON object required by the schema.'
     )
 
   def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
@@ -42,11 +48,6 @@ class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
       f'Sample input:\n{display_text(span.semantics.request)}',
       f'Expected answer:\n{expected_answer}',
       f'Actual answer:\n{extract_final_answer(span)}',
-      'Scoring guidance:\n'
-      '- 1.0 = fully correct\n'
-      '- 0.7 = mostly correct with only minor omissions\n'
-      '- 0.4 = partially correct but misses important details\n'
-      '- 0.0 = wrong, unsupported, contradictory, or no answer',
     ]
 
     if rubric is not None:
