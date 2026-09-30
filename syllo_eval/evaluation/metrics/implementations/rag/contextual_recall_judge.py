@@ -123,8 +123,8 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     rendered_items = '\n\n'.join(item.render_for_prompt(rank) for rank, item in enumerate(retrieved_items, 1))
     sections = [
       f'Judge whether the statement is attributable to the retrieved {self.variant}s.',
-      f'Statement:\n{claim}',
       f'Retrieved {self.variant}s:\n{rendered_items}',
+      f'Statement:\n{claim}',
     ]
     return '\n\n'.join(sections)
 
