@@ -128,6 +128,26 @@ def resolve_selected_metric_names_csv(
   return resolve_selected_metric_names(raw_metrics.split(','), available_names)
 
 
+def _resolve_rubric_additions(
+  rubric_additions: Mapping[str, str] | None, selected_metric_names: Sequence[str]
+) -> dict[str, str]:
+  judge_metric_names = {
+    metric_class.metric_name for metric_class in BUILTIN_METRICS if metric_class.requires_judge_client
+  }
+  names_by_normalized = {
+    _normalize_metric_name(name): name for name in selected_metric_names if name in judge_metric_names
+  }
+  resolved: dict[str, str] = {}
+  for raw_name, text in (rubric_additions or {}).items():
+    name = names_by_normalized.get(_normalize_metric_name(raw_name))
+    if name is None or name in resolved:
+      raise MetricSelectionError(f'Rubric addition {raw_name!r} must target a distinct selected LLM-judge metric')
+    if not text.strip():
+      raise MetricSelectionError(f'Rubric addition for {name} cannot be blank')
+    resolved[name] = text.strip()
+  return resolved
+
+
 def _normalize_metric_name(metric_name: str) -> str:
   return metric_name.strip().lower()
 
@@ -155,10 +175,13 @@ def _build_metric_registry(
   selected_metric_names: Sequence[str] | None = None,
   custom_metrics: Sequence[EvaluationMetric] = (),
   include_builtin_metrics: bool = True,
+  rubric_additions: Mapping[str, str] | None = None,
 ) -> MetricRegistry:
   registry = MetricRegistry(db_manager=db_manager)
   metrics = (
-    build_available_metrics(judge_client=judge_client, claim_extractor_client=claim_extractor_client)
+    build_available_metrics(
+      judge_client=judge_client, claim_extractor_client=claim_extractor_client, rubric_additions=rubric_additions
+    )
     if include_builtin_metrics
     else []
   )
@@ -384,6 +407,7 @@ class EvaluationService:
     sample_trace_timeout: float | None = None,
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
+    rubric_additions: Mapping[str, str] | None = None,
   ) -> EvaluationRun:
     handle = await self.create_evaluation(
       agent_name=agent_name,
@@ -394,6 +418,7 @@ class EvaluationService:
       sample_trace_timeout=sample_trace_timeout,
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
+      rubric_additions=rubric_additions,
     )
     return await handle.execute()
 
@@ -408,6 +433,7 @@ class EvaluationService:
     sample_trace_timeout: float | None = None,
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
+    rubric_additions: Mapping[str, str] | None = None,
   ) -> EvaluationHandle:
     execution = await self._build_execution(
       agent_name=agent_name,
@@ -418,6 +444,7 @@ class EvaluationService:
       sample_trace_timeout=sample_trace_timeout,
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
+      rubric_additions=rubric_additions,
     )
     try:
       run = await execution.create_run()
@@ -439,9 +466,11 @@ class EvaluationService:
     max_concurrent_tasks: int | None = None,
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
+    rubric_additions: Mapping[str, str] | None = None,
   ) -> EvaluationHandle:
     """Evaluate exported traces without calling the agent; only samples with a trace are planned."""
     resolved_metric_names = resolve_selected_metric_names(selected_metric_names, self.available_metric_names())
+    resolved_rubric_additions = _resolve_rubric_additions(rubric_additions, resolved_metric_names)
     adapter = self._import_adapters.get(trace_adapter_name.strip().lower())
     if adapter is None:
       raise TraceImportError(
@@ -470,6 +499,7 @@ class EvaluationService:
       sample_trace_timeout=None,
       sample_compute_timeout=sample_compute_timeout,
       imported_trace_ids=trace_ids_by_sample_id,
+      rubric_additions=resolved_rubric_additions,
     )
     try:
       run = await execution.create_run()
@@ -487,7 +517,9 @@ class EvaluationService:
     max_concurrent_samples: int | None = None,
     max_concurrent_tasks: int | None = None,
     sample_compute_timeout: float | None = None,
+    rubric_additions: Mapping[str, str] | None = None,
   ) -> EvaluationHandle:
+    """Recompute stored traces; rubric additions default to the source run's for metrics still selected."""
     async with UnitOfWork(self._db_manager) as uow:
       source_run = await uow.evaluation_runs.get_by_id(source_run_id)
       if source_run is None:
@@ -504,6 +536,10 @@ class EvaluationService:
       agent = await uow.agents.get_by_id_or_raise(source_run.agent_id)
 
     selected_metric_names = self._resolve_repeat_metric_names(source_metric_names, metrics)
+    if rubric_additions is None:
+      source_additions = (source_run.config or {}).get('rubric_additions') or {}
+      rubric_additions = {name: text for name, text in source_additions.items() if name in selected_metric_names}
+    resolved_rubric_additions = _resolve_rubric_additions(rubric_additions, selected_metric_names)
 
     execution = await self._build_execution_from_plan(
       agent_id=source_run.agent_id,
@@ -515,6 +551,7 @@ class EvaluationService:
       sample_trace_timeout=None,
       sample_compute_timeout=sample_compute_timeout,
       source_run_id=source_run.id,
+      rubric_additions=resolved_rubric_additions,
     )
     try:
       run = await execution.create_run()
@@ -535,8 +572,10 @@ class EvaluationService:
     sample_trace_timeout: float | None,
     sample_compute_timeout: float | None,
     selected_metric_names: Sequence[str] | None,
+    rubric_additions: Mapping[str, str] | None,
   ) -> _PreparedEvaluationExecution:
     resolved_metric_names = resolve_selected_metric_names(selected_metric_names, self.available_metric_names())
+    resolved_rubric_additions = _resolve_rubric_additions(rubric_additions, resolved_metric_names)
     dispatcher = self._build_agent_dispatcher(agent_name)
     async with UnitOfWork(self._db_manager) as uow:
       agent = await uow.agents.get_or_create_by_name_and_version(name=agent_name, version_tag=agent_version_tag)
@@ -553,6 +592,7 @@ class EvaluationService:
       sample_compute_timeout=sample_compute_timeout,
       agent_call_dispatcher=dispatcher,
       trace_adapter=self._trace_adapters.get(agent_name.strip().lower()),
+      rubric_additions=resolved_rubric_additions,
     )
 
   def _build_agent_dispatcher(self, agent_name: str) -> AgentCallDispatcher:
@@ -575,6 +615,7 @@ class EvaluationService:
     agent_call_dispatcher: AgentCallDispatcher | None = None,
     trace_adapter: TraceAdapter | None = None,
     imported_trace_ids: Mapping[UUID, str] | None = None,
+    rubric_additions: Mapping[str, str] | None = None,
   ) -> _PreparedEvaluationExecution:
     overrides = {
       'max_concurrent_samples': max_concurrent_samples,
@@ -615,6 +656,7 @@ class EvaluationService:
         planned_sample_ids=list(planned_sample_ids),
         config=self._build_run_config_snapshot(
           selected_metric_names=selected_metric_names,
+          rubric_additions=rubric_additions or {},
           max_concurrent_samples=max_concurrent_samples,
           max_concurrent_tasks=max_concurrent_tasks,
           sample_trace_timeout=sample_trace_timeout,
@@ -629,6 +671,7 @@ class EvaluationService:
         selected_metric_names=selected_metric_names,
         custom_metrics=self._custom_metrics,
         include_builtin_metrics=self._include_builtin_metrics,
+        rubric_additions=rubric_additions,
       )
       await metric_registry.sync_with_persistence()
 
@@ -699,6 +742,7 @@ class EvaluationService:
     self,
     *,
     selected_metric_names: Sequence[str],
+    rubric_additions: Mapping[str, str],
     max_concurrent_samples: int,
     max_concurrent_tasks: int,
     sample_trace_timeout: float | None,
@@ -728,6 +772,7 @@ class EvaluationService:
         if metric_class.metric_name in selected_metric_names
         and (version := getattr(metric_class, 'prompt_version', None)) is not None
       },
+      'rubric_additions': dict(rubric_additions),
     }
 
   def _build_claim_extractor_client(self) -> ClaimExtractorClient | None:

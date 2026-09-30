@@ -21,8 +21,14 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
 
   requires_claim_extractor_client = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient, claim_extractor_client: ClaimExtractorClient):
-    super().__init__(judge_client=judge_client)
+  def __init__(
+    self,
+    *,
+    judge_client: LlmJudgeClient,
+    claim_extractor_client: ClaimExtractorClient,
+    rubric_addition: str | None = None,
+  ):
+    super().__init__(judge_client=judge_client, rubric_addition=rubric_addition)
     self._claim_extractor_client = claim_extractor_client
 
   async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:

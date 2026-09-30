@@ -38,7 +38,7 @@ class PlanCorrectnessJudgeMetric(BaseLlmJudgeMetric):
     return GroundTruthKey.EXPECTED_PLAN.value
 
   def build_system_prompt(self) -> str:
-    return render_prompt(f'plan_correctness/{self.prompt_version}/system.md')
+    return render_prompt(f'plan_correctness/{self.prompt_version}/system.md', rubric_addition=self._rubric_addition)
 
   def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
     return render_prompt(

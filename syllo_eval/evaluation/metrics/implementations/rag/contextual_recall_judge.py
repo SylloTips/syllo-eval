@@ -39,8 +39,9 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   retrieval_stage: str = 'selected'
   requires_judge_client = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient):
+  def __init__(self, *, judge_client: LlmJudgeClient, rubric_addition: str | None = None):
     self._judge_client = judge_client
+    self._rubric_addition = rubric_addition
 
   @property
   def target_span_types(self) -> tuple[str, ...]:
@@ -107,7 +108,9 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     )
 
   def build_system_prompt(self) -> str:
-    return render_prompt(f'contextual_recall/{self.prompt_version}/system.md', variant=self.variant)
+    return render_prompt(
+      f'contextual_recall/{self.prompt_version}/system.md', variant=self.variant, rubric_addition=self._rubric_addition
+    )
 
   def build_user_prompt(self, span: Span, retrieved_items: list[RetrievedItem], claim: str) -> str:
     return render_prompt(

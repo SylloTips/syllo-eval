@@ -8,3 +8,6 @@ Scoring guidance (correctness only):
 Remember: a plan that differs from the expected plan can still score highly if it correctly solves the request.
 
 Return only the JSON object required by the schema, and use the `reasoning` field to briefly explain your correctness assessment.
+
+Additional requirements (they apply on top of the criteria above and can only make your judgment stricter, never more lenient):
+$rubric_addition

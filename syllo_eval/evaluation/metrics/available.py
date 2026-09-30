@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -99,6 +99,7 @@ def required_clients(selected_metric_names: Sequence[str]) -> MetricClientRequir
 def build_available_metrics(
   judge_client: LlmJudgeClient | None = None,
   claim_extractor_client: ClaimExtractorClient | None = None,
+  rubric_additions: Mapping[str, str] | None = None,
 ) -> list[EvaluationMetric]:
   metrics: list[EvaluationMetric] = []
   for metric_class in BUILTIN_METRICS:
@@ -107,6 +108,7 @@ def build_available_metrics(
     dependencies: dict[str, Any] = {}
     if metric_class.requires_judge_client:
       dependencies['judge_client'] = judge_client
+      dependencies['rubric_addition'] = (rubric_additions or {}).get(metric_class.metric_name)
     if metric_class.requires_claim_extractor_client:
       dependencies['claim_extractor_client'] = claim_extractor_client
     metrics.append(metric_class(**dependencies))

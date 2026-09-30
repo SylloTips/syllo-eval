@@ -7,3 +7,6 @@ Scoring guidance:
 - 0.0 = wrong, unsupported, contradictory, or no answer
 
 Return only the JSON object required by the schema.
+
+Additional requirements (they apply on top of the criteria above and can only make your judgment stricter, never more lenient):
+$rubric_addition

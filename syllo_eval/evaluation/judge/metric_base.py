@@ -21,8 +21,9 @@ class BaseLlmJudgeMetric(SpanEvaluationMetric, ABC):
 
   requires_judge_client = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient):
+  def __init__(self, *, judge_client: LlmJudgeClient, rubric_addition: str | None = None):
     self._judge_client = judge_client
+    self._rubric_addition = rubric_addition
 
   @property
   def temperature(self) -> float:
