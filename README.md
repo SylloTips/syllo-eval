@@ -212,6 +212,9 @@ poetry run my-eval --agent-name my-agent --agent-version-tag v1 --dataset-id <da
 # Recompute metrics over the traces of an earlier run, without calling the agent
 poetry run my-eval repeat <evaluation-run-uuid> --metrics set_recall_snippet
 
+# Rescore the same traces with stricter judge requirements
+poetry run my-eval repeat <evaluation-run-uuid> --rubric-additions strict.json
+
 # Score exported trace files without calling the agent or the trace source
 poetry run my-eval import traces/*.json --trace-adapter my-source \
   --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid>
@@ -223,7 +226,9 @@ the root span's `semantics.request`, or its text input when the adapter sets non
 when a file is invalid, the adapter is unknown, or a trace does not match exactly one sample.
 
 Without `--metrics`, a fresh run uses every metric available with your configuration, and a repeat uses the metrics of
-the source run. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
+the source run. `--rubric-additions` takes a JSON file mapping selected LLM-judge metrics to extra requirements, for
+example `{"answer_correctness_judge": "The answer must cite the warranty clause."}`; a repeat without it reuses the
+source run's additions. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
 `PARTIALLY_COMPLETED` runs, and non-zero when the run fails. Run `--help` on any command for all options.
 
 ### HTTP API
@@ -234,12 +239,12 @@ poetry run uvicorn my_eval.app:app --port 8005
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/evaluations` | Start a run in the background (`agent_name`, `agent_version_tag`, `dataset_id`, optional `metrics`) |
+| `POST` | `/evaluations` | Start a run in the background (`agent_name`, `agent_version_tag`, `dataset_id`, optional `metrics` and `rubric_additions`) |
 | `GET` | `/evaluations` | List runs, newest first |
 | `GET` | `/evaluations/{id}` | Run status with per-sample counts |
 | `GET` | `/evaluations/{id}/report` | Aggregated report of a finished run |
 | `POST` | `/evaluations/import` | Score exported traces in the background (start fields plus `traces` and optional `trace_adapter`, default `phoenix`) |
-| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run |
+| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run (optional `metrics` and `rubric_additions`) |
 | `POST` | `/evaluations/{id}/cancel` | Best-effort cancellation; the run ends as `FAILED` |
 | `POST` | `/datasets` | Import a dataset payload |
 | `GET` | `/datasets` | List datasets |
@@ -288,6 +293,10 @@ asyncio.run(main())
 Retrieval metrics score the agent's final `selected` context, separately for documents and snippets. Rank-based
 metrics skip result sets the adapter didn't mark as ranked. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
 is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
+
+Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are
+appended to a judge's system prompt under a header saying they can only make grading stricter; the built-in rubric and
+any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version.
 
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.
