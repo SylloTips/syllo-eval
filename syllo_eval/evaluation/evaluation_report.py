@@ -25,8 +25,8 @@ from syllo_eval.model import (
   Span,
 )
 
-_REPORT_VERSION = '1.4'
-_TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens')
+_REPORT_VERSION = '1.5'
+_TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens')
 _FAILURE_PHASES = ('agent_call', 'trace_fetch', 'metric_compute', 'unknown')
 _FAILURE_PHASE_SET = set(_FAILURE_PHASES)
 
@@ -85,13 +85,18 @@ class EvaluationReportTokenUsage(BaseModel):
   input_tokens: int
   output_tokens: int
   total_tokens: int
+  cached_input_tokens: int
   sources_with_data: int
   sources_total: int
 
 
+class EvaluationReportJudgeTokenUsage(EvaluationReportTokenUsage):
+  calls: int
+
+
 class EvaluationReportTokenUsageSection(BaseModel):
   agent: EvaluationReportTokenUsage
-  judge: EvaluationReportTokenUsage
+  judge: EvaluationReportJudgeTokenUsage
 
 
 class EvaluationReportSummary(BaseModel):
@@ -583,7 +588,14 @@ def _build_token_usage_section(
 ) -> EvaluationReportTokenUsageSection:
   return EvaluationReportTokenUsageSection(
     agent=_sum_token_usage(_span_token_usages(usage_spans), len({_span_usage_key(span) for span in usage_spans})),
-    judge=_sum_token_usage(_judge_token_usages(computations), len(computations)),
+    judge=EvaluationReportJudgeTokenUsage(
+      **_sum_token_usage(_judge_token_usages(computations), len(computations)).model_dump(),
+      calls=sum(
+        calls
+        for computation in computations
+        if isinstance(calls := (computation.metadata or {}).get('judge_calls'), int)
+      ),
+    ),
   )
 
 

@@ -29,7 +29,9 @@ from syllo_eval.model import (
 
 class EvaluationReportCompositionTest(unittest.TestCase):
   def test_usage_on_custom_spans_is_deduplicated_per_call_and_trace(self):
-    first = span(usage=LlmUsage(call_id='call', input_tokens=10, output_tokens=2, total_tokens=12))
+    first = span(
+      usage=LlmUsage(call_id='call', input_tokens=10, output_tokens=2, total_tokens=12, cached_input_tokens=6)
+    )
     first.span_type = 'bla'
     duplicate = first.model_copy(update={'external_id': 'another-span', 'span_type': 'agent_root'})
     empty = first.model_copy(deep=True)
@@ -46,6 +48,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(result.input_tokens, 23)
     self.assertEqual(result.output_tokens, 5)
     self.assertEqual(result.total_tokens, 28)
+    self.assertEqual(result.cached_input_tokens, 12)
     self.assertEqual(result.sources_with_data, 3)
     self.assertEqual(result.sources_total, 4)
 
@@ -159,7 +162,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       generated_at=generated_at,
     )
 
-    self.assertEqual(report.report_version, '1.4')
+    self.assertEqual(report.report_version, '1.5')
     self.assertEqual(report.generated_at, generated_at)
     self.assertEqual(report.run.samples_processed, 3)
     self.assertEqual(report.run.duration_seconds, 300.0)
@@ -291,7 +294,10 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       target_span_type='agent',
       span_ids=['agent-span'],
       score=0.9,
-      metadata={'judge_usage': {'input_tokens': 20, 'output_tokens': 5, 'total_tokens': 25}},
+      metadata={
+        'judge_calls': 3,
+        'judge_usage': {'input_tokens': 20, 'output_tokens': 5, 'total_tokens': 25, 'cached_input_tokens': 12},
+      },
     )
     deterministic_computation = MetricComputation(
       id=uuid4(),
@@ -327,6 +333,8 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(run_tokens.judge.input_tokens, 20)
     self.assertEqual(run_tokens.judge.output_tokens, 5)
     self.assertEqual(run_tokens.judge.total_tokens, 25)
+    self.assertEqual(run_tokens.judge.cached_input_tokens, 12)
+    self.assertEqual(run_tokens.judge.calls, 3)
     self.assertEqual(run_tokens.judge.sources_with_data, 1)
     self.assertEqual(run_tokens.judge.sources_total, 2)
 
@@ -336,6 +344,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(with_tokens.agent.sources_with_data, 2)
     self.assertEqual(with_tokens.agent.sources_total, 2)
     self.assertEqual(with_tokens.judge.total_tokens, 25)
+    self.assertEqual(with_tokens.judge.calls, 3)
     self.assertEqual(with_tokens.judge.sources_with_data, 1)
     self.assertEqual(with_tokens.judge.sources_total, 1)
 
@@ -344,6 +353,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(without_tokens.agent.sources_with_data, 0)
     self.assertEqual(without_tokens.agent.sources_total, 1)
     self.assertEqual(without_tokens.judge.total_tokens, 0)
+    self.assertEqual(without_tokens.judge.calls, 0)
     self.assertEqual(without_tokens.judge.sources_with_data, 0)
     self.assertEqual(without_tokens.judge.sources_total, 1)
 
