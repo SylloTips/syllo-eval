@@ -298,6 +298,10 @@ Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/
 appended to a judge's system prompt under a header saying they can only make grading stricter; the built-in rubric and
 any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version.
 
+Each computed metric records its `latency_seconds` in its metadata; judge metrics also record their judge calls,
+client-level attempts, provider latency, and token usage, including cached and reasoning tokens when the provider
+reports them. The report sums judge calls and cached input tokens per run and per sample, separately from agent usage.
+
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.
 `syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example.
