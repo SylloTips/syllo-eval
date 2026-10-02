@@ -1,0 +1,30 @@
+# Agent configurations of Section 5.1. Each one is evaluated as its own Syllo-eval agent: the agent name is the stack,
+# and the version tag combines the model key with the degradation fraction or the trial.
+#   degradation: share of search results the tool server replaces with random KB documents (ERB only, RQ2).
+#   trial: tau2-bench trial index; each trial is a separate run of all 114 tasks.
+
+configurations:
+  - {id: erb/react/sonnet, benchmark: erb, agent: react, model: sonnet}
+  - {id: erb/react/deepseek, benchmark: erb, agent: react, model: deepseek}
+  - {id: erb/smolagents/sonnet, benchmark: erb, agent: smolagents, model: sonnet}
+  - {id: erb/smolagents/deepseek, benchmark: erb, agent: smolagents, model: deepseek}
+  - {id: erb/odr/sonnet, benchmark: erb, agent: odr, model: sonnet}
+  - {id: erb/odr/deepseek, benchmark: erb, agent: odr, model: deepseek}
+  - {id: erb/react/sonnet/f0.25, benchmark: erb, agent: react, model: sonnet, degradation: 0.25}
+  - {id: erb/react/sonnet/f0.5, benchmark: erb, agent: react, model: sonnet, degradation: 0.5}
+
+  - {id: wixqa/react/sonnet, benchmark: wixqa, agent: react, model: sonnet}
+  - {id: wixqa/react/deepseek, benchmark: wixqa, agent: react, model: deepseek}
+  - {id: wixqa/smolagents/sonnet, benchmark: wixqa, agent: smolagents, model: sonnet}
+  - {id: wixqa/smolagents/deepseek, benchmark: wixqa, agent: smolagents, model: deepseek}
+  - {id: wixqa/odr/sonnet, benchmark: wixqa, agent: odr, model: sonnet}
+  - {id: wixqa/odr/deepseek, benchmark: wixqa, agent: odr, model: deepseek}
+
+  - {id: tau2/llm-agent/sonnet/trial-1, benchmark: tau2, agent: tau2-llm-agent, model: sonnet, trial: 1}
+  - {id: tau2/llm-agent/sonnet/trial-2, benchmark: tau2, agent: tau2-llm-agent, model: sonnet, trial: 2}
+  - {id: tau2/llm-agent/sonnet/trial-3, benchmark: tau2, agent: tau2-llm-agent, model: sonnet, trial: 3}
+  - {id: tau2/llm-agent/sonnet/trial-4, benchmark: tau2, agent: tau2-llm-agent, model: sonnet, trial: 4}
+  - {id: tau2/llm-agent/deepseek/trial-1, benchmark: tau2, agent: tau2-llm-agent, model: deepseek, trial: 1}
+  - {id: tau2/llm-agent/deepseek/trial-2, benchmark: tau2, agent: tau2-llm-agent, model: deepseek, trial: 2}
+  - {id: tau2/llm-agent/deepseek/trial-3, benchmark: tau2, agent: tau2-llm-agent, model: deepseek, trial: 3}
+  - {id: tau2/llm-agent/deepseek/trial-4, benchmark: tau2, agent: tau2-llm-agent, model: deepseek, trial: 4}

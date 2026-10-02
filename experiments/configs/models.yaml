@@ -1,0 +1,29 @@
+# Models of Section 5.1. Values marked "paper placeholder" are still red in the draft: confirm them before the pilot.
+
+agents:
+  sonnet:
+    provider: anthropic
+    model: claude-sonnet-5-5
+    label: Claude Sonnet 5.5
+  deepseek:
+    provider: deepseek
+    model: deepseek-v4.1-flash  # paper placeholder
+    label: DeepSeek-V4.1-Flash
+
+# Plays the customer in tau2-bench.
+customer_simulator:
+  provider: openai
+  model: gpt-6-luna  # paper placeholder
+  label: GPT 6 Luna
+
+# One judge for every framework (Syllo-eval, its ablations, DeepEval). Temperature and thinking level are frozen at
+# the pilot gate: the paper uses temperature 0, while Google recommends the default 1.0 for Gemini 3 models.
+judge:
+  provider: gemini
+  model: gemini-3.8-flash  # paper placeholder
+  label: Gemini 3.8 Flash
+  temperature: 0.0
+  thinking_level: null
+  timeout_seconds: 300
+  max_retries: 5
+  max_concurrent_requests: 16
