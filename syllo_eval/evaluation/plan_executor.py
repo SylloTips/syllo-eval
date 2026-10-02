@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterable
 from uuid import UUID, uuid4
 
@@ -98,6 +99,7 @@ class PlanExecutor:
     Returns:
         Persisted MetricComputation.
     """
+    started = time.monotonic()
     try:
       computation_result = await self._compute_result(item)
       metric_computation = self._to_metric_computation(
@@ -117,6 +119,12 @@ class PlanExecutor:
         evaluation_run_sample_id=evaluation_run_sample_id,
         error_message=str(exc),
       )
+    if item.skip_reason is None:
+      # Skipped items compute nothing; computed and failed items record how long the metric took.
+      metric_computation.metadata = {
+        **(metric_computation.metadata or {}),
+        'latency_seconds': round(time.monotonic() - started, 3),
+      }
 
     async with UnitOfWork(self.db_manager) as uow:
       record = await uow.metric_computations.create(metric_computation)
