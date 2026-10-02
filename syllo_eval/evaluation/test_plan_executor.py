@@ -20,6 +20,7 @@ from syllo_eval.model import (
   EvaluationRunSample,
   EvaluationStatus,
   GroundTruth,
+  MetricComputation,
   MetricComputationStatus,
   Sample,
   Span,
@@ -77,6 +78,62 @@ async def _single_plan_item():
     target=SpanTarget(target_span_type='agent', span=span),
     ground_truth=None,
   )
+
+
+def _metric_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+  """Drop the latency the executor adds to every computed item, failing when it is missing."""
+  if metadata is None or not isinstance(metadata.get('latency_seconds'), float):
+    raise AssertionError(f'Computation metadata has no latency: {metadata!r}')
+  return {key: value for key, value in metadata.items() if key != 'latency_seconds'}
+
+
+class _RecordingMetricComputationRepository:
+  def __init__(self):
+    self.created: list[MetricComputation] = []
+
+  async def create(self, computation: MetricComputation) -> MetricComputation:
+    self.created.append(computation)
+    return computation
+
+
+class _RecordingUnitOfWork:
+  def __init__(self, repository: _RecordingMetricComputationRepository):
+    self.metric_computations = repository
+
+  async def __aenter__(self):
+    return self
+
+  async def __aexit__(self, exc_type, exc, tb):
+    del exc_type, exc, tb
+
+
+class _RaisingStubMetric(_PlanItemStubMetric):
+  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+    del span, ground_truth
+    raise RuntimeError('judge unavailable')
+
+
+async def _latency_plan_items():
+  async for item in _single_plan_item():
+    yield item
+    yield MetricPlanItem(metric=_RaisingStubMetric(), target=item.target, ground_truth=None)
+    yield MetricPlanItem(metric=_PlanItemStubMetric(), target=item.target, ground_truth=None, skip_reason='missing')
+
+
+class TestPlanExecutorLatency(unittest.IsolatedAsyncioTestCase):
+  async def test_computed_and_failed_items_record_latency_but_skipped_items_do_not(self) -> None:
+    repository = _RecordingMetricComputationRepository()
+    executor = PlanExecutor(db_manager=cast(Any, object()))
+
+    with patch('syllo_eval.evaluation.plan_executor.UnitOfWork', return_value=_RecordingUnitOfWork(repository)):
+      completed, failed, skipped = await executor.execute(_latency_plan_items(), uuid4())
+
+    self.assertEqual(completed.status, MetricComputationStatus.COMPLETED)
+    self.assertEqual(_metric_metadata(completed.metadata), {})
+    self.assertEqual(failed.status, MetricComputationStatus.FAILED)
+    self.assertEqual(_metric_metadata(failed.metadata), {})
+    self.assertEqual(skipped.status, MetricComputationStatus.SKIPPED)
+    self.assertIsNone(skipped.metadata)
 
 
 class TestPlanExecutorPersistenceErrors(unittest.IsolatedAsyncioTestCase):
@@ -469,7 +526,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(length_computation.span_ids, [self.span_id])
     self.assertEqual(length_computation.score, float(len(str(first_span.output_data))))
     self.assertEqual(length_computation.reasoning, 'Score is output length.')
-    self.assertEqual(length_computation.metadata, {'computed_from': 'output_data_length'})
+    self.assertEqual(_metric_metadata(length_computation.metadata), {'computed_from': 'output_data_length'})
 
     match_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.match_metric_name)]
     self.assertEqual(match_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
@@ -478,7 +535,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(match_computation.score, 1.0)
     self.assertEqual(match_computation.reasoning, 'Output matches expected output.')
     self.assertEqual(
-      match_computation.metadata,
+      _metric_metadata(match_computation.metadata),
       {'expected_output': 'expected-response', 'actual_output': 'expected-response'},
     )
 
@@ -488,7 +545,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(contains_computation.span_ids, [self.span_id])
     self.assertEqual(contains_computation.score, 1.0)
     self.assertEqual(contains_computation.reasoning, "Output contains 'response'.")
-    self.assertEqual(contains_computation.metadata, {'needle': 'response'})
+    self.assertEqual(_metric_metadata(contains_computation.metadata), {'needle': 'response'})
 
     async with UnitOfWork(self.db_manager) as uow:
       persisted_first_sample_computations = await uow.metric_computations.list_by_evaluation_run_sample(
@@ -621,7 +678,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(group_computation.target_span_type, self.span_type_name)
     self.assertEqual(group_computation.span_ids, [self.span_id, self.span_two_id])
     self.assertEqual(group_computation.score, float(len('alpha') + len('beta')))
-    self.assertEqual(group_computation.metadata, {'span_count': 2})
+    self.assertEqual(_metric_metadata(group_computation.metadata), {'span_count': 2})
 
     async with UnitOfWork(self.db_manager) as uow:
       persisted = await uow.metric_computations.list_by_evaluation_run_sample(self.evaluation_run_sample_id)

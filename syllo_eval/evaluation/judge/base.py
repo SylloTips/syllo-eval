@@ -21,6 +21,9 @@ class LlmJudgeResponse[Payload: BaseModel](BaseModel):
   output: Payload
   response_id: str | None = None
   usage: dict[str, int] | None = None
+  # Wall time of the attempt that succeeded, and how many client-level attempts the call took.
+  latency_seconds: float | None = Field(default=None, ge=0.0)
+  attempts: int = Field(default=1, ge=1)
 
 
 class LlmJudgeClient(Protocol):
@@ -40,7 +43,12 @@ def judge_metadata(responses: Sequence[LlmJudgeResponse]) -> dict[str, Any]:
   metadata: dict[str, Any] = {
     'judge_provider': responses[0].provider,
     'judge_model': responses[0].model,
+    'judge_calls': len(responses),
+    'judge_attempts': sum(response.attempts for response in responses),
   }
+  latencies = [response.latency_seconds for response in responses if response.latency_seconds is not None]
+  if latencies:
+    metadata['judge_latency_seconds'] = round(sum(latencies), 3)
   response_ids = [response.response_id for response in responses if response.response_id is not None]
   if len(responses) == 1:
     if response_ids:

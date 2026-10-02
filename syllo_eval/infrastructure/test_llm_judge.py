@@ -197,6 +197,8 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     self.assertIsInstance(response.output, JudgeScorePayload)
     self.assertEqual(response.output.score, 0.8)
     self.assertEqual(response.usage, {'input_tokens': 10, 'output_tokens': 4, 'total_tokens': 14})
+    self.assertEqual(response.attempts, 1)
+    self.assertIsNotNone(response.latency_seconds)
 
     self.assertEqual(len(fake_chat_model.calls), 1)
     self.assertEqual(fake_chat_model.bind_calls, [{'temperature': 0.0, 'max_tokens': 400}])
@@ -292,7 +294,13 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
           content='',
           id='lc_run--123',
           response_metadata={'model_name': 'gemini-2.5-flash'},
-          usage_metadata={'input_tokens': 9, 'output_tokens': 6, 'total_tokens': 15},
+          usage_metadata={
+            'input_tokens': 9,
+            'output_tokens': 6,
+            'total_tokens': 15,
+            'input_token_details': {'cache_read': 4},
+            'output_token_details': {'reasoning': 2},
+          },
         ),
         'parsed': {'score': 0.6, 'reasoning': 'Partially correct.', 'metadata': {'label': 'partial'}},
         'parsing_error': None,
@@ -318,7 +326,12 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(response.response_id, 'lc_run--123')
     self.assertIsInstance(response.output, JudgeScorePayload)
     self.assertEqual(response.output.score, 0.6)
-    self.assertEqual(response.usage, {'input_tokens': 9, 'output_tokens': 6, 'total_tokens': 15})
+    self.assertEqual(
+      response.usage,
+      {'input_tokens': 9, 'output_tokens': 6, 'total_tokens': 15, 'cached_input_tokens': 4, 'reasoning_tokens': 2},
+    )
+    self.assertEqual(response.attempts, 1)
+    self.assertIsNotNone(response.latency_seconds)
 
     self.assertEqual(len(fake_chat_model.calls), 1)
     self.assertEqual(fake_chat_model.bind_calls, [{'temperature': 0.0, 'max_output_tokens': 400}])
@@ -373,6 +386,7 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
       )
 
     self.assertEqual(response.response_id, 'lc_run--retry')
+    self.assertEqual(response.attempts, 2)
     sleep_mock.assert_awaited_once_with(57.970153168)
     self.assertEqual(len(fake_chat_model.inputs), 2)
 
