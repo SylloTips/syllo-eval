@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypeVar
 
@@ -71,6 +72,8 @@ class LangChainLlmJudgeClient:
         or raw.additional_kwargs.get('id')
       ),
       usage=self._usage(raw),
+      latency_seconds=result.get('latency_seconds'),
+      attempts=result.get('attempts', 1),
     )
 
   async def aclose(self) -> None:
@@ -99,10 +102,13 @@ class LangChainLlmJudgeClient:
       method=self._structured_output_method,
       include_raw=True,
     )
+    started = time.monotonic()
     try:
-      return await runnable.ainvoke([('system', system_prompt), ('human', request.user_prompt)])
+      result = await runnable.ainvoke([('system', system_prompt), ('human', request.user_prompt)])
     except Exception as error:
       raise ExternalServiceError(self._provider_name, 'judge', error) from error
+    # Timed per attempt, so retry back-off waits never count as provider latency.
+    return {**result, 'latency_seconds': time.monotonic() - started}
 
   @staticmethod
   def _usage(message: AIMessage) -> dict[str, int] | None:
@@ -114,8 +120,11 @@ class LangChainLlmJudgeClient:
         'output_tokens': legacy.get('completion_tokens'),
         'total_tokens': legacy.get('total_tokens'),
       }
+    # Detail counts are kept only when the provider reports them: a missing count is unknown, not zero.
+    usage['cached_input_tokens'] = (usage.get('input_token_details') or {}).get('cache_read')
+    usage['reasoning_tokens'] = (usage.get('output_token_details') or {}).get('reasoning')
     return {
       key: value
-      for key in ('input_tokens', 'output_tokens', 'total_tokens')
+      for key in ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'reasoning_tokens')
       if isinstance(value := usage.get(key), int)
     } or None

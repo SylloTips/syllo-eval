@@ -52,7 +52,7 @@ class GeminiLlmJudgeClient(LangChainLlmJudgeClient):
     attempt = 1
     while True:
       try:
-        return await super()._invoke(request)
+        return {**await super()._invoke(request), 'attempts': attempt}
       except ExternalServiceError as error:
         retry_delay = self._retry_delay_seconds(error)
         if retry_delay is None or attempt >= self._max_attempts:
