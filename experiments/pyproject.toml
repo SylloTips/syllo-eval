@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "syllo-eval-experiments"
+version = "0.1.0"
+description = "Experiments of the paper \"Evaluating Enterprise Agents From the Traces They Leave\""
+authors = ["Lorenzo Antonelli <lorenzo.antonelli@syllotips.com>", "Andrea Rossi <andrea.rossi@syllotips.com>"]
+license = "MIT"
+readme = "README.md"
+# The modules live directly in this folder, which is the import root.
+packages = [
+  {include = "cli.py"},
+  {include = "config.py"},
+  {include = "judge.py"},
+  {include = "manifest.py"},
+  {include = "service.py"},
+]
+
+[tool.poetry.scripts]
+syllo-exp = "cli:main"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+syllo-eval = {path = "..", develop = true}
+pyyaml = "^6.0"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "1.14.1"
+types-pyyaml = "^6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = ["\\.venv"]
