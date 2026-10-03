@@ -13,6 +13,7 @@ from benchmarks.common import (
   Claim,
   ConvertedBenchmark,
   check_benchmark,
+  claims_from_value,
   claims_value,
   import_benchmark,
   percentiles,
@@ -104,6 +105,26 @@ class WriteReadBenchmarkTest(unittest.TestCase):
     self.assertEqual(len(records), 2)
     self.assertEqual(report['source'], {'pin': 'abc'})
     self.assertEqual(report['knowledge_base_documents'], 3)
+
+
+class ClaimsValueTest(unittest.TestCase):
+  def test_claims_round_trip_through_the_ground_truth_value(self) -> None:
+    claims = [Claim(id='q1-f01', text='Dana approved it.'), Claim(id='q1-f02', text='It was in May.')]
+
+    self.assertEqual(claims_from_value(claims_value(claims)), claims)
+
+  def test_values_without_well_formed_claims_are_refused(self) -> None:
+    values: list[dict[str, Any]] = [
+      {},
+      {'claims': []},
+      {'claims': 'Dana approved it.'},
+      {'claims': [{'id': 'q1-f01'}]},
+      {'claims': [{'id': '', 'text': 'Dana approved it.'}]},
+      {'claims': [{'id': 'q1-f01', 'text': '  '}]},
+    ]
+    for value in values:
+      with self.subTest(value=value), self.assertRaises(ValueError):
+        claims_from_value(value)
 
 
 class ImportBenchmarkValidationTest(unittest.IsolatedAsyncioTestCase):

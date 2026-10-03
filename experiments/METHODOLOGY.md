@@ -53,6 +53,31 @@ Claims are stored as ground truth, never re-derived during a run:
 | `decomposed_claims` | each expected answer decomposed once with the built-in decomposition prompt, after the pilot | RQ2 CR |
 | `expected_claims_verified` | ERB facts an annotator found in the gold document, as truncated by the search tool | RQ3 CR |
 
+With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of Table 1.
+
+## Ablations
+
+Each ablation changes one design choice of the metric it is compared with (`ablation_metrics.py`). The judge, units,
+skip rules, rubric text, scoring and result metadata stay the same.
+
+- **Syllo-eval-SC** judges all the documents (CP) or all the claims (CR) of a search unit in one call:
+  - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
+    rank or given order. The claims are numbered.
+  - The output budget is the per-item call's 2,000 tokens per item, capped at the judge's output limit of 65,536.
+  - CP judgments are matched to documents by rank, and CR judgments to claims by position. As in the per-item pass,
+    the ids and statements the judge echoes are not checked; mismatches are only counted.
+  - An output with the wrong number of judgments, or with ranks the unit does not have, fails the unit as misaligned,
+    or as truncated when the output reached its budget.
+- **Syllo-eval-WT** reads the agent's whole canonical trace instead of the observations of the target span:
+  - The trace is the agent root and its descendants, depth-first and children by start time, with ordinal span ids
+    and no timestamps. Spans outside the agent root, such as a reward grader's, are not part of it.
+  - Each span shows its typed observations, rendered as the target metrics render them: its request before its
+    children, then its retrieval results, plans, executed steps and answer after them. A span without typed
+    observations shows its raw input and output instead.
+  - The system prompt is the built-in one. The user prompt puts the trace in place of the answer or plan paragraph,
+    and its first sentence adds that the answer or plan is the agent root's.
+  - Every unit records the rendered trace's span count and length in characters, failed units included.
+
 ## Aggregation
 
 - **Question scores:**
@@ -116,3 +141,8 @@ Claims are stored as ground truth, never re-derived during a run:
 - Whole-trace context overflows and timeouts count as wrong, as do misaligned or truncated single-call and DeepEval
   outputs.
 - Excluding them instead is reported only as a sensitivity analysis.
+- The experiment metrics record why a unit failed in `metadata['failure']`:
+  - `misaligned`, `truncated`, `invalid_output` (an output that does not parse), `context_overflow` and `timeout` are
+    outcomes of the judge, under the rules above;
+  - `provider` and `trace_load` are infrastructure failures: the unit is re-run, not counted.
+- A failed unit lists its documents or claims, so that each one counts as a wrong decision.

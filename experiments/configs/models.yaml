@@ -27,3 +27,6 @@ judge:
   timeout_seconds: 300
   max_retries: 5
   max_concurrent_requests: 16
+  # Every Gemini Flash release so far returns at most 65,536 output tokens. A single-call ablation asks for 2,000 per
+  # item, as the per-item call does, capped at this limit.
+  output_token_limit: 65536

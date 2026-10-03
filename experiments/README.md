@@ -5,9 +5,14 @@ project and is not part of the published package. It plugs into `syllo-eval` thr
 callers, trace clients, adapters and custom metrics.
 
 It also uses the library's persistence layer, the `UnitOfWork` repositories in `syllo_eval.infrastructure`, for
-ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`). It relies on
-`datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key` and `ground_truths.bulk_create`. The
-library's test suite does not run this folder's tests, so changes to these methods must keep them passing.
+ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`), and for the stored
+traces that the whole-trace ablation reads (`ablation_metrics.py`). It relies on `datasets.get_by_name`,
+`samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create` and `spans.list_by_trace`.
+
+The experiment metrics also reuse internals of the built-in metrics they extend, so that both arms of an ablation share
+prompts and scoring: `_judge_retrieved_item` and `_score` of contextual precision, `_judge_claim` and `_score` of
+contextual recall, and `_extract_expected_answer` of Answer Correctness. The library's test suite does not run this
+folder's tests, so changes to any of these must keep them passing.
 
 ## What the experiments measure
 
@@ -39,6 +44,7 @@ expected output of each step.
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
+| `metrics.py`, `ablation_metrics.py`, `prompts/` | the main-pass retrieval metrics, the SC and WT ablations, and the ablation prompts |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -100,6 +106,30 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 - ERB: Copyright (c) 2026 DanswerAI, Inc.
 - WixQA: cite "Wix.com AI Research".
 - τ²-bench: Copyright (c) 2025 Sierra Research.
+
+## Metrics
+
+Each ablation subclasses the metric it is compared with and overrides one step, so both arms score the same units
+with the same rubric, scoring and result metadata. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation
+changes.
+
+| Metric | Unit | Judge calls per unit | Compared with |
+|---|---|---|---|
+| `contextual_precision_search` | one search call | one per document | |
+| `contextual_precision_search_sc` | one search call | one | `contextual_precision_search` |
+| `contextual_recall_gold_claims` | one search call | one per gold claim | |
+| `contextual_recall_gold_claims_sc` | one search call | one | `contextual_recall_gold_claims` |
+| `answer_correctness_judge_wt` | one question | one | the built-in `answer_correctness_judge` |
+| `plan_correctness_judge_wt` | one τ²-bench trajectory | one | the built-in `plan_correctness_judge` |
+
+- **Search units:** the search metrics target `retrieval` spans. Each agent's adapter must emit every search call as
+  one, with the user question as its request and the returned documents as one ranked `selected` document result.
+- **Claims:** recall reads the claims stored under its key and never decomposes the expected answer, so a unit makes
+  one judge call per claim.
+- **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
+  metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
+- **Failures:** a failed unit records its cause in `metadata['failure']`, and lists its documents or claims so that
+  each can be counted as a wrong decision.
 
 ## Verification
 

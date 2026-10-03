@@ -7,11 +7,13 @@ license = "MIT"
 readme = "README.md"
 # The modules live directly in this folder, which is the import root.
 packages = [
+  {include = "ablation_metrics.py"},
   {include = "benchmarks"},
   {include = "cli.py"},
   {include = "config.py"},
   {include = "judge.py"},
   {include = "manifest.py"},
+  {include = "metrics.py"},
   {include = "service.py"},
 ]
 
