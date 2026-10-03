@@ -1,8 +1,13 @@
 # Paper experiments
 
 This folder reproduces Section 5 of *Evaluating Enterprise Agents From the Traces They Leave*. It is a separate Poetry
-project that uses `syllo-eval` only through its public extension points: callers, trace clients, adapters and custom
-metrics. It is not part of the published package.
+project and is not part of the published package. It plugs into `syllo-eval` through its public extension points:
+callers, trace clients, adapters and custom metrics.
+
+It also uses the library's persistence layer, the `UnitOfWork` repositories in `syllo_eval.infrastructure`, for
+ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`). It relies on
+`datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key` and `ground_truths.bulk_create`. The
+library's test suite does not run this folder's tests, so changes to these methods must keep them passing.
 
 ## What the experiments measure
 
@@ -24,6 +29,8 @@ of the trace it assesses. The paper asks three questions:
   - Syllo-eval-WT reads the whole trace instead of the target spans.
 
 [`METHODOLOGY.md`](METHODOLOGY.md) fixes the protocol: evaluation units, aggregation and statistics.
+[`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
+expected output of each step.
 
 ## Layout
 
@@ -31,14 +38,15 @@ of the trace it assesses. The paper asks three questions:
 |---|---|
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
-| `tests/` | unit tests on synthetic data |
+| `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
+| `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup
 
 Run all commands from this folder. The parent project's database and migrations are shared: start Postgres with the
-root `docker-compose.yml`, and apply migrations from the root folder after confirming which database `.env` points to.
+root `docker-compose.yml` and apply migrations from the root folder.
 
 ```bash
 poetry install
@@ -46,8 +54,52 @@ poetry run syllo-exp configurations   # validate the configs and list the agent 
 poetry run syllo-exp steps            # state of every recorded experiment step
 ```
 
-Settings such as database credentials and the judge API key are read by `syllo-eval`'s settings blocks. Use a dedicated
-database for the campaign (for example `DB_NAME=syllo-eval-paper`) with `DB_TIMEOUT=30` and `DB_MAX_SIZE=40`.
+Settings such as database credentials and the judge API key are read by `syllo-eval`'s settings blocks. Commands that
+need them load `experiments/.env` first and then the repository's `.env`, so a value in the first wins. Process
+environment variables override both.
+
+Use a dedicated database for the campaign, for example `DB_NAME=syllo-eval-paper` in `experiments/.env`, with
+`DB_TIMEOUT=30` and `DB_MAX_SIZE=40`. Alembic reads only the `.env` of the folder it runs from, so create and migrate
+that database from the repository root, naming it in the environment:
+
+```bash
+docker compose exec db createdb -U postgres syllo-eval-paper
+DB_NAME=syllo-eval-paper poetry run alembic upgrade head
+```
+
+## Benchmarks
+
+```bash
+poetry run syllo-exp benchmarks fetch     # pinned files into data/<benchmark>/raw, size and SHA-256 checked (1.4 GB)
+poetry run syllo-exp benchmarks convert   # dataset.json, samples.jsonl, claims.json and report.json per benchmark
+poetry run syllo-exp benchmarks import    # the datasets and their claim ground truths, into the configured database
+```
+
+- **Pins:** [`configs/benchmarks.yaml`](configs/benchmarks.yaml) fixes every file by commit, size and SHA-256.
+- **Scope:** each step takes `--only erb wixqa tau2`, records its outcome in the manifest, and is safe to re-run.
+  Fetching resumes interrupted downloads.
+- **Checks:** a conversion fails on a wrong sample count, a duplicate or unstripped prompt, a gold document missing
+  from the knowledge base, or a malformed claim list. A failed conversion leaves no report, and the import refuses a
+  conversion that failed or was made from pins other than the current ones.
+- **Re-runs:** importing again changes nothing in an existing dataset. It first checks that the dataset holds the same
+  prompts, answers, built-in ground truths and claims, and refuses otherwise. A fetch refuses to run while another
+  fetch of the same file is in progress.
+
+| Dataset | Samples | Gold documents | Claims (`expected_claims_gold`) |
+|---|---|---|---|
+| `erb-69916e3` | 480 | 470 samples, 723 distinct of 511,962 | 300 samples, 1,013 claims |
+| `wixqa-d662dc4` | 400 | 400 samples, 340 distinct of 6,221 | none |
+| `tau2-retail-v1.0.1` | 114 | none | none (112 expected plans, 550 steps) |
+
+`samples.jsonl` keeps each sample's benchmark fields (question id and type, config and row, tau2 split and grading
+fields), keyed by `sample_key` and joined to the database through the input prompt. `report.json` adds the length
+statistics that the search tool's per-document cap will be chosen from. [`METHODOLOGY.md`](METHODOLOGY.md) lists the
+conversion rules.
+
+The benchmarks are MIT-licensed. A release of derived data must keep their notices:
+- ERB: Copyright (c) 2026 DanswerAI, Inc.
+- WixQA: cite "Wix.com AI Research".
+- τ²-bench: Copyright (c) 2025 Sierra Research.
 
 ## Verification
 
@@ -55,6 +107,12 @@ database for the campaign (for example `DB_NAME=syllo-eval-paper`) with `DB_TIME
 poetry run python -m unittest discover -s tests
 poetry run mypy . --check-untyped-defs --explicit-package-bases
 ```
+
+`ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
+- it creates and deletes `test-benchmark-*` datasets;
+- it is skipped when that database is unreachable, and fails when the database is not migrated.
+
+Check which database is configured before running the suite.
 
 The parent project's `poetry run ruff check .` and `poetry run ruff format .` also cover this folder.
 
