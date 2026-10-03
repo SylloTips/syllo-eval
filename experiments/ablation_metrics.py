@@ -3,7 +3,8 @@
 - Syllo-eval-SC (single call) judges all the documents, or all the claims, of a search unit in one call instead of one
   call each. It subclasses its main-pass metric in ``metrics.py`` and replaces only the judging step.
 - Syllo-eval-WT (whole trace) reads the agent's whole trace instead of the observations of its target span. It
-  subclasses the built-in Answer or Plan Correctness and replaces only the paragraph holding the answer or the plan.
+  subclasses its main-pass Answer or Plan Correctness in ``metrics.py`` and replaces only the paragraph holding the
+  answer or the plan.
 
 Units, skip rules, rubrics, scoring and result metadata therefore stay those of the main pass. The prompts that change
 live in ``prompts/``: the built-in v1 wording, edited only where the design choice requires it.
@@ -19,8 +20,7 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, judge_metadata
-from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric
+from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_actual_plan,
@@ -30,8 +30,6 @@ from syllo_eval.evaluation.metric_support.agent_outputs import (
 )
 from syllo_eval.evaluation.metric_support.retrieved_context import RetrievedItem
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
-from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
-from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionJudgePayload,
   ContextualPrecisionJudgment,
@@ -42,16 +40,19 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
 )
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
-from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
+from syllo_eval.model import GroundTruth, Span
 from syllo_eval.trace_semantics import RetrievalResult
 
 from benchmarks.common import Claim
 from config import EXPERIMENTS_DIR
 from metrics import (
+  AnswerCorrectness,
+  ClassifiedJudgeMetric,
   FailureKind,
   GoldClaimsContextualRecall,
   JudgedUnit,
   JudgeFailure,
+  PlanCorrectness,
   SearchContextualPrecision,
   StoredClaimsContextualRecall,
   count_failure,
@@ -238,11 +239,11 @@ def stored_span_loader(db_manager: DatabaseManager) -> SpanLoader:
 def render_whole_trace(spans: Sequence[Span], target_span_id: str) -> tuple[str, int]:
   """The canonical trace a whole-trace judge reads, and how many spans it holds: the target span and its descendants.
 
-  Spans appear depth-first, children by start time, with ordinal ids instead of source ids so that a re-identified
-  copy renders the same. Typed observations are rendered with the helpers the target metrics use, so the target's
-  request, answer and executed steps appear verbatim. A span's request comes before its children; its retrieval
-  results, plans, executed steps and answer come after them. A span without typed content shows its raw input and
-  output instead.
+  Spans appear depth-first with ordinal ids instead of source ids. Children are ordered by start time, then end time,
+  type and name, so a re-identified copy renders the same unless two siblings agree on all four. Typed observations
+  are rendered with the helpers the target metrics use, so the target's request, answer and executed steps appear
+  verbatim. A span's request comes before its children; its retrieval results, plans, executed steps and answer come
+  after them. A span without typed content shows its raw input and output instead.
   """
   spans_by_id = {span.external_id: span for span in spans}
   if target_span_id not in spans_by_id:
@@ -265,13 +266,17 @@ def render_whole_trace(spans: Sequence[Span], target_span_id: str) -> tuple[str,
     )
     before_children, after_children = _span_sections(span)
     lines.extend(before_children)
-    for child in sorted(children[span.external_id], key=lambda child: (child.start_time, child.external_id)):
+    for child in sorted(children[span.external_id], key=_sibling_order):
       visit(child, ordinal)
     lines.extend(after_children)
     lines.append('</span>')
 
   visit(spans_by_id[target_span_id], None)
   return '\n'.join(lines), span_count
+
+
+def _sibling_order(span: Span) -> tuple[Any, ...]:
+  return span.start_time, span.end_time, span.span_type, span.name, span.external_id
 
 
 def _span_sections(span: Span) -> tuple[list[str], list[str]]:
@@ -317,11 +322,11 @@ def _quoted(value: str) -> str:
   return json.dumps(value, ensure_ascii=False)
 
 
-class _WholeTraceJudgeMetric(BaseLlmJudgeMetric, ABC):
+class _WholeTraceJudgeMetric(ClassifiedJudgeMetric, ABC):
   """Syllo-eval-WT: the judge reads the agent's whole canonical trace in place of its target span's observations.
 
-  The system prompt is the built-in one. The user prompt is the built-in one with the trace in place of the answer or
-  plan paragraph, plus one sentence saying where in the trace the answer or plan is.
+  The skip rule and the system prompt are the built-in ones. The user prompt is the built-in one with the trace in
+  place of the answer or plan paragraph, plus one sentence saying where in the trace the answer or plan is.
   """
 
   def __init__(self, *, judge_client: LlmJudgeClient, load_spans: SpanLoader, rubric_addition: str | None = None):
@@ -332,37 +337,19 @@ class _WholeTraceJudgeMetric(BaseLlmJudgeMetric, ABC):
   def build_whole_trace_user_prompt(self, span: Span, ground_truth: GroundTruth | None, trace: str) -> str:
     """The built-in user prompt, with ``trace`` in place of the target's observations."""
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    # The built-in skip rule, so that both arms score the same units.
-    if reason := self.input_skip_reason(span):
-      return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
+  async def judge_input(
+    self, span: Span, ground_truth: GroundTruth | None
+  ) -> tuple[str, dict[str, Any]] | MetricComputationResult:
     try:
       trace, span_count = render_whole_trace(await self._load_spans(span.trace_id), span.external_id)
     except Exception as error:
       return failed_result(self.name, JudgeFailure(FailureKind.TRACE_LOAD, str(error)), {})
     # Recorded for every unit, failed ones included, so that trace length never depends on the judge succeeding.
-    trace_render: dict[str, Any] = {'spans': span_count, 'chars': len(trace)}
-    responses, failure = await judge_each(
-      [
-        self._judge_client.judge(
-          LlmJudgeRequest(
-            system_prompt=self.build_system_prompt(),
-            user_prompt=self.build_whole_trace_user_prompt(span, ground_truth, trace),
-            response_model=self.response_model,
-            temperature=self.temperature,
-            max_output_tokens=self.max_output_tokens,
-          )
-        )
-      ]
-    )
-    if failure is not None:
-      return failed_result(self.name, failure, {'trace_render': trace_render}, responses)
-    payload = responses[0].output
-    metadata = {**(payload.metadata or {}), **judge_metadata(responses), 'trace_render': trace_render}
-    return MetricComputationResult(score=payload.score, reasoning=payload.reasoning, metadata=metadata)
+    trace_render = {'spans': span_count, 'chars': len(trace)}
+    return self.build_whole_trace_user_prompt(span, ground_truth, trace), {'trace_render': trace_render}
 
 
-class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectnessJudgeMetric):
+class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectness):
   """Syllo-eval-WT for Answer Correctness."""
 
   metric_name = 'answer_correctness_judge_wt'
@@ -379,7 +366,7 @@ class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectnessJudgeMetric):
     )
 
 
-class PlanCorrectnessWT(_WholeTraceJudgeMetric, PlanCorrectnessJudgeMetric):
+class PlanCorrectnessWT(_WholeTraceJudgeMetric, PlanCorrectness):
   """Syllo-eval-WT for Plan Correctness."""
 
   metric_name = 'plan_correctness_judge_wt'

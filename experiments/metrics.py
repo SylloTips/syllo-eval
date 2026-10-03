@@ -1,13 +1,15 @@
-"""Main-pass retrieval metrics of the paper experiments.
+"""Main-pass metrics of the paper experiments.
 
 The built-in contextual precision and recall score the selected context of the agent root, and recall decomposes the
 expected answer into claims on every run. The protocol (METHODOLOGY.md) instead makes each search call one unit and
 reads claims stored as ground truth. These subclasses change only that: the judge prompts and the scoring are the
 built-ins'. Judging is a separate step, so that the single-call ablations (``ablation_metrics.py``) override nothing
-else, and a judge failure becomes a FAILED result with a failure class and the usage of every response.
+else. Answer and Plan Correctness are the built-ins with the same judge-failure handling as the rest: in every arm of
+every comparison, a judge failure becomes a FAILED result with a failure class and the usage of every response.
 """
 
 import re
+from abc import ABC
 from collections.abc import Coroutine, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,14 +19,17 @@ import httpx
 from langchain_core.exceptions import ContextOverflowError
 from pydantic import BaseModel
 
-from syllo_eval.evaluation.judge import LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse, judge_metadata
 from syllo_eval.evaluation.judge.batch import judge_batch
+from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
   RetrievedItem,
   extract_retrieved_items,
   retrieval_skip_result,
 )
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
+from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
+from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionDocumentJudgeMetric,
   ContextualPrecisionJudgment,
@@ -47,9 +52,11 @@ SEARCH_SPAN_TYPE = 'retrieval'
 class FailureKind(StrEnum):
   """Why a computation failed, recorded as ``metadata['failure']``; METHODOLOGY.md says which kinds count as wrong."""
 
-  MISALIGNED = 'misaligned'  # the judge returned a different number of judgments, or ranks the unit does not have
-  TRUNCATED = 'truncated'  # misaligned, with the judge output at its token budget
-  INVALID_OUTPUT = 'invalid_output'  # the judge output did not parse into the response schema
+  # The judgments do not match the unit one to one: a wrong count, or a missing, unknown or repeated rank.
+  MISALIGNED = 'misaligned'
+  TRUNCATED = 'truncated'  # a wrong judgment count, with the judge output at its token budget
+  # The output did not parse or validate, or the model refused. Includes outputs cut inside a judgment.
+  INVALID_OUTPUT = 'invalid_output'
   CONTEXT_OVERFLOW = 'context_overflow'
   TIMEOUT = 'timeout'
   PROVIDER = 'provider'  # any other provider error, after the judge client's retries
@@ -147,6 +154,55 @@ def failed_result(
     error_message=failure.message,
     raw_output=raw_output,
   )
+
+
+class ClassifiedJudgeMetric(BaseLlmJudgeMetric, ABC):
+  """``BaseLlmJudgeMetric`` making its one judge call through ``judge_each``, so a failure is a classified result.
+
+  ``judge_input`` returns the user prompt and the metadata it adds to the result: the built-in prompt by default.
+  """
+
+  async def judge_input(
+    self, span: Span, ground_truth: GroundTruth | None
+  ) -> tuple[str, dict[str, Any]] | MetricComputationResult:
+    return self.build_user_prompt(span, ground_truth), {}
+
+  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+    if reason := self.input_skip_reason(span):
+      return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
+    judge_input = await self.judge_input(span, ground_truth)
+    if isinstance(judge_input, MetricComputationResult):
+      return judge_input
+    user_prompt, metadata = judge_input
+    responses, failure = await judge_each(
+      [
+        self._judge_client.judge(
+          LlmJudgeRequest(
+            system_prompt=self.build_system_prompt(),
+            user_prompt=user_prompt,
+            response_model=self.response_model,
+            temperature=self.temperature,
+            max_output_tokens=self.max_output_tokens,
+          )
+        )
+      ]
+    )
+    if failure is not None:
+      return failed_result(self.name, failure, metadata, responses)
+    payload = responses[0].output
+    return MetricComputationResult(
+      score=payload.score,
+      reasoning=payload.reasoning,
+      metadata={**(payload.metadata or {}), **judge_metadata(responses), **metadata},
+    )
+
+
+class AnswerCorrectness(ClassifiedJudgeMetric, AnswerCorrectnessJudgeMetric):
+  """The built-in Answer Correctness: same name, prompts and scoring, with judge failures classified."""
+
+
+class PlanCorrectness(ClassifiedJudgeMetric, PlanCorrectnessJudgeMetric):
+  """The built-in Plan Correctness: same name, prompts and scoring, with judge failures classified."""
 
 
 class SearchContextualPrecision(ContextualPrecisionDocumentJudgeMetric):

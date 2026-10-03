@@ -7,6 +7,8 @@ from langchain_core.exceptions import ContextOverflowError
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest
 from syllo_eval.evaluation.metric_support.retrieved_context import extract_retrieved_items
+from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
+from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionDocumentJudgeMetric,
 )
@@ -15,21 +17,26 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
 )
 from syllo_eval.infrastructure.exceptions import DataMappingError, ExternalServiceError
 from syllo_eval.model import MetricComputationStatus
+from syllo_eval.trace_semantics import Answer, ExecutionStep, PlanningData
 
 from benchmarks.common import Claim
 from benchmarks.erb import CLAIMS_KEY
 from metric_fakes import (
+  QUESTION,
   ScriptedJudge,
   claims_truth,
   precision_judgments,
   recall_judgments,
   search_span,
+  span,
   truth,
 )
 from metrics import (
   SEARCH_SPAN_TYPE,
+  AnswerCorrectness,
   FailureKind,
   GoldClaimsContextualRecall,
+  PlanCorrectness,
   SearchContextualPrecision,
   classify_judge_error,
 )
@@ -134,6 +141,9 @@ class SearchContextualPrecisionTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.metadata['failure'], 'timeout')
     self.assertEqual(result.metadata['expected_retrieved_ids'], ['d1', 'd2'])
     self.assertIn('read timed out', result.error_message or '')
+    # The call that completed before the failure keeps its usage.
+    self.assertEqual(result.metadata['judge_calls'], 1)
+    self.assertEqual(result.metadata['judge_usage'], {'input_tokens': 100, 'output_tokens': 7, 'total_tokens': 107})
 
 
 class GoldClaimsContextualRecallTest(unittest.IsolatedAsyncioTestCase):
@@ -200,6 +210,71 @@ class GoldClaimsContextualRecallTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.metadata['failure'], 'misaligned')
     self.assertEqual(result.metadata['expected_claim_ids'], ['q1-f01', 'q1-f02'])
     self.assertEqual(result.metadata['claims_key'], CLAIMS_KEY)
+
+  async def test_a_judge_error_fails_the_unit_and_keeps_the_usage_of_completed_calls(self) -> None:
+    timeout = ExternalServiceError('gemini', 'judge', httpx.ReadTimeout('read timed out'))
+    judge = ScriptedJudge(
+      lambda request: timeout if 'May' in request.user_prompt else recall_judgments((CLAIMS[0].text, True))
+    )
+    metric = GoldClaimsContextualRecall(judge_client=judge)
+
+    result = await metric.compute(search_span('s', ['d1']), claims_truth(*CLAIMS))
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'timeout')
+    self.assertEqual(result.metadata['judge_calls'], 1)
+
+
+def _root(**semantics: Any) -> Any:
+  steps = [ExecutionStep(id='1', operation='search', instruction='{"query": "budget"}', output='2 documents')]
+  fields: dict[str, Any] = {
+    'request': QUESTION,
+    'answer': Answer(text='Dana approved it.'),
+    'planning': PlanningData(executed_steps=steps),
+  }
+  return span('root', 'agent_root', parent=None, **{**fields, **semantics})
+
+
+class MainPassAnswerAndPlanCorrectnessTest(unittest.IsolatedAsyncioTestCase):
+  async def test_the_built_in_names_prompts_and_scores(self) -> None:
+    plan_truth = truth(key='expected_plan', expected_plan=[{'operation': 'search', 'instruction': 'budget'}])
+    for metric_class, built_in_class, ground_truth in (
+      (AnswerCorrectness, AnswerCorrectnessJudgeMetric, truth()),
+      (PlanCorrectness, PlanCorrectnessJudgeMetric, plan_truth),
+    ):
+      judge = ScriptedJudge({'score': 0.7, 'reasoning': 'Mostly correct.'})
+      built_in = built_in_class(judge_client=judge, rubric_addition='Penalize missing dates.')
+      with self.subTest(metric=metric_class.__name__):
+        result = await metric_class(judge_client=judge, rubric_addition='Penalize missing dates.').compute(
+          _root(), ground_truth
+        )
+        self.assertEqual(metric_class.metric_name, built_in_class.metric_name)
+        self.assertEqual(judge.requests[0].system_prompt, built_in.build_system_prompt())
+        self.assertEqual(judge.requests[0].user_prompt, built_in.build_user_prompt(_root(), ground_truth))
+        self.assertEqual((result.score, result.reasoning), (0.7, 'Mostly correct.'))
+        assert result.metadata is not None
+        self.assertEqual(result.metadata['judge_calls'], 1)
+
+  async def test_a_judge_failure_is_classified_where_the_built_in_raises(self) -> None:
+    timeout = ExternalServiceError('gemini', 'judge', httpx.ReadTimeout('read timed out'))
+
+    result = await AnswerCorrectness(judge_client=ScriptedJudge(timeout)).compute(_root(), truth())
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'timeout')
+    with self.assertRaises(ExternalServiceError):
+      await AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge(timeout)).compute(_root(), truth())
+
+  async def test_skips_what_the_built_in_skips_without_calling_the_judge(self) -> None:
+    judge = ScriptedJudge()
+
+    result = await PlanCorrectness(judge_client=judge).compute(_root(planning=None), None)
+
+    self.assertEqual(result.status, MetricComputationStatus.SKIPPED)
+    self.assertEqual(result.error_message, 'Trace does not provide executed planning steps.')
+    self.assertEqual(judge.requests, [])
 
 
 class _GatewayTimeout(Exception):

@@ -3,6 +3,7 @@ import unittest
 from collections.abc import Sequence
 from typing import Any
 
+import httpx
 from langchain_core.exceptions import ContextOverflowError
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest
@@ -39,7 +40,7 @@ from metric_fakes import (
   truth,
   without_judge_keys,
 )
-from metrics import GoldClaimsContextualRecall, SearchContextualPrecision
+from metrics import AnswerCorrectness, GoldClaimsContextualRecall, SearchContextualPrecision
 
 LIMIT = 65_536
 CLAIMS = (Claim(id='q1-f01', text='Dana approved the budget.'), Claim(id='q1-f02', text='It was approved in May.'))
@@ -136,14 +137,20 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.metadata['judge_usage']['output_tokens'], judge.output_tokens)
     self.assertEqual(len(result.raw_output['judgments']), 3)
 
-  async def test_a_short_output_that_used_its_whole_budget_is_truncated(self) -> None:
-    judge = ScriptedJudge(precision_judgments((1, 'd1', True)), output_tokens=4_000)
-    metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=4_000)
-
-    result = await metric.compute(search_span('s', ['d1', 'd2']), truth())
-
-    assert result.metadata is not None
-    self.assertEqual(result.metadata['failure'], 'truncated')
+  async def test_a_short_output_is_truncated_only_once_it_reached_the_unit_budget(self) -> None:
+    for count, output_tokens, failure in (
+      (3, 5_999, 'misaligned'),
+      (3, 6_000, 'truncated'),
+      (80, LIMIT - 1, 'misaligned'),
+      (80, LIMIT, 'truncated'),
+    ):
+      judge = ScriptedJudge(precision_judgments((1, 'd1', True)), output_tokens=output_tokens)
+      metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+      documents = [f'd{rank}' for rank in range(1, count + 1)]
+      with self.subTest(count=count, output_tokens=output_tokens):
+        result = await metric.compute(search_span('s', documents), truth())
+        assert result.metadata is not None
+        self.assertEqual(result.metadata['failure'], failure)
 
   async def test_an_unparsable_output_fails_the_unit_with_its_class(self) -> None:
     judge = ScriptedJudge(DataMappingError('gemini', 'invalid structured output'))
@@ -200,13 +207,18 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([entry['claim_id'] for entry in ablation.metadata['statement_results']], ['q1-f01', 'q1-f02'])
 
   def test_prompts_keep_the_built_in_attribution_definition_and_number_the_claims(self) -> None:
-    built_in = ContextualRecallDocumentJudgeMetric(judge_client=ScriptedJudge())
-    ablation = GoldClaimsContextualRecallSC(judge_client=ScriptedJudge(), output_token_limit=LIMIT)
+    built_in = ContextualRecallDocumentJudgeMetric(judge_client=ScriptedJudge(), rubric_addition='Cite the policy.')
+    ablation = GoldClaimsContextualRecallSC(
+      judge_client=ScriptedJudge(), output_token_limit=LIMIT, rubric_addition='Cite the policy.'
+    )
     items = [RetrievedItem(item) for item in search_span('s', ['d1']).semantics.retrieval[0].items]
 
+    built_in_system = _paragraphs(built_in.build_system_prompt())
+    system = _paragraphs(ablation.build_single_call_system_prompt())
     definition = 'A statement is attributable when the retrieved documents contain enough information to directly '
-    self.assertIn(definition, built_in.build_system_prompt())
-    self.assertIn(definition, ablation.build_single_call_system_prompt())
+    self.assertIn(definition, built_in_system[0])
+    self.assertIn(definition, system[0])
+    self.assertEqual(system[1:], built_in_system[1:])
     user = _paragraphs(ablation.build_single_call_user_prompt(items, list(CLAIMS)))
     built_in_user = _paragraphs(built_in.build_user_prompt(search_span('s', ['d1']), items, CLAIMS[0].text))
     self.assertEqual(user[1], built_in_user[1])
@@ -225,6 +237,15 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.metadata['max_output_tokens'], 4_000)
     self.assertEqual(result.metadata['judge_calls'], 1)
     self.assertEqual(len(result.raw_output['judgments']), 1)
+
+  async def test_a_short_output_is_truncated_only_once_it_reached_the_unit_budget(self) -> None:
+    for output_tokens, failure in ((3_999, 'misaligned'), (4_000, 'truncated')):
+      judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)), output_tokens=output_tokens)
+      metric = GoldClaimsContextualRecallSC(judge_client=judge, output_token_limit=LIMIT)
+      with self.subTest(output_tokens=output_tokens):
+        result = await metric.compute(search_span('s', ['d1']), claims_truth(*CLAIMS))
+        assert result.metadata is not None
+        self.assertEqual(result.metadata['failure'], failure)
 
 
 def _trace(trace_id: str = 'trace-1', prefix: str = '') -> list[Span]:
@@ -307,6 +328,18 @@ class RenderWholeTraceTest(unittest.TestCase):
     self.assertEqual(
       render_whole_trace(_trace(), 'root'), render_whole_trace(_trace('trace-2', prefix='copy-'), 'copy-root')
     )
+
+  def test_siblings_that_start_together_keep_their_order_under_new_ids(self) -> None:
+    def calls(first_id: str, second_id: str) -> list[Span]:
+      root = span('root', 'agent_root', parent=None, request=QUESTION)
+      lookup = span(first_id, 'tool', name='lookup', offset=1, input_data='first')
+      search = span(second_id, 'tool', name='search', offset=1, input_data='second')
+      return [root, lookup, search]
+
+    rendered, _ = render_whole_trace(calls('call-a', 'call-b'), 'root')
+
+    self.assertEqual(render_whole_trace(calls('z-9', 'a-1'), 'root')[0], rendered)
+    self.assertLess(rendered.index('first'), rendered.index('second'))
 
   def test_a_target_outside_the_trace_is_an_error(self) -> None:
     with self.assertRaises(ValueError):
@@ -403,6 +436,21 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(load_failure.metadata['failure'], 'trace_load')
     self.assertEqual(judge_failure.metadata['failure'], 'context_overflow')
     self.assertEqual(judge_failure.metadata['trace_render']['spans'], 4)
+
+  async def test_a_judge_failure_is_recorded_as_in_the_main_pass(self) -> None:
+    timeout = ExternalServiceError('gemini', 'judge', httpx.ReadTimeout('read timed out'))
+    root = _trace()[3]
+
+    main = await AnswerCorrectness(judge_client=ScriptedJudge(timeout)).compute(root, truth())
+    ablation = await AnswerCorrectnessWT(
+      judge_client=ScriptedJudge(timeout), load_spans=_SpanStore(_trace()).load
+    ).compute(root, truth())
+
+    self.assertEqual((main.status, ablation.status), (MetricComputationStatus.FAILED,) * 2)
+    assert main.metadata is not None and ablation.metadata is not None
+    self.assertEqual(main.metadata, {'failure': 'timeout'})
+    self.assertEqual({key: value for key, value in ablation.metadata.items() if key != 'trace_render'}, main.metadata)
+    self.assertEqual(ablation.error_message, main.error_message)
 
 
 class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
