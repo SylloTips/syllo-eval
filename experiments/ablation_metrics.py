@@ -1,13 +1,15 @@
 """The two ablations of Section 5.1. Each removes one design choice of Section 4 from the metric it is compared with.
 
 - Syllo-eval-SC (single call) judges all the documents, or all the claims, of a search unit in one call instead of one
-  call each. It subclasses its main-pass metric in ``metrics.py`` and replaces only the judging step.
+  call each. It subclasses the metric it is compared with in ``metrics.py`` and replaces only the judging step.
 - Syllo-eval-WT (whole trace) reads the agent's whole trace instead of the observations of its target span. It
-  subclasses its main-pass Answer or Plan Correctness in ``metrics.py`` and replaces only the paragraph holding the
-  answer or the plan.
+  subclasses Answer or Plan Correctness in ``metrics.py``, puts the trace in place of the paragraph holding the answer
+  or the plan, and adds one sentence saying where in the trace that is.
 
-Units, skip rules, rubrics, scoring and result metadata therefore stay those of the main pass. The prompts that change
-live in ``prompts/``: the built-in v1 wording, edited only where the design choice requires it.
+Units, skip rules, rubrics and scoring therefore stay those of the compared metric, and so does the result metadata,
+to which an ablation only adds fields: ``trace_render`` for WT, the output budget and rank alignment of a failed SC
+unit. The prompts that change live in ``prompts/``: the built-in v1 wording, edited only where the design choice
+requires it.
 """
 
 import json
@@ -213,10 +215,9 @@ class StoredClaimsContextualRecallSC(StoredClaimsContextualRecall):
     )
 
 
-class GoldClaimsContextualRecallSC(StoredClaimsContextualRecallSC):
+class GoldClaimsContextualRecallSC(StoredClaimsContextualRecallSC, GoldClaimsContextualRecall):
   """Syllo-eval-SC for contextual recall over the ERB gold claims."""
 
-  claims_key = GoldClaimsContextualRecall.claims_key
   metric_name = 'contextual_recall_gold_claims_sc'
   metric_description = (
     'Syllo-eval-SC: contextual recall of one search call over the ERB gold claims, judging all claims in one call.'

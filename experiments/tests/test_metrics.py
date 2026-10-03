@@ -4,8 +4,10 @@ from typing import Any
 
 import httpx
 from langchain_core.exceptions import ContextOverflowError
+from langchain_core.messages import AIMessage
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest
+from syllo_eval.evaluation.judge.metric_base import JudgeScorePayload
 from syllo_eval.evaluation.metric_support.retrieved_context import extract_retrieved_items
 from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
@@ -16,6 +18,7 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
   ContextualRecallDocumentJudgeMetric,
 )
 from syllo_eval.infrastructure.exceptions import DataMappingError, ExternalServiceError
+from syllo_eval.infrastructure.llm_judge.base import LangChainLlmJudgeClient
 from syllo_eval.model import MetricComputationStatus
 from syllo_eval.trace_semantics import Answer, ExecutionStep, PlanningData
 
@@ -302,6 +305,51 @@ class ClassifyJudgeErrorTest(unittest.TestCase):
         raise ExternalServiceError('gemini', 'judge') from cause
     except ExternalServiceError as error:
       self.assertEqual(classify_judge_error(error), FailureKind.CONTEXT_OVERFLOW)
+
+
+class _ChatModel:
+  """Just enough of a LangChain chat model for the library's judge client: the structured call returns or raises."""
+
+  def __init__(self, outcome: dict[str, Any] | Exception):
+    self._outcome = outcome
+
+  def bind(self, **options: Any) -> '_ChatModel':
+    return self
+
+  def with_structured_output(self, **options: Any) -> '_ChatModel':
+    return self
+
+  async def ainvoke(self, messages: Any) -> dict[str, Any]:
+    if isinstance(self._outcome, Exception):
+      raise self._outcome
+    return self._outcome
+
+
+class LibraryJudgeClientErrorsTest(unittest.IsolatedAsyncioTestCase):
+  async def test_classifies_what_the_library_judge_client_raises(self) -> None:
+    request = LlmJudgeRequest(system_prompt='system', user_prompt='user', response_model=JudgeScorePayload)
+    no_output = {'raw': AIMessage(content='{"score": 0.'), 'parsed': None, 'parsing_error': None}
+    invalid_output = {'raw': AIMessage(content='{}'), 'parsed': {'reasoning': 'no score'}, 'parsing_error': None}
+    cases: list[tuple[dict[str, Any] | Exception, FailureKind]] = [
+      (no_output, FailureKind.INVALID_OUTPUT),
+      (invalid_output, FailureKind.INVALID_OUTPUT),
+      (ContextOverflowError('input too long'), FailureKind.CONTEXT_OVERFLOW),
+      (httpx.ReadTimeout('read timed out'), FailureKind.TIMEOUT),
+      (RuntimeError('500 internal'), FailureKind.PROVIDER),
+    ]
+    for outcome, kind in cases:
+      client = LangChainLlmJudgeClient(
+        'fake',
+        'judge',
+        1,
+        _ChatModel(outcome),
+        structured_output_method='json_schema',
+        max_tokens_option='max_output_tokens',
+      )
+      with self.subTest(kind=kind):
+        with self.assertRaises(Exception) as raised:
+          await client.judge(request)
+        self.assertEqual(classify_judge_error(raised.exception), kind)
 
 
 if __name__ == '__main__':

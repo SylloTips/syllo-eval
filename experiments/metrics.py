@@ -1,4 +1,4 @@
-"""Main-pass metrics of the paper experiments.
+"""The metrics the ablations are compared with: those of the main pass, and the gold-claim pass's recall.
 
 The built-in contextual precision and recall score the selected context of the agent root, and recall decomposes the
 expected answer into claims on every run. The protocol (METHODOLOGY.md) instead makes each search call one unit and

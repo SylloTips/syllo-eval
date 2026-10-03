@@ -9,13 +9,18 @@ ground truths under its own keys, which the dataset format cannot carry (`benchm
 traces that the whole-trace ablation reads (`ablation_metrics.py`). It relies on `datasets.get_by_name`,
 `samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create` and `spans.list_by_trace`.
 
-The experiment metrics also reuse internals of the built-in metrics they extend, so that both arms of an ablation share
-prompts and scoring:
+The experiment metrics also rely on library internals, so that both arms of an ablation share prompts and scoring:
 - `_judge_retrieved_item` and `_score` of contextual precision, `_judge_claim` and `_score` of contextual recall, and
   `_extract_expected_answer` of Answer Correctness;
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments;
+- `BaseLlmJudgeMetric.compute` and the skip calls of the built-in contextual precision and recall `compute`, which
+  `metrics.py` mirrors;
+- the `syllo_eval.evaluation.metric_support` helpers that `metrics.py` and `ablation_metrics.py` import;
 - `judge_batch`, whose failure contract `metrics.judge_each` relies on: on the first failure it cancels the other calls
-  and returns the completed responses with a failed result.
+  and returns the completed responses with a failed result;
+- the judge clients' errors, which `metrics.classify_judge_error` classifies: `DataMappingError` for an output that
+  does not parse or validate, or a refusal, and `ExternalServiceError` wrapping the provider's error;
+- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts.
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
@@ -49,7 +54,7 @@ expected output of each step.
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
-| `metrics.py`, `ablation_metrics.py`, `prompts/` | the main-pass metrics, the SC and WT ablations, and the ablation prompts |
+| `metrics.py`, `ablation_metrics.py`, `prompts/` | the compared metrics, the SC and WT ablations, and the ablation prompts |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -114,9 +119,10 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 
 ## Metrics
 
-The main-pass metrics are in `metrics.py` and the ablations in `ablation_metrics.py`. Each ablation subclasses the
-metric it is compared with and overrides one step, so both arms score the same units with the same rubric, scoring and
-result metadata. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation changes.
+The metrics the ablations are compared with are in `metrics.py`, and the ablations in `ablation_metrics.py`. Each
+ablation subclasses the metric it is compared with and overrides one step, so both arms score the same units with the
+same rubric, scoring and result metadata; an ablation only adds metadata fields. [`METHODOLOGY.md`](METHODOLOGY.md)
+describes what each ablation changes.
 
 | Metric | Unit | Judge calls per unit | Compared with |
 |---|---|---|---|
@@ -132,7 +138,9 @@ result metadata. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation
 - **Search units:** the search metrics target `retrieval` spans. Each agent's adapter must emit every search call as
   one, with the user question as its request and the returned documents as one ranked `selected` document result.
 - **Claims:** recall reads the claims stored under its key and never decomposes the expected answer, so a unit makes
-  one judge call per claim.
+  one judge call per claim. Only the gold claims have a metric so far: recall over `decomposed_claims` (RQ2) and
+  `expected_claims_verified` (RQ3) is a subclass of `StoredClaimsContextualRecall`, and of its SC variant for RQ3,
+  setting the key, once those ground truths are imported.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
 - **Answer and Plan Correctness** keep the built-in names, prompts and scoring. They run as `metrics.AnswerCorrectness`

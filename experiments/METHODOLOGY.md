@@ -58,7 +58,8 @@ With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of 
 ## Ablations
 
 Each ablation changes one design choice of the metric it is compared with (`ablation_metrics.py`). The judge, units,
-skip rules, rubric text, scoring and result metadata stay the same.
+skip rules, rubric text, scoring and result metadata stay the same; an ablation only adds metadata fields (WT: the
+rendered trace's size; a failed SC unit: its output budget and, for CP, its rank alignment).
 
 - **Syllo-eval-SC** judges all the documents (CP) or all the claims (CR) of a search unit in one call:
   - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
@@ -71,14 +72,15 @@ skip rules, rubric text, scoring and result metadata stay the same.
     output used its whole budget.
 - **Syllo-eval-WT** reads the agent's whole canonical trace instead of the observations of the target span:
   - The trace is the agent root and its descendants, depth-first, with ordinal span ids and no timestamps. Children
-    are ordered by start time, then end time, type and name. Spans outside the agent root, such as a reward grader's,
-    are not part of it.
+    are ordered by start time, then end time, type, name and finally source span id. Spans outside the agent root,
+    such as a reward grader's, are not part of it.
   - Each span shows its typed observations, rendered as the target metrics render them: its request before its
     children, then its retrieval results, plans, executed steps and answer after them. A span without typed
     observations shows its raw input and output instead.
   - The system prompt is the built-in one. The user prompt puts the trace in place of the answer or plan paragraph,
-    and its first sentence adds that the answer or plan is the agent root's.
-  - Every unit records the rendered trace's span count and length in characters, failed units included.
+    and its first paragraph ends with one added sentence saying that the answer or plan is the agent root's.
+  - Every unit that loads its trace records the rendered trace's span count and length in characters, judge failures
+    included. A unit skipped by the built-in rule, or failing to load its trace, records none.
   - It is compared with Answer and Plan Correctness as run in the main pass (`metrics.py`): the built-in metrics, with
     judge failures recorded the same way in both arms.
 
@@ -134,10 +136,11 @@ skip rules, rubric text, scoring and result metadata stay the same.
   - Lists are nested across n and seeded.
   - Balanced accuracy is computed over item (CP) or claim (CR) decisions, per n and per position.
 - **Traces:**
-  - Terciles use the length of the rendered whole trace in characters, which every WT unit records. Input tokens
-    reported by the judge would leave out the units that failed, which are the longest.
+  - Terciles use the length of the rendered whole trace in characters, which every judged WT unit records. Input
+    tokens reported by the judge would leave out the units that failed, which are the longest.
   - Padding adds non-gold search spans as children of the agent root, so that they are part of the trace WT reads:
-    +32k, +64k and +128k tokens.
+    +32k, +64k and +128k tokens. Their start times decide where they render among the agent's own spans, so the
+    construction fixes them before the pilot.
   - Syllo-eval's answer prompt must be byte-identical under padding, so it is not re-run.
 - **Cost:** judge calls, input tokens, cached input tokens and latency per sample. They are measured one sample at a
   time, with the same judge concurrency for every framework.
@@ -146,7 +149,8 @@ skip rules, rubric text, scoring and result metadata stay the same.
 
 - Whole-trace context overflows and timeouts count as wrong, as do misaligned or truncated single-call and DeepEval
   outputs.
-- Excluding them instead is reported only as a sensitivity analysis.
+- Excluding instead every unit that failed with an outcome of the judge (listed below), in every arm, is reported only
+  as a sensitivity analysis.
 - The experiment metrics record why a unit failed in `metadata['failure']`, the same way in every arm (main pass,
   retests and ablations):
   - `misaligned`, `truncated`, `invalid_output`, `context_overflow` and `timeout` are outcomes of the judge, and count
@@ -154,6 +158,7 @@ skip rules, rubric text, scoring and result metadata stay the same.
   - `invalid_output` is an output that does not parse or validate, or a refusal. An output cut inside a judgment no
     longer validates, so it is recorded as invalid output rather than truncated;
   - `provider` and `trace_load` are infrastructure failures: the unit is re-run in every arm, not counted.
-- A failed unit lists its documents or claims, so that each one counts as a wrong decision.
+- A failed CP or CR unit lists its documents or claims, so that each one counts as a wrong decision. A failed AC or
+  PC unit has no decisions, only a missing score.
 - A failed unit keeps the usage of its completed judge calls. A call that raised returns no usage, so cost counts
   completed calls only.
