@@ -1,0 +1,55 @@
+# Benchmark releases of Section 5.1, pinned to immutable commits. Every file is fetched from `base_url/path` and must
+# match its size and SHA-256, so a conversion always starts from the same bytes. Dataset names carry the pin, because a
+# re-import refuses different samples under an existing name.
+
+erb:
+  # EnterpriseRAG-Bench on Hugging Face (MIT, Copyright (c) 2026 DanswerAI, Inc.). The repo has no tags; this is main
+  # as of 2026-05-08, and the data files have not changed since their upload on 2026-04-21.
+  dataset_name: erb-69916e3
+  expected_samples: 480
+  base_url: https://huggingface.co/datasets/onyx-dot-app/EnterpriseRAG-Bench/resolve/69916e31c68aa5963c00248fd7f0bc12d04fd235
+  files:
+    questions:
+      path: data/questions/test.parquet
+      size: 408737
+      sha256: e25066f4eff3843dd0f3df0d1348113471e072e75007ffe390a0aa83f2a80af2
+    documents:
+      path: data/documents/test.parquet
+      size: 1409893131
+      sha256: 6b0747bf160af9427b12101537d53056ac592ada9831c1a98ae01fa50a8d2a9f
+
+wixqa:
+  # WixQA on Hugging Face (MIT; cite "Wix.com AI Research"). The repo has no tags; this is main as of 2025-07-02, whose
+  # data files are byte-identical to the 2025-05-14 fix. The paper uses ExpertWritten and Simulated (400 queries).
+  dataset_name: wixqa-d662dc4
+  expected_samples: 400
+  base_url: https://huggingface.co/datasets/Wix/WixQA/resolve/d662dc42479c14e202eccd832f8c4b66a035c4cc
+  files:
+    expertwritten:
+      path: wixqa_expertwritten/test.jsonl
+      size: 255510
+      sha256: a1bb6888a8394f980bc88f0d09b873fcd283ff4c9782600bc203f8103c2f1bad
+    simulated:
+      path: wixqa_simulated/test.jsonl
+      size: 88188
+      sha256: 9a2b9f42c081467b3de5bd92511e770bca3cc7977f169526fd78dd3c985ac4a8
+    knowledge_base:
+      path: wix_kb_corpus/wix_kb_corpus.jsonl
+      size: 53743863
+      sha256: 46b852c60b85fb1828e7c6118bb56ba796eba99120a6b69c6b984c06e1c5e1fe
+
+tau2:
+  # tau2-bench retail at tag v1.0.1 (MIT, Copyright (c) 2025 Sierra Research). Its retail tasks are byte-identical from
+  # v1.0.0 to main as of 2026-09-28; the 114 tasks are the whole task set (split "base").
+  dataset_name: tau2-retail-v1.0.1
+  expected_samples: 114
+  base_url: https://raw.githubusercontent.com/sierra-research/tau2-bench/fc0055dc4e0a316c3f83133267fbd6faaa770992
+  files:
+    tasks:
+      path: data/tau2/domains/retail/tasks.json
+      size: 345982
+      sha256: 8e03ebce7901bd6218e7a7dc3105faa9324091a68058f7fe61c65262868812e8
+    splits:
+      path: data/tau2/domains/retail/split_tasks.json
+      size: 3263
+      sha256: ed0580ec52575b63fbf76568af42490da6ee7783ecb4aa81af46961291358f20

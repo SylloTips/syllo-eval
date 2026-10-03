@@ -10,7 +10,7 @@ Keep this file focused on working rules, architectural boundaries, and where to 
 - Use 2-space indentation, single quotes, and a 120-character line limit; Ruff enforces formatting.
 - Update affected architecture documentation in the same change. Update this file when a boundary, working rule, or navigation entry changes; put implementation details in the owning documentation or code.
 - This repository is public. Never add code, names, fixtures, or configuration specific to a particular agent or deployment to `syllo_eval`; downstream packages supply those through the extension points. Tests and examples use synthetic data.
-- `experiments/` reproduces the paper as one such downstream package, in its own Poetry project: it may name the paper's public benchmarks and open-source agents, uses only the public extension points, and `syllo_eval` never imports it.
+- `experiments/` reproduces the paper as one such downstream package, in its own Poetry project: it may name the paper's public benchmarks and open-source agents, and `syllo_eval` never imports it. Besides the public extension points it uses the `UnitOfWork` repositories (listed in its README); the root suite does not run its tests, so run them when changing those repositories.
 
 ## Commands and verification
 

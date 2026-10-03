@@ -3,6 +3,36 @@
 These rules are pre-registered. They are frozen before collection starts, and changing one afterwards requires a new
 pilot and a note in the manifest. Section numbers refer to the paper draft.
 
+## Datasets
+
+The three benchmarks are pinned by commit and converted as follows (`benchmarks/`).
+
+- **EnterpriseRAG-Bench, 480 samples:**
+  - Every question except the 20 `info_not_found` ones is kept.
+  - The prompt is the question, verbatim. The expected answer is the gold answer.
+  - The gold documents are `expected_doc_ids`.
+  - **Repeated ids:** four knowledge-base ids each label two documents (an original and its near-duplicate rewrite).
+    The later row gets a `__2` suffix, so every id is unique. A gold id that names two documents makes both gold; this
+    affects only `qst_0413`.
+  - The 10 `high_level` questions have no gold documents, by design, and are excluded from label-based analyses.
+  - **Gold claims** are the answer facts of the 300 Basic and Semantic questions: 1,013 claims, each with a single
+    gold document. Many facts of constrained and conflicting questions are grading instructions, so they are not used.
+- **WixQA, 400 samples:**
+  - ExpertWritten (200) comes first, then Simulated (200), in file order.
+  - Prompts and answers are stripped at the ends only; two prompts change.
+  - A sample is keyed by config and 0-based row.
+- **τ²-bench retail, 114 samples:**
+  - **Prompt:** the user scenario, rendered exactly as tau2 renders it for its user simulator. This was verified
+    byte-identical with tau2 on all 114 tasks.
+  - **Expected plan:** the reference tool calls in order. Each step's instruction is the sorted-key JSON of the
+    arguments, and its parameters are the arguments themselves.
+  - Tasks 24 and 57 have no reference calls. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
+  - **Reward at the pin:** 112 tasks multiply the database check by the natural-language assertions, and tasks 33
+    and 34 use the database check alone.
+  - Only 40 of those 112 tasks have assertions (61 in total), graded by tau2's LLM judge. tau2 scores a task without
+    assertions as met, so the other 74 tasks are rewarded on the database check alone.
+  - Action matching never enters the reward.
+
 ## Evaluation units
 
 - **Retrieval (CP, CR, R, NDCG@10):**
