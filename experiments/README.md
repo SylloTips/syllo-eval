@@ -70,7 +70,7 @@ DB_NAME=syllo-eval-paper poetry run alembic upgrade head
 ## Benchmarks
 
 ```bash
-poetry run syllo-exp benchmarks fetch     # pinned files into data/<benchmark>/raw, size and SHA-256 checked (1.4 GB)
+poetry run syllo-exp benchmarks fetch     # pinned files into data/<benchmark>/raw, size and SHA-256 checked (1.5 GB)
 poetry run syllo-exp benchmarks convert   # dataset.json, samples.jsonl, claims.json and report.json per benchmark
 poetry run syllo-exp benchmarks import    # the datasets and their claim ground truths, into the configured database
 ```
