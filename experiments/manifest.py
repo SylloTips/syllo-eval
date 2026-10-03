@@ -4,9 +4,11 @@ Each step (for example ``collect:erb/react/sonnet``) appends one JSON line per s
 step is its current state, so a campaign can resume by skipping completed steps.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -38,13 +40,13 @@ class Manifest:
     status: StepStatus,
     *,
     run_ids: tuple[UUID, ...] = (),
-    details: dict[str, JsonValue] | None = None,
+    details: Mapping[str, Any] | None = None,
   ) -> StepRecord:
     record = StepRecord(
       step=step,
       status=status,
       run_ids=run_ids,
-      details=details or {},
+      details=dict(details or {}),
       recorded_at=datetime.now(timezone.utc),
     )
     self._path.parent.mkdir(parents=True, exist_ok=True)

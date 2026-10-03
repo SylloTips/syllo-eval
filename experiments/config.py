@@ -7,7 +7,11 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONFIG_DIR = Path(__file__).resolve().parent / 'configs'
+from syllo_eval.settings import load_settings_env
+
+EXPERIMENTS_DIR = Path(__file__).resolve().parent
+CONFIG_DIR = EXPERIMENTS_DIR / 'configs'
+DATA_DIR = EXPERIMENTS_DIR / 'data'
 
 Benchmark = Literal['erb', 'wixqa', 'tau2']
 AgentStack = Literal['react', 'smolagents', 'odr', 'tau2-llm-agent']
@@ -70,12 +74,30 @@ class Configuration(_ConfigModel):
     return '-'.join(parts)
 
 
+class PinnedFile(_ConfigModel):
+  path: str = Field(min_length=1)
+  size: int = Field(gt=0)
+  sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class BenchmarkSource(_ConfigModel):
+  dataset_name: str = Field(min_length=1)
+  expected_samples: int = Field(gt=0)
+  # Files are fetched from f'{base_url}/{path}'; the URL must name a full commit, so the bytes can never change.
+  base_url: str = Field(pattern=r'^https://\S+/[0-9a-f]{40}$')
+  files: dict[str, PinnedFile] = Field(min_length=1)
+
+
 class ExperimentConfig(_ConfigModel):
   models: ModelsConfig
   configurations: tuple[Configuration, ...] = Field(min_length=1)
+  benchmarks: dict[Benchmark, BenchmarkSource]
 
   @model_validator(mode='after')
   def _check_references(self) -> 'ExperimentConfig':
+    missing_benchmarks = sorted({c.benchmark for c in self.configurations} - set(self.benchmarks))
+    if missing_benchmarks:
+      raise ValueError(f'Configurations use benchmarks without a pinned source: {missing_benchmarks}')
     duplicate_ids = [key for key, count in Counter(c.id for c in self.configurations).items() if count > 1]
     if duplicate_ids:
       raise ValueError(f'Duplicate configuration ids: {duplicate_ids}')
@@ -100,9 +122,16 @@ def load_config(config_dir: Path = CONFIG_DIR) -> ExperimentConfig:
   return ExperimentConfig(
     models=_read_yaml(config_dir / 'models.yaml'),
     configurations=_read_yaml(config_dir / 'configurations.yaml')['configurations'],
+    benchmarks=_read_yaml(config_dir / 'benchmarks.yaml'),
   )
 
 
 def _read_yaml(path: Path) -> Any:
   with path.open(encoding='utf-8') as file:
     return yaml.safe_load(file)
+
+
+def load_environment() -> None:
+  """Load settings for entry points: ``experiments/.env`` first, so it wins over the repository's ``.env``."""
+  load_settings_env(dotenv_path=EXPERIMENTS_DIR / '.env')
+  load_settings_env(dotenv_path=EXPERIMENTS_DIR.parent / '.env')
