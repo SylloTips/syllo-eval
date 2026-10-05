@@ -130,7 +130,7 @@ class EvaluationReportScoreStats(BaseModel):
 class EvaluationReportMetric(BaseModel):
   name: str
   description: str | None
-  requires_ground_truth: bool
+  ground_truth_keys: list[str]
   coverage: EvaluationReportMetricCoverage
   scores: EvaluationReportScoreStats
 
@@ -391,7 +391,7 @@ def _build_metric_report(
   return EvaluationReportMetric(
     name=metric_name,
     description=metric.description if metric is not None else None,
-    requires_ground_truth=metric.requires_ground_truth if metric is not None else True,
+    ground_truth_keys=metric.ground_truth_keys if metric is not None else [],
     coverage=EvaluationReportMetricCoverage(
       samples_total=expected_samples,
       computations_total=len(metric_computations),

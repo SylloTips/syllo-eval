@@ -141,14 +141,12 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       Metric(
         name='answer_correctness_judge',
         description='Answer judge',
-        requires_ground_truth=True,
       ),
       Metric(
         name='contextual_recall_document_judge',
         description='Recall judge',
-        requires_ground_truth=True,
       ),
-      Metric(name='plan_efficiency', description='Plan efficiency', requires_ground_truth=True),
+      Metric(name='plan_efficiency', description='Plan efficiency'),
     ]
 
     report = _compose_report(
@@ -317,8 +315,8 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       run_samples=[sample_with_tokens, sample_without_tokens],
       computations=[judge_computation, deterministic_computation],
       metrics=[
-        Metric(name='answer_correctness_judge', description=None, requires_ground_truth=True),
-        Metric(name='plan_efficiency', description=None, requires_ground_truth=True),
+        Metric(name='answer_correctness_judge', description=None),
+        Metric(name='plan_efficiency', description=None),
       ],
       usage_spans=spans,
       generated_at=generated_at,
@@ -425,7 +423,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       total_samples=1,
       run_samples=[sample],
       computations=[legacy_skip],
-      metrics=[Metric(name='contextual_precision_document_judge', description=None, requires_ground_truth=True)],
+      metrics=[Metric(name='contextual_precision_document_judge', description=None)],
       generated_at=generated_at,
     )
 

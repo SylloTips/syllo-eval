@@ -522,7 +522,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     length_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.length_metric_name)]
     self.assertEqual(length_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertIsNone(length_computation.ground_truth_id)
+    self.assertEqual(length_computation.ground_truth_ids, [])
     self.assertEqual(length_computation.span_ids, [self.span_id])
     self.assertEqual(length_computation.score, float(len(str(first_span.output_data))))
     self.assertEqual(length_computation.reasoning, 'Score is output length.')
@@ -530,7 +530,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     match_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.match_metric_name)]
     self.assertEqual(match_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertEqual(match_computation.ground_truth_id, self.ground_truth_ids[0])
+    self.assertEqual(match_computation.ground_truth_ids, [self.ground_truth_ids[0]])
     self.assertEqual(match_computation.span_ids, [self.span_id])
     self.assertEqual(match_computation.score, 1.0)
     self.assertEqual(match_computation.reasoning, 'Output matches expected output.')
@@ -541,7 +541,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     contains_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.contains_metric_name)]
     self.assertEqual(contains_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertIsNone(contains_computation.ground_truth_id)
+    self.assertEqual(contains_computation.ground_truth_ids, [])
     self.assertEqual(contains_computation.span_ids, [self.span_id])
     self.assertEqual(contains_computation.score, 1.0)
     self.assertEqual(contains_computation.reasoning, "Output contains 'response'.")
@@ -576,8 +576,8 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
       1.0,
     )
     self.assertEqual(
-      persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.match_metric_name)].ground_truth_id,
-      self.ground_truth_ids[1],
+      persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.match_metric_name)].ground_truth_ids,
+      [self.ground_truth_ids[1]],
     )
     self.assertEqual(
       persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.contains_metric_name)].score,

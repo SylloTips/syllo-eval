@@ -28,19 +28,14 @@ class MetricRepository(BaseRepository[Metric]):
   def _get_insert_fields(self, entity: Metric) -> Dict[str, Any]:
     fields: Dict[str, Any] = {
       'name': entity.name,
-      'requires_ground_truth': entity.requires_ground_truth,
+      'ground_truth_keys': entity.ground_truth_keys,
     }
     if entity.description is not None:
       fields['description'] = entity.description
-    if entity.ground_truth_key is not None:
-      fields['ground_truth_key'] = entity.ground_truth_key
     return fields
 
   def _get_update_fields(self, entity: Metric) -> Dict[str, Any]:
-    fields: Dict[str, Any] = {
-      'requires_ground_truth': entity.requires_ground_truth,
-      'ground_truth_key': entity.ground_truth_key,
-    }
+    fields: Dict[str, Any] = {'ground_truth_keys': entity.ground_truth_keys}
     if entity.description is not None:
       fields['description'] = entity.description
     return fields
@@ -50,20 +45,17 @@ class MetricRepository(BaseRepository[Metric]):
     try:
       async with self._get_connection() as conn:
         query = """
-                    INSERT INTO metric (name, description, requires_ground_truth, ground_truth_key)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO metric (name, description, ground_truth_keys)
+                    VALUES (%s, %s, %s)
                     ON CONFLICT (name) DO UPDATE
                     SET
                       description = COALESCE(EXCLUDED.description, metric.description),
-                      requires_ground_truth = EXCLUDED.requires_ground_truth,
-                      ground_truth_key = EXCLUDED.ground_truth_key
+                      ground_truth_keys = EXCLUDED.ground_truth_keys
                     RETURNING *
                 """
 
         async with conn.cursor(row_factory=class_row(self.model_class)) as cur:
-          await cur.execute(
-            query, (entity.name, entity.description, entity.requires_ground_truth, entity.ground_truth_key)
-          )
+          await cur.execute(query, (entity.name, entity.description, entity.ground_truth_keys))
           result = await cur.fetchone()
           if result is None:
             raise RuntimeError(f'Upserted metric {entity.name!r} could not be reloaded')

@@ -494,7 +494,7 @@ class TestMetricRegistryPersistence(unittest.IsolatedAsyncioTestCase):
 
     self.assertIsNotNone(persisted_metric)
     assert persisted_metric is not None
-    self.assertEqual(persisted_metric.ground_truth_key, 'expected_output')
+    self.assertEqual(persisted_metric.ground_truth_keys, ['expected_output'])
 
     async with UnitOfWork(self.db_manager) as uow:
       await _cleanup_test_metric(uow, metric_name)

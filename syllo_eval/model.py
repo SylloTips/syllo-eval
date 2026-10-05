@@ -252,14 +252,12 @@ class Metric(BaseModel):
   Attributes:
      - name: The name of the metric.
      - description: The description of the metric (nullable)
-     - requires_ground_truth: Whether this metric requires ground truth to compute.
-     - ground_truth_key: The ground-truth key consumed by this metric, if any.
+     - ground_truth_keys: The ground-truth keys this metric reads.
   """
 
   name: str
   description: str | None = None
-  requires_ground_truth: bool = True
-  ground_truth_key: str | None = None
+  ground_truth_keys: list[str] = Field(default_factory=list)
 
 
 class MetricTargetSpanType(BaseModel):
@@ -285,7 +283,7 @@ class MetricComputation(BaseModel):
      - id: The unique identifier of the metric computation.
      - evaluation_run_sample_id: The id of the evaluation run on a sample that this computation belongs to.
      - metric: The name of the metric that is being computed.
-     - ground_truth_id: The ground truth row used by this computation, if any.
+     - ground_truth_ids: The ground truth rows used by this computation.
      - targeting_mode: Whether the metric targeted one span or a span group.
      - target_span_type: The span type evaluated by the metric computation.
      - span_ids: The ordered span IDs evaluated by the metric computation; empty when a planned target was skipped
@@ -301,7 +299,7 @@ class MetricComputation(BaseModel):
   id: UUID
   evaluation_run_sample_id: UUID
   metric: str
-  ground_truth_id: UUID | None = None
+  ground_truth_ids: list[UUID] = Field(default_factory=list)
   targeting_mode: MetricTargetingMode
   target_span_type: str
   span_ids: list[str] = Field(default_factory=list)

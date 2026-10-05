@@ -751,7 +751,7 @@ class TestEvaluationApi(unittest.TestCase):
         {
           'name': 'answer_correctness_judge',
           'description': 'Answer judge',
-          'requires_ground_truth': True,
+          'ground_truth_keys': [],
           'coverage': {
             'samples_total': 1,
             'computations_total': 1,

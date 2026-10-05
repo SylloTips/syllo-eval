@@ -61,7 +61,7 @@ class MetricRegistry:
 
     - Ensures each registered metric exists in `metric`
     - Updates metric description when a non-null value is provided
-    - Updates metric requires_ground_truth when changed
+    - Updates metric ground_truth_keys when changed
     - Ensures each metric/span_type target mapping exists in `metric_target_span_type`
       with the correct targeting mode
     """
@@ -75,8 +75,7 @@ class MetricRegistry:
       MetricModel(
         name=metric.name,
         description=metric.description,
-        requires_ground_truth=metric.requires_ground_truth,
-        ground_truth_key=metric.ground_truth_key,
+        ground_truth_keys=[metric.ground_truth_key] if metric.ground_truth_key else [],
       )
     )
 
