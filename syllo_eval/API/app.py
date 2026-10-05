@@ -17,6 +17,7 @@ from syllo_eval.service import (
   MetricSelectionError,
   RepeatNotAllowedError,
   ServiceFactory,
+  load_service_factory,
 )
 from syllo_eval.datasets import (
   DatasetAlreadyExistsError,
@@ -185,7 +186,7 @@ DATASET_CONFLICT_RESPONSE: dict[int | str, dict[str, Any]] = {
 def create_app(
   service: EvaluationService | None = None,
   dataset_service: DatasetService | None = None,
-  service_factory: ServiceFactory = EvaluationService,
+  service_factory: ServiceFactory | None = None,
   title: str = 'syllo-eval',
 ) -> FastAPI:
   @asynccontextmanager
@@ -204,7 +205,7 @@ def create_app(
 
     load_settings_env(override=False)
     configure_logging(LoggingSettings.from_env())
-    runtime_service = service_factory(Settings())
+    runtime_service = (service_factory or load_service_factory())(Settings())
     try:
       await runtime_service.initialize()
       app.state.evaluation_service = runtime_service

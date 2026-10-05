@@ -14,6 +14,7 @@ from syllo_eval.service import (
   MetricSelectionError,
   ServiceFactory,
   build_db_manager,
+  load_service_factory,
   resolve_selected_metric_names_csv,
 )
 from syllo_eval.datasets import (
@@ -88,6 +89,13 @@ def _add_rubric_additions_argument(parser: argparse.ArgumentParser) -> None:
 
 def build_main_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog=prog, description='Evaluate agents from the traces they leave.')
+  parser.add_argument(
+    '--service-factory',
+    type=_parse_non_empty,
+    default=None,
+    help='module:attr of a callable that builds the EvaluationService from Settings. '
+    'Overrides the factory set in code and SYLLO_EVAL_SERVICE_FACTORY.',
+  )
   parser.add_argument(
     'command', choices=['run', 'import', 'repeat', 'dataset'], help='Command to run; see <command> --help.'
   )
@@ -362,10 +370,16 @@ def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
 
 
 def main(
-  argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService, prog: str = 'syllo-eval'
+  argv: Sequence[str] | None = None, service_factory: ServiceFactory | None = None, prog: str = 'syllo-eval'
 ) -> int:
   load_settings_env(override=False)
-  main_args = build_main_parser(prog).parse_args(argv)
+  main_parser = build_main_parser(prog)
+  main_args = main_parser.parse_args(argv)
+  if main_args.service_factory is not None or service_factory is None:
+    try:
+      service_factory = load_service_factory(main_args.service_factory)
+    except (ImportError, AttributeError, ValueError) as err:
+      main_parser.error(f'Cannot load service factory: {err}')
 
   if main_args.command == 'dataset':
     return _main_dataset(main_args.args, prog)
@@ -406,7 +420,7 @@ def _main_run(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -
       )
     )
   except AgentCallerSelectionError as err:
-    logger.error('%s Score exported traces with `%s import` instead.', err, prog)
+    logger.error('%s Pass --service-factory, or score exported traces with `%s import`.', err, prog)
     return 1
   except Exception:
     logger.exception('Evaluation run failed')

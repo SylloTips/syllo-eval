@@ -14,8 +14,30 @@ from syllo_eval.API.cli import main
 from syllo_eval.model import EvaluationStatus
 from syllo_eval.settings import Settings
 
+FACTORY = MagicMock()
+FACTORY.return_value.available_metric_names.return_value = ['custom_metric']
+
 
 class ServiceFactoryTest(unittest.TestCase):
+  def test_cli_resolves_the_flag_then_the_code_factory_then_the_environment(self):
+    run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
+    argv = ['run', '--agent-name', 'demo-agent', '--agent-version-tag', 'v1', '--dataset-id', str(uuid4())]
+    path = f'{__name__}:FACTORY'
+    missing = {'SYLLO_EVAL_SERVICE_FACTORY': 'missing_module:factory'}
+    for prefix, code_factory, env in [
+      (['--service-factory', path], MagicMock(), missing),
+      ([], FACTORY, missing),
+      ([], None, {'SYLLO_EVAL_SERVICE_FACTORY': path}),
+    ]:
+      with (
+        self.subTest(prefix=prefix, env=env),
+        patch.dict('os.environ', env, clear=True),
+        patch('syllo_eval.API.cli.load_settings_env'),
+        patch('syllo_eval.API.cli._run', new=AsyncMock(return_value=run)) as run_mock,
+      ):
+        self.assertEqual(main(prefix + argv, service_factory=code_factory), 0)
+      self.assertIs(run_mock.call_args.kwargs['service'], FACTORY.return_value)
+
   def test_cli_builds_the_runtime_with_the_injected_factory(self):
     run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
     factory = MagicMock()
@@ -74,6 +96,20 @@ class ServiceFactoryTest(unittest.TestCase):
     self.assertIsInstance(factory.call_args.args[0], Settings)
     service.initialize.assert_awaited_once()
     service.close.assert_awaited_once()
+
+  def test_app_loads_the_service_factory_from_the_environment(self):
+    service = MagicMock(
+      initialize=AsyncMock(), close=AsyncMock(), fail_orphaned_running_evaluations=AsyncMock(return_value=0)
+    )
+    with (
+      patch.dict('os.environ', {'SYLLO_EVAL_SERVICE_FACTORY': f'{__name__}:FACTORY'}, clear=True),
+      patch.object(FACTORY, 'return_value', service),
+      patch('syllo_eval.API.app.load_settings_env'),
+      TestClient(create_app()),
+    ):
+      pass
+
+    service.initialize.assert_awaited_once()
 
   def test_cli_and_app_use_the_given_program_name(self):
     for argv, expected in [(['--help'], 'usage: my-eval '), (['dataset', '--help'], 'usage: my-eval dataset ')]:
