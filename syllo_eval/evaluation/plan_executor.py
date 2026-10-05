@@ -147,7 +147,7 @@ class PlanExecutor:
         error_message=item.skip_reason,
       )
 
-    return await item.metric.compute(item.target.compute_input, item.ground_truth)
+    return await item.metric.compute(item.target.compute_input, item.ground_truths)
 
   @staticmethod
   def _to_metric_computation(
@@ -159,7 +159,7 @@ class PlanExecutor:
       id=uuid4(),
       evaluation_run_sample_id=evaluation_run_sample_id,
       metric=item.metric_name,
-      ground_truth_ids=[item.ground_truth.id] if item.ground_truth is not None else [],
+      ground_truth_ids=[ground_truth.id for ground_truth in item.ground_truths.values()],
       targeting_mode=item.targeting_mode,
       target_span_type=item.target_span_type,
       span_ids=item.span_ids,
@@ -181,7 +181,7 @@ class PlanExecutor:
       id=uuid4(),
       evaluation_run_sample_id=evaluation_run_sample_id,
       metric=item.metric_name,
-      ground_truth_ids=[item.ground_truth.id] if item.ground_truth is not None else [],
+      ground_truth_ids=[ground_truth.id for ground_truth in item.ground_truths.values()],
       targeting_mode=item.targeting_mode,
       target_span_type=item.target_span_type,
       span_ids=item.span_ids,

@@ -75,7 +75,7 @@ class MetricRegistry:
       MetricModel(
         name=metric.name,
         description=metric.description,
-        ground_truth_keys=[metric.ground_truth_key] if metric.ground_truth_key else [],
+        ground_truth_keys=list(metric.ground_truth_keys),
       )
     )
 

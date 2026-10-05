@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -65,15 +65,15 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
     )
 
   @property
-  def ground_truth_key(self) -> str:
-    return GroundTruthKey.EXPECTED_OUTPUT.value
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (GroundTruthKey.EXPECTED_OUTPUT.value,)
 
   @property
   def max_output_tokens(self) -> int:
     return 2_000
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    assert ground_truth is not None
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    ground_truth = ground_truths[self.ground_truth_keys[0]]
 
     skip_result = retrieval_skip_result(
       span,

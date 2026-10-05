@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
@@ -45,15 +46,11 @@ class _CustomMetric(SpanEvaluationMetric):
     return 'custom_metric'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return ('agent_root',)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     return MetricComputationResult(score=1.0)
 
 
@@ -275,8 +272,8 @@ class _EndToEndMetric(_CustomMetric):
   def __init__(self) -> None:
     self.span_ids: list[str] = []
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     self.span_ids.append(span.external_id)
     return MetricComputationResult(score=0.75, reasoning='custom metric ran')
 

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Annotated, ClassVar
 
 from pydantic import Field, TypeAdapter
@@ -20,11 +21,11 @@ class BaseContextualRecallStoredClaimsMetric(BaseContextualRecallJudgeMetric):
   claims_key: ClassVar[str] = GroundTruthKey.EXPECTED_CLAIMS.value
 
   @property
-  def ground_truth_key(self) -> str:
-    return self.claims_key
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (self.claims_key,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    assert ground_truth is not None
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    ground_truth = ground_truths[self.ground_truth_keys[0]]
 
     skip_result = retrieval_skip_result(
       span, metric_name=self.name, variant=self.variant, stage=self.retrieval_stage, require_content=True

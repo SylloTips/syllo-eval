@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
@@ -46,23 +47,23 @@ class BaseLlmJudgeMetric(SpanEvaluationMetric, ABC):
     """Build the system prompt for the judge request."""
 
   @abstractmethod
-  def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
+  def build_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> str:
     """Build the user prompt for the judge request."""
 
   async def judge_input(
-    self, span: Span, ground_truth: GroundTruth | None
+    self, span: Span, ground_truths: Mapping[str, GroundTruth]
   ) -> tuple[str, dict[str, Any]] | MetricComputationResult:
     """The user prompt and the metadata it adds to the result, or a result that ends the computation.
 
     Override to build the prompt from data that must be awaited; the default is ``build_user_prompt``.
     """
-    return self.build_user_prompt(span, ground_truth), {}
+    return self.build_user_prompt(span, ground_truths), {}
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     # Also support direct compute() calls that bypass the planner.
     if reason := self.input_skip_reason(span):
       return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
-    judge_input = await self.judge_input(span, ground_truth)
+    judge_input = await self.judge_input(span, ground_truths)
     if isinstance(judge_input, MetricComputationResult):
       return judge_input
     user_prompt, input_metadata = judge_input

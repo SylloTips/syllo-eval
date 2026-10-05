@@ -1,4 +1,5 @@
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import UUID, uuid4
@@ -27,12 +28,12 @@ class _DummyMetric(EvaluationMetric):
     name: str,
     target_span_types: tuple[str, ...],
     requires_ground_truth: bool = True,
-    ground_truth_key: str | None = None,
+    ground_truth_keys: tuple[str, ...] | None = None,
   ):
     self._name = name
     self._target_span_types = target_span_types
     self._requires_ground_truth = requires_ground_truth
-    self._ground_truth_key = ground_truth_key or name
+    self._ground_truth_keys = ground_truth_keys or (name,)
 
   @property
   def name(self) -> str:
@@ -43,15 +44,14 @@ class _DummyMetric(EvaluationMetric):
     return self._target_span_types
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return self._requires_ground_truth
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return self._ground_truth_keys
 
-  @property
-  def ground_truth_key(self) -> str | None:
-    return self._ground_truth_key
+  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
+    return super().ground_truth_skip_reason(ground_truths) if self._requires_ground_truth else None
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     return MetricComputationResult(score=1.0)
 
 
@@ -61,12 +61,12 @@ class _GroupDummyMetric(SpanGroupEvaluationMetric):
     name: str,
     target_span_types: tuple[str, ...],
     requires_ground_truth: bool = True,
-    ground_truth_key: str | None = None,
+    ground_truth_keys: tuple[str, ...] | None = None,
   ):
     self._name = name
     self._target_span_types = target_span_types
     self._requires_ground_truth = requires_ground_truth
-    self._ground_truth_key = ground_truth_key or name
+    self._ground_truth_keys = ground_truth_keys or (name,)
 
   @property
   def name(self) -> str:
@@ -77,15 +77,14 @@ class _GroupDummyMetric(SpanGroupEvaluationMetric):
     return self._target_span_types
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return self._requires_ground_truth
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return self._ground_truth_keys
 
-  @property
-  def ground_truth_key(self) -> str | None:
-    return self._ground_truth_key
+  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
+    return super().ground_truth_skip_reason(ground_truths) if self._requires_ground_truth else None
 
-  async def compute(self, spans, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, spans, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     return MetricComputationResult(score=float(len(spans)))
 
 
@@ -248,12 +247,12 @@ class _RequiredLifecycleMetric(EvaluationMetric):
     return (self._span_type_name,)
 
   @property
-  def ground_truth_key(self) -> str | None:
-    return self._metric_name
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (self._metric_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     del span
-    if ground_truth is None:
+    if not ground_truths:
       return MetricComputationResult(score=0.0, reasoning='Missing ground truth.')
     return MetricComputationResult(score=1.0, reasoning='Ground truth provided.')
 
@@ -272,20 +271,19 @@ class _OptionalLifecycleMetric(EvaluationMetric):
     return 'Lifecycle test metric with optional ground truth.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
   @property
-  def ground_truth_key(self) -> str | None:
-    return self._metric_name
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (self._metric_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
+    return None
+
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     del span
-    if ground_truth is None:
+    if not ground_truths:
       return MetricComputationResult(score=1.0, reasoning='No ground truth required.')
     return MetricComputationResult(score=0.5, reasoning='Ground truth provided.')
 
@@ -311,7 +309,29 @@ class TestMetricPlanner(_MetricPlannerIntegrationBase):
 
     self.assertEqual(len(items), 2)
     self.assertCountEqual([item.metric_name for item in items], [metric_a_name, metric_b_name])
-    self.assertTrue(all(item.ground_truth is not None for item in items))
+    self.assertTrue(all(item.ground_truths for item in items))
+
+  async def test_metric_receives_every_declared_key_and_skips_when_one_is_missing(self) -> None:
+    span_type = self._new_name('agent_span_type')
+    complete_name = self._new_name('complete_metric')
+    partial_name = self._new_name('partial_metric')
+    key_a, key_b, key_c = self._new_name('key_a'), self._new_name('key_b'), self._new_name('key_c')
+    metrics: list[EvaluationMetric] = [
+      _DummyMetric(complete_name, target_span_types=(span_type,), ground_truth_keys=(key_a, key_b)),
+      _DummyMetric(partial_name, target_span_types=(span_type,), ground_truth_keys=(key_a, key_c)),
+    ]
+    registry = await self._create_registry(metrics)
+    await self._create_span(self._new_name('span'), span_type)
+    await self._create_ground_truth(key_a)
+    await self._create_ground_truth(key_b)
+
+    planner = MetricPlanner(metric_registry=registry, db_manager=self.db_manager)
+    with patch('syllo_eval.evaluation.metric_planner.logger.warning'):
+      items = {item.metric_name: item async for item in planner.iter_plan_items(self.trace_id, self.sample_id)}
+
+    self.assertEqual(sorted(items[complete_name].ground_truths), sorted([key_a, key_b]))
+    self.assertIsNone(items[complete_name].skip_reason)
+    self.assertEqual(items[partial_name].skip_reason, f'Missing required ground truth: {key_c}.')
 
   async def test_required_metric_missing_ground_truth_yields_skipped_item(self) -> None:
     span_type = self._new_name('agent_span_type')
@@ -330,7 +350,7 @@ class TestMetricPlanner(_MetricPlannerIntegrationBase):
     self.assertIsInstance(items[0], MetricPlanItem)
     self.assertEqual(items[0].metric_name, metric_name)
     self.assertEqual(items[0].span_ids, [span_id])
-    self.assertEqual(items[0].skip_reason, 'Missing required ground truth.')
+    self.assertEqual(items[0].skip_reason, f'Missing required ground truth: {metric_name}.')
 
   async def test_optional_metric_missing_ground_truth_yields_none(self) -> None:
     span_type = self._new_name('agent_span_type')
@@ -346,7 +366,7 @@ class TestMetricPlanner(_MetricPlannerIntegrationBase):
 
     self.assertEqual(len(items), 1)
     self.assertEqual(items[0].metric_name, metric_name)
-    self.assertIsNone(items[0].ground_truth)
+    self.assertEqual(items[0].ground_truths, {})
 
   async def test_missing_ground_truth_warning_emitted_once_per_metric_per_sample(self) -> None:
     span_type = self._new_name('agent_span_type')
@@ -368,10 +388,10 @@ class TestMetricPlanner(_MetricPlannerIntegrationBase):
 
     self.assertEqual(len(items), 2)
     self.assertTrue(all(isinstance(item, MetricPlanItem) for item in items))
-    self.assertTrue(all(item.skip_reason == 'Missing required ground truth.' for item in items))
+    self.assertTrue(all(item.skip_reason == f'Missing required ground truth: {metric_name}.' for item in items))
     self.assertCountEqual([item.span_ids[0] for item in items], [span_id_1, span_id_2])
     warning_mock.assert_called_once()
-    self.assertIn('Missing required ground truth', warning_mock.call_args.args[0])
+    self.assertIn('Missing required ground truth', warning_mock.call_args.args[-1])
 
   async def test_registered_metrics_are_planned_for_present_target_spans(self) -> None:
     agent_span_type = self._new_name('agent_span_type')
@@ -587,18 +607,17 @@ class TestMetricPlannerLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     assert isinstance(optional_item.target, SpanTarget)
     assert isinstance(missing_required_item, MetricPlanItem)
     self.assertEqual(required_item.span_ids, [self.span_id])
-    self.assertIsNotNone(required_item.ground_truth)
-    required_ground_truth = required_item.ground_truth
-    assert required_ground_truth is not None
-    self.assertEqual(required_ground_truth.sample_id, self.sample_id)
+    self.assertEqual(required_item.ground_truths[self.required_metric_name].sample_id, self.sample_id)
 
     self.assertEqual(optional_item.span_ids, [self.span_id])
-    self.assertIsNone(optional_item.ground_truth)
+    self.assertEqual(optional_item.ground_truths, {})
     self.assertEqual(missing_required_item.span_ids, [self.span_id])
-    self.assertEqual(missing_required_item.skip_reason, 'Missing required ground truth.')
+    self.assertEqual(
+      missing_required_item.skip_reason, f'Missing required ground truth: {self.missing_required_metric_name}.'
+    )
 
-    required_result = await required_metric.compute(required_item.target.compute_input, required_item.ground_truth)
-    optional_result = await optional_metric.compute(optional_item.target.compute_input, optional_item.ground_truth)
+    required_result = await required_metric.compute(required_item.target.compute_input, required_item.ground_truths)
+    optional_result = await optional_metric.compute(optional_item.target.compute_input, optional_item.ground_truths)
     self.assertEqual(required_result.score, 1.0)
     self.assertEqual(optional_result.score, 1.0)
 

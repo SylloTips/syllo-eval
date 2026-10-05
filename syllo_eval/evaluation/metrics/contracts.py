@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
@@ -46,14 +46,14 @@ class EvaluationMetric(ABC):
     return self.metric_description
 
   @property
-  def requires_ground_truth(self) -> bool:
-    """Whether this metric requires a ground-truth payload."""
-    return True
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    """Ground-truth keys (see GroundTruthKey) the planner fetches for this metric."""
+    return ()
 
-  @property
-  def ground_truth_key(self) -> str | None:
-    """Ground-truth key (see GroundTruthKey) this metric consumes, or None when it uses none."""
-    return None
+  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
+    """Describe why the sample's ground truths are not enough; by default every declared key is required."""
+    missing = [key for key in self.ground_truth_keys if key not in ground_truths]
+    return f'Missing required ground truth: {", ".join(missing)}.' if missing else None
 
   @property
   def target_span_types(self) -> tuple[str, ...]:
@@ -78,7 +78,7 @@ class EvaluationMetric(ABC):
     return (spans,)
 
   @abstractmethod
-  async def compute(self, target: Any, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, target: Any, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     """Compute a metric score for a span or span group, depending on targeting mode."""
     raise NotImplementedError
 
@@ -91,8 +91,8 @@ class SpanEvaluationMetric(EvaluationMetric, ABC):
     return MetricTargetingMode.SINGLE
 
   @abstractmethod
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    """Compute a metric score for a span-ground truth pair."""
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    """Compute a metric score for a span and the sample's ground truths, keyed by ground-truth key."""
     raise NotImplementedError
 
 
@@ -104,6 +104,6 @@ class SpanGroupEvaluationMetric(EvaluationMetric, ABC):
     return MetricTargetingMode.GROUP
 
   @abstractmethod
-  async def compute(self, spans: Sequence[Span], ground_truth: GroundTruth | None) -> MetricComputationResult:
-    """Compute a metric score for an ordered span group and optional ground truth."""
+  async def compute(self, spans: Sequence[Span], ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    """Compute a metric score for an ordered span group and the sample's ground truths, keyed by ground-truth key."""
     raise NotImplementedError
