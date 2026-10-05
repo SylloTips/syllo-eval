@@ -86,7 +86,12 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     if not retrieved_items:
       # Nothing retrieved can support a statement, so recall is 0 without calling the judge.
       return self._build_result(retrieved_items, [], [], [])
-    decomposition_result = await self._decompose_claims(ground_truth)
+    decomposed, failure = await judge_batch(
+      [self._decompose_claims(ground_truth)], max_output_tokens=self.max_output_tokens
+    )
+    if failure is not None:
+      return failure
+    decomposition_result = decomposed[0]
     claims = decomposition_result.output.claims
 
     if not claims:
