@@ -45,3 +45,19 @@ class NdcgTest(unittest.IsolatedAsyncioTestCase):
     metric = NdcgAt10SnippetMetric()
     self.assertEqual(metric.input_skip_reason(target), 'Snippet selected context is not ranked.')
     self.assertEqual((await metric.compute(target, truth(relevant_ids=['a']))).status, MetricComputationStatus.SKIPPED)
+
+  async def test_each_ranking_is_scored_on_its_own(self):
+    target = span(
+      retrieval=[
+        RetrievalResult(
+          stage='selected', kind='document', query='first', items=[RetrievalItem(id='x'), RetrievalItem(id='right')]
+        ),
+        RetrievalResult(stage='selected', kind='document', query='second', items=[RetrievalItem(id='right')]),
+      ]
+    )
+    result = await NdcgAt10DocumentMetric().compute(target, truth(relevant_ids=['right']))
+    assert result.score is not None and result.metadata is not None
+    # Joined and deduplicated, the second search would vanish; scored apart, it is a perfect ranking.
+    self.assertAlmostEqual(result.score, (1 / math.log2(3) + 1) / 2)
+    self.assertEqual([ranking['ranked_ids'] for ranking in result.metadata['rankings']], [['x', 'right'], ['right']])
+    self.assertEqual(result.metadata['counts']['rankings'], 2)

@@ -291,7 +291,10 @@ asyncio.run(main())
 | `contextual_recall_document_claim_extractor`, `contextual_recall_snippet_claim_extractor` | Contextual recall over extracted claims | LLM judge, Orbitals, `ground_truth_output` |
 
 Retrieval metrics score the agent's final `selected` context, separately for documents and snippets. Rank-based
-metrics skip result sets the adapter didn't mark as ranked. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
+metrics skip result sets the adapter didn't mark as ranked. A span with several ranked result sets holds several
+independent rankings: contextual precision and nDCG@10 score each one and report their mean, while set precision, set
+recall and contextual recall use their union. Judge results name the input documents and claims; the ids and
+statements the judge repeats back are only counted, as `echo_mismatches`. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
 is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
 
 Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are

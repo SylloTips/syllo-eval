@@ -31,8 +31,10 @@ EvaluationService(
   only when `ranked` (the default); adapters set `ranked=False` for filtered or accumulated lists, and nDCG and contextual
   precision skip those. Scores are optional and never compared across searches. A malformed item makes only its set `unavailable`, with item
   indices in `reason`, so metrics skip rather than score a shortened list.
-- Built-in RAG metrics score `agent_root` at stage `selected`, separately for documents and snippets. Custom subclasses can
-  override `target_span_types` and `retrieval_stage`; GROUP metrics choose how to aggregate several searches.
+- Built-in RAG metrics score `agent_root` at stage `selected`, separately for documents and snippets. Several ranked
+  result sets on one span are separate rankings: rank metrics score each one and average them, and never concatenate
+  them. Custom subclasses can override `target_span_types` and `retrieval_stage`; GROUP metrics choose how to aggregate
+  several searches.
 - `PlanningData.plans` holds versioned plan snapshots; `executed_steps` holds actual attempts, including errors. Do not infer
   dependencies or plan membership from equal instruction text. Dataset expected plans use `operation`, `instruction`,
   and optional JSON `parameters`; unknown fields are rejected.
