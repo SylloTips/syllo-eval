@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import Configuration, ExperimentConfig, load_config
+from config import BenchmarkSource, Configuration, ExperimentConfig, load_config
 
 
 def _models() -> dict[str, Any]:
@@ -20,6 +20,20 @@ def _models() -> dict[str, Any]:
       'max_concurrent_requests': 4,
     },
   }
+
+
+def _source(**overrides: Any) -> dict[str, Any]:
+  fields: dict[str, Any] = {
+    'dataset_name': 'kb-test',
+    'expected_samples': 2,
+    'base_url': f'https://example.org/datasets/kb/resolve/{"a" * 40}',
+    'files': {'questions': {'path': 'questions.jsonl', 'size': 10, 'sha256': 'b' * 64}},
+  }
+  return {**fields, **overrides}
+
+
+def _benchmarks() -> dict[str, Any]:
+  return {'erb': _source(), 'wixqa': _source(dataset_name='kb-other'), 'tau2': _source(dataset_name='tasks-test')}
 
 
 class ConfigurationShapeTest(unittest.TestCase):
@@ -60,7 +74,28 @@ class ExperimentConfigTest(unittest.TestCase):
     }
     for case, configurations in invalid.items():
       with self.subTest(case=case), self.assertRaises(ValidationError):
-        ExperimentConfig.model_validate({'models': _models(), 'configurations': configurations})
+        ExperimentConfig.model_validate(
+          {'models': _models(), 'configurations': configurations, 'benchmarks': _benchmarks()}
+        )
+
+  def test_configurations_need_a_pinned_source_for_their_benchmark(self) -> None:
+    configurations = [{'id': 'a', 'benchmark': 'erb', 'agent': 'react', 'model': 'model-a'}]
+    with self.assertRaisesRegex(ValidationError, 'without a pinned source'):
+      ExperimentConfig.model_validate(
+        {'models': _models(), 'configurations': configurations, 'benchmarks': {'wixqa': _source()}}
+      )
+
+  def test_sources_must_pin_a_full_commit_and_file_hashes(self) -> None:
+    invalid: dict[str, dict[str, Any]] = {
+      'branch url': {'base_url': 'https://example.org/datasets/kb/resolve/main'},
+      'short commit': {'base_url': 'https://example.org/datasets/kb/resolve/abc1234'},
+      'short hash': {'files': {'questions': {'path': 'questions.jsonl', 'size': 10, 'sha256': 'b' * 63}}},
+      'empty file': {'files': {'questions': {'path': 'questions.jsonl', 'size': 0, 'sha256': 'b' * 64}}},
+      'no files': {'files': {}},
+    }
+    for case, overrides in invalid.items():
+      with self.subTest(case=case), self.assertRaises(ValidationError):
+        BenchmarkSource.model_validate(_source(**overrides))
 
   def test_committed_configs_describe_the_paper_setup(self) -> None:
     config = load_config()
@@ -75,6 +110,19 @@ class ExperimentConfigTest(unittest.TestCase):
     self.assertEqual(sorted(c.degradation for c in by_benchmark['erb'] if c.degradation), [0.25, 0.5])
     self.assertEqual(len(by_benchmark['tau2']), 8)
     self.assertEqual(config.configuration('erb/react/sonnet/f0.5').version_tag, 'sonnet-f0.5')
+    self.assertEqual(
+      {name: source.expected_samples for name, source in config.benchmarks.items()},
+      {'erb': 480, 'wixqa': 400, 'tau2': 114},
+    )
+    # The converters read their files by these roles.
+    self.assertEqual(
+      {name: set(source.files) for name, source in config.benchmarks.items()},
+      {
+        'erb': {'questions', 'documents'},
+        'wixqa': {'expertwritten', 'simulated', 'knowledge_base'},
+        'tau2': {'tasks', 'splits'},
+      },
+    )
     with self.assertRaises(KeyError):
       config.configuration('missing')
 
