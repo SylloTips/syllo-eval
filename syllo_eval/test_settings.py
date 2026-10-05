@@ -39,6 +39,15 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(settings.phoenix.request_id_lookup_time_window_seconds, 600.0)
     self.assertEqual(settings.llm_judge.gemini.model, 'gemini-3.1-flash-lite')
     self.assertEqual(settings.evaluation.max_concurrent_samples, 1)
+    self.assertEqual(settings.evaluation.retrieval_span_types, ('agent_root',))
+
+  def test_retrieval_span_types_are_a_json_list_of_names(self) -> None:
+    with patch.dict(os.environ, {'EVALUATION_RETRIEVAL_SPAN_TYPES': '[" retrieval "]'}, clear=True):
+      self.assertEqual(EvaluationSettings().retrieval_span_types, ('retrieval',))
+    for value in ('[]', '[" "]'):
+      with self.subTest(value=value), patch.dict(os.environ, {'EVALUATION_RETRIEVAL_SPAN_TYPES': value}, clear=True):
+        with self.assertRaises(ValueError):
+          EvaluationSettings()
 
   def test_explicit_values_take_precedence_over_the_environment(self) -> None:
     with patch.dict(os.environ, {'EVALUATION_MAX_CONCURRENT_SAMPLES': '3'}, clear=True):

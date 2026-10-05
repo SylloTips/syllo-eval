@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge.base import LlmJudgeClient, LlmJudgeRequest, judge_metadata
+from syllo_eval.evaluation.judge.batch import judge_batch
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 
@@ -48,23 +49,41 @@ class BaseLlmJudgeMetric(SpanEvaluationMetric, ABC):
   def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
     """Build the user prompt for the judge request."""
 
+  async def judge_input(
+    self, span: Span, ground_truth: GroundTruth | None
+  ) -> tuple[str, dict[str, Any]] | MetricComputationResult:
+    """The user prompt and the metadata it adds to the result, or a result that ends the computation.
+
+    Override to build the prompt from data that must be awaited; the default is ``build_user_prompt``.
+    """
+    return self.build_user_prompt(span, ground_truth), {}
+
   async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
     # Also support direct compute() calls that bypass the planner.
     if reason := self.input_skip_reason(span):
       return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
-    result = await self._judge_client.judge(
-      LlmJudgeRequest(
-        system_prompt=self.build_system_prompt(),
-        user_prompt=self.build_user_prompt(span, ground_truth),
-        response_model=self.response_model,
-        temperature=self.temperature,
-        max_output_tokens=self.max_output_tokens,
-      )
+    judge_input = await self.judge_input(span, ground_truth)
+    if isinstance(judge_input, MetricComputationResult):
+      return judge_input
+    user_prompt, input_metadata = judge_input
+    request = LlmJudgeRequest(
+      system_prompt=self.build_system_prompt(),
+      user_prompt=user_prompt,
+      response_model=self.response_model,
+      temperature=self.temperature,
+      max_output_tokens=self.max_output_tokens,
     )
-    payload = result.output
+    responses, failure = await judge_batch(
+      [self._judge_client.judge(request)], max_output_tokens=self.max_output_tokens
+    )
+    if failure is not None:
+      failure.metadata = {**input_metadata, **(failure.metadata or {})}
+      return failure
+    payload = responses[0].output
 
     metadata = dict(payload.metadata or {})
-    metadata.update(judge_metadata([result]))
+    metadata.update(judge_metadata(responses))
+    metadata.update(input_metadata)
 
     return MetricComputationResult(
       score=payload.score,

@@ -32,6 +32,8 @@ class EvaluationMetric(ABC):
   metric_description: ClassVar[str | None] = None
   requires_judge_client: ClassVar[bool] = False
   requires_claim_extractor_client: ClassVar[bool] = False
+  # Retrieval metrics take ``target_span_types`` as a constructor argument, so a run can score search spans instead.
+  accepts_target_span_types: ClassVar[bool] = False
 
   @property
   def name(self) -> str:

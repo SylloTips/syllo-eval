@@ -125,3 +125,18 @@ class DataMappingError(InfrastructureError):
     if original_error is not None:
       full_message += f' ({original_error})'
     super().__init__(full_message)
+
+
+class JudgeOutputError(DataMappingError):
+  """Raised when a judge response does not parse or validate, or is a refusal; keeps the response's token usage."""
+
+  def __init__(
+    self,
+    source: str,
+    message: str,
+    original_error: Optional[Exception] = None,
+    *,
+    usage: dict[str, int] | None = None,
+  ):
+    super().__init__(source, message, original_error)
+    self.usage = usage

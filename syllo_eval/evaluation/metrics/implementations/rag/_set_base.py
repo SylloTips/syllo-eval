@@ -1,6 +1,7 @@
 """Shared logic for set-based RAG metrics."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
@@ -19,9 +20,14 @@ class BaseSetRagMetric(SpanEvaluationMetric, ABC):
   variant: str = ''
   retrieval_stage: str = 'selected'
 
+  accepts_target_span_types = True
+
+  def __init__(self, *, target_span_types: Sequence[str] = ('agent_root',)):
+    self._target_span_types = tuple(target_span_types)
+
   @property
   def target_span_types(self) -> tuple[str, ...]:
-    return ('agent_root',)
+    return self._target_span_types
 
   def matches_span(self, span: Span) -> bool:
     return any(

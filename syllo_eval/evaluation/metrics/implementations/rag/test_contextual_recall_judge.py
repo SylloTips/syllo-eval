@@ -2,6 +2,7 @@ import unittest
 from syllo_eval.evaluation.metrics.test_support import Judge, span, truth
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge import (
   ContextualRecallDocumentJudgeMetric,
+  ContextualRecallJudgment,
 )
 from syllo_eval.trace_semantics import RetrievalResult, RetrievalItem
 from syllo_eval.model import MetricComputationStatus
@@ -79,3 +80,26 @@ class ContextualRecallTest(unittest.IsolatedAsyncioTestCase):
     # Case, punctuation and a list number are no mismatch; a changed fact is.
     self.assertEqual(result.metadata['counts']['echo_mismatches'], 1)
     self.assertEqual(result.raw_output['judgments'][1]['statement'], 'In March.')
+
+  async def test_judging_can_be_replaced_and_a_wrong_count_is_misaligned(self):
+    class AllAttributable(ContextualRecallDocumentJudgeMetric):
+      async def judge_claims(self, span, retrieved_items, claims, *, prior_responses=()):
+        judgments = [
+          ContextualRecallJudgment(statement=claim, attributable=True, supporting_retrieved_ids=[], reasoning='r')
+          for claim in claims
+        ]
+        return [], judgments
+
+    target = span(
+      retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='d', content='A')])]
+    )
+    replaced = await AllAttributable(judge_client=Judge({'claims': ['A', 'B']})).compute(
+      target, truth(expected_output='A, B')
+    )
+    misaligned = await ContextualRecallDocumentJudgeMetric(
+      judge_client=Judge({'claims': ['A']}, {'judgments': []})
+    ).compute(target, truth(expected_output='A'))
+
+    self.assertEqual(replaced.score, 1.0)
+    assert misaligned.metadata is not None
+    self.assertEqual(misaligned.metadata['failure'], 'misaligned')
