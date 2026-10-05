@@ -3,6 +3,7 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from syllo_eval.evaluation.judge import LlmJudgeRequest
 from syllo_eval.infrastructure.llm_judge.base import LangChainLlmJudgeClient
 from syllo_eval.settings import OpenAIJudgeSettings
 
@@ -35,3 +36,12 @@ class OpenAILlmJudgeClient(LangChainLlmJudgeClient):
       max_tokens_option='max_tokens',
       close=default_chat_model.root_async_client.close if chat_model is None else None,
     )
+
+  def _model_options(self, request: LlmJudgeRequest) -> dict[str, Any]:
+    options = super()._model_options(request)
+    # gpt-5 reasoning models accept only their default temperature. LangChain drops any other value when it builds the
+    # model, but not on a model copy.
+    model = self.model.lower()
+    if model.startswith('gpt-5') and 'chat' not in model:
+      del options['temperature']
+    return options

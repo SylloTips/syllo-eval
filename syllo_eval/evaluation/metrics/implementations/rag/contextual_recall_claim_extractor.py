@@ -42,7 +42,7 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
     retrieved_items = self._extract_retrieved_items(span)
     if not retrieved_items:
       # Nothing retrieved can support a claim, so recall is 0 without calling Orbitals or the judge.
-      return self._build_result(retrieved_items, [], [])
+      return self._build_result(retrieved_items, [], [], [])
 
     extraction = await self._claim_extractor_client.extract(
       [
@@ -53,7 +53,9 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
     claims = [claim for claim in extraction.claims if claim.subtype.lower() != 'unverifiable']
     excluded_claim_count = len(extraction.claims) - len(claims)
     if not claims:
-      return self._enrich_result(self._build_result(retrieved_items, [], []), extraction, claims, excluded_claim_count)
+      return self._enrich_result(
+        self._build_result(retrieved_items, [], [], []), extraction, claims, excluded_claim_count
+      )
 
     judge_results, failure = await judge_batch(
       (self._judge_claim(span, retrieved_items, claim.content) for claim in claims)
@@ -65,10 +67,10 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
       if len(result.output.judgments) != 1:
         failed_result = self._failed_judgment_count_result(claim.content, result.output, result, judge_results)
         return self._enrich_result(failed_result, extraction, claims, excluded_claim_count, rewrite_reason=False)
-      judgments.append(result.output.judgments[0].model_copy(update={'statement': claim.content}))
+      judgments.append(result.output.judgments[0])
 
     return self._enrich_result(
-      self._build_result(retrieved_items, judgments, judge_results),
+      self._build_result(retrieved_items, [claim.content for claim in claims], judgments, judge_results),
       extraction,
       claims,
       excluded_claim_count,

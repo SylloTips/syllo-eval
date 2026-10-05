@@ -52,3 +52,30 @@ class ContextualRecallTest(unittest.IsolatedAsyncioTestCase):
     result = await metric.compute(target, truth(expected_output='A'))
     self.assertEqual((result.status, result.score), (MetricComputationStatus.COMPLETED, 0.0))
     self.assertEqual(len(judge.requests), 0)
+
+  async def test_results_name_the_claims_not_the_echoed_statements(self):
+    judge = Judge(
+      {'claims': ['Dana approved it.', 'In May.']},
+      {
+        'judgments': [
+          {'statement': '1. dana approved it', 'attributable': True, 'supporting_retrieved_ids': [], 'reasoning': 'r'}
+        ]
+      },
+      {
+        'judgments': [
+          {'statement': 'In March.', 'attributable': False, 'supporting_retrieved_ids': [], 'reasoning': 'r'}
+        ]
+      },
+    )
+    metric = ContextualRecallDocumentJudgeMetric(judge_client=judge)
+    target = span(
+      retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='d', content='A')])]
+    )
+    result = await metric.compute(target, truth(expected_output='Dana approved it in May.'))
+    assert result.metadata is not None and result.raw_output is not None
+    self.assertEqual(
+      [entry['statement'] for entry in result.metadata['statement_results']], ['Dana approved it.', 'In May.']
+    )
+    # Case, punctuation and a list number are no mismatch; a changed fact is.
+    self.assertEqual(result.metadata['counts']['echo_mismatches'], 1)
+    self.assertEqual(result.raw_output['judgments'][1]['statement'], 'In March.')

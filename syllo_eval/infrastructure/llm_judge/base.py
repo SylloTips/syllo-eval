@@ -81,10 +81,14 @@ class LangChainLlmJudgeClient:
     if self._close is not None:
       await self._close()
 
-  async def _invoke(self, request: LlmJudgeRequest) -> dict[str, Any]:
+  def _model_options(self, request: LlmJudgeRequest) -> dict[str, Any]:
+    """The request's sampling options, as fields of the chat model."""
     options: dict[str, Any] = {'temperature': request.temperature}
     if request.max_output_tokens is not None:
       options[self._max_tokens_option] = request.max_output_tokens
+    return options
+
+  async def _invoke(self, request: LlmJudgeRequest) -> dict[str, Any]:
     schema: type[BaseModel] | dict[str, Any] = request.response_model
     system_prompt = request.system_prompt
     if self._structured_output_method == 'json_mode':
@@ -97,7 +101,8 @@ class LangChainLlmJudgeClient:
     else:
       schema = request.response_model.model_json_schema()
 
-    runnable = self._chat_model.bind(**options).with_structured_output(
+    # The options are set on a copy of the model: `with_structured_output` drops options bound with `bind`.
+    runnable = self._chat_model.model_copy(update=self._model_options(request)).with_structured_output(
       schema=schema,
       method=self._structured_output_method,
       include_raw=True,

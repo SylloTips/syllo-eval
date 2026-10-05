@@ -4,12 +4,13 @@ from typing import Any
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
-  extract_retrieved_items,
+  extract_retrieval_results,
   normalize_relevant_ids,
   retrieval_skip_reason,
   retrieval_skip_result,
 )
 from syllo_eval.model import GroundTruth, GroundTruthKey, MetricComputationStatus, Span
+from syllo_eval.trace_semantics import RetrievalResult
 
 TOP_K = 10
 
@@ -47,47 +48,62 @@ class BaseNdcgAt10Metric(SpanEvaluationMetric, ABC):
     if ground_truth is None:
       return self._error_result('Missing ground truth for metric computation.')
 
-    ranked_ids = self._ranked_ids(span)
     relevant_ids, relevant_error = self._extract_relevant_ids(ground_truth)
     if relevant_error is not None:
       return self._error_result(relevant_error)
 
-    dcg_at_k, rank_results, matched_at_k = self._discounted_cumulative_gain(ranked_ids, relevant_ids)
-    idcg_at_k = self._ideal_discounted_cumulative_gain(len(relevant_ids))
-    score = dcg_at_k / idcg_at_k if idcg_at_k else 0.0
+    # Each ranked result set is its own ranking: several are scored separately, never joined into one list.
+    scored = [
+      self._score_ranking(result, relevant_ids)
+      for result in extract_retrieval_results(span, self.variant, self.retrieval_stage)
+    ]
+    metadata: dict[str, Any] = {'metric_kind': self.metric_kind, 'variant': self.variant, 'top_k': TOP_K}
+    if len(scored) == 1:
+      ranking = scored[0]
+      metadata.update({key: value for key, value in ranking.items() if key not in ('query', 'score')})
+      metadata['relevant_ids'] = sorted(relevant_ids)
+      return MetricComputationResult(
+        score=ranking['score'],
+        reasoning=(
+          f'NDCG@10 computed with {len(relevant_ids)} relevant IDs across {len(ranking["ranked_ids"])} ranked '
+          f'{self.variant} IDs.'
+        ),
+        metadata=metadata,
+      )
 
-    return MetricComputationResult(
-      score=score,
-      reasoning=(
-        f'NDCG@10 computed with {len(relevant_ids)} relevant IDs across {len(ranked_ids)} ranked {self.variant} IDs.'
-      ),
-      metadata={
-        'metric_kind': self.metric_kind,
-        'variant': self.variant,
-        'top_k': TOP_K,
-        'ranked_ids': ranked_ids,
+    metadata.update(
+      {
         'relevant_ids': sorted(relevant_ids),
-        'dcg_at_k': dcg_at_k,
-        'idcg_at_k': idcg_at_k,
-        'rank_results': rank_results,
-        'counts': {
-          'ranked': len(ranked_ids),
-          'relevant': len(relevant_ids),
-          'matched_at_k': matched_at_k,
-          'top_k': TOP_K,
-        },
-      },
+        'rankings': scored,
+        'counts': {'rankings': len(scored), 'relevant': len(relevant_ids), 'top_k': TOP_K},
+      }
+    )
+    return MetricComputationResult(
+      score=sum(ranking['score'] for ranking in scored) / len(scored),
+      reasoning=(
+        f'Mean NDCG@10 over {len(scored)} rankings of {self.variant} IDs with {len(relevant_ids)} relevant IDs.'
+      ),
+      metadata=metadata,
     )
 
-  def _ranked_ids(self, span: Span) -> list[str]:
-    seen: set[str] = set()
-    ranked_ids: list[str] = []
-    for item in extract_retrieved_items(span, self.variant, self.retrieval_stage):
-      item_id = item.retrieved_id
-      if item_id not in seen:
-        seen.add(item_id)
-        ranked_ids.append(item_id)
-    return ranked_ids
+  def _score_ranking(self, result: RetrievalResult, relevant_ids: set[str]) -> dict[str, Any]:
+    ranked_ids = list(dict.fromkeys(item.id for item in result.items))
+    dcg_at_k, rank_results, matched_at_k = self._discounted_cumulative_gain(ranked_ids, relevant_ids)
+    idcg_at_k = self._ideal_discounted_cumulative_gain(len(relevant_ids))
+    return {
+      'query': result.query,
+      'score': dcg_at_k / idcg_at_k if idcg_at_k else 0.0,
+      'ranked_ids': ranked_ids,
+      'dcg_at_k': dcg_at_k,
+      'idcg_at_k': idcg_at_k,
+      'rank_results': rank_results,
+      'counts': {
+        'ranked': len(ranked_ids),
+        'relevant': len(relevant_ids),
+        'matched_at_k': matched_at_k,
+        'top_k': TOP_K,
+      },
+    }
 
   @staticmethod
   def _extract_relevant_ids(ground_truth: GroundTruth) -> tuple[set[str], str | None]:
