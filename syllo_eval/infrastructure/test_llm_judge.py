@@ -16,11 +16,12 @@ from pydantic import BaseModel, SecretStr
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
 from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric, JudgeScorePayload
+from syllo_eval.evaluation.metrics.test_support import Judge
 from syllo_eval.infrastructure.llm_judge import build_llm_judge_client
 from syllo_eval.infrastructure.exceptions import DataMappingError
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.infrastructure.llm_judge.openai import OpenAILlmJudgeClient
-from syllo_eval.model import GroundTruth, Span
+from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 from syllo_eval.settings import GeminiJudgeSettings, LlmJudgeSettings, OpenAIJudgeSettings
 
 
@@ -596,22 +597,24 @@ class TestLlmJudgeFactory(unittest.TestCase):
 
 
 class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
-  async def test_compute_propagates_judge_call_errors(self) -> None:
+  async def test_a_judge_call_error_is_a_classified_failed_result(self) -> None:
     metric = _TestJudgeMetric(judge_client=_FakeJudgeClient(error=RuntimeError('judge service unavailable')))
 
-    with self.assertRaises(RuntimeError) as ctx:
-      await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), None)
 
-    self.assertIn('judge service unavailable', str(ctx.exception))
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    self.assertIn('judge service unavailable', result.error_message or '')
+    self.assertEqual(result.metadata, {'failure': 'provider', 'judge_calls': 1, 'judge_failed_calls': 1})
 
-  async def test_compute_propagates_payload_validation_errors(self) -> None:
+  async def test_an_invalid_payload_is_a_failed_result_that_keeps_its_usage(self) -> None:
+    usage = {'input_tokens': 10, 'output_tokens': 4, 'total_tokens': 14}
     metric = _TestJudgeMetric(
       judge_client=OpenAILlmJudgeClient(
         config=OpenAIJudgeSettings(),
         max_concurrent_requests=1,
         chat_model=_FakeChatModel(
           {
-            'raw': AIMessage(content=''),
+            'raw': AIMessage(content='', usage_metadata=usage),
             'parsed': {'score': 'invalid', 'reasoning': 'bad payload'},
             'parsing_error': None,
           }
@@ -619,5 +622,23 @@ class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
       )
     )
 
-    with self.assertRaises(DataMappingError):
-      await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), None)
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'invalid_output')
+    self.assertEqual(result.metadata['judge_usage'], usage)
+
+  async def test_judge_input_can_await_the_prompt_and_add_metadata(self) -> None:
+    class AwaitedPrompt(_TestJudgeMetric):
+      async def judge_input(self, span, ground_truth):
+        return 'awaited prompt', {'prompt_source': 'loaded'}
+
+    judge = Judge({'score': 0.5, 'reasoning': 'half'})
+
+    result = await AwaitedPrompt(judge_client=judge).compute(_make_span(), None)
+
+    self.assertEqual(judge.requests[0].user_prompt, 'awaited prompt')
+    self.assertEqual(result.score, 0.5)
+    assert result.metadata is not None
+    self.assertEqual((result.metadata['prompt_source'], result.metadata['judge_calls']), ('loaded', 1))

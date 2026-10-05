@@ -1,5 +1,6 @@
 import math
 from abc import ABC
+from collections.abc import Sequence
 from typing import Any
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
@@ -22,9 +23,14 @@ class BaseNdcgAt10Metric(SpanEvaluationMetric, ABC):
   retrieval_stage: str = 'selected'
   metric_kind = 'ndcg_at_10'
 
+  accepts_target_span_types = True
+
+  def __init__(self, *, target_span_types: Sequence[str] = ('agent_root',)):
+    self._target_span_types = tuple(target_span_types)
+
   @property
   def target_span_types(self) -> tuple[str, ...]:
-    return ('agent_root',)
+    return self._target_span_types
 
   def matches_span(self, span: Span) -> bool:
     return any(

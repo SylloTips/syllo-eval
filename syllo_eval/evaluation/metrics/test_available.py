@@ -104,3 +104,18 @@ class BuiltinMetricDeclarationTest(unittest.TestCase):
         metric = metric_class(**dependencies)  # type: ignore[arg-type]
 
         self.assertEqual(metric.name, metric_class.metric_name)
+
+
+class RetrievalSpanTypesTest(unittest.TestCase):
+  def test_retrieval_metrics_score_the_configured_span_types(self) -> None:
+    metrics = build_available_metrics(
+      judge_client=_FakeJudgeClient(),
+      claim_extractor_client=_FakeClaimExtractorClient(),
+      retrieval_span_types=('retrieval',),
+    )
+
+    targets = {metric.name: metric.target_span_types for metric in metrics}
+    retrieval = {metric.name for metric in metrics if type(metric).accepts_target_span_types}
+    self.assertEqual(len(retrieval), 14)
+    self.assertEqual({targets[name] for name in retrieval}, {('retrieval',)})
+    self.assertEqual(targets['answer_correctness_judge'], ('agent_root',))

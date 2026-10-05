@@ -8,7 +8,12 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ValidationError
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
-from syllo_eval.infrastructure.exceptions import ConfigurationError, DataMappingError, ExternalServiceError
+from syllo_eval.infrastructure.exceptions import (
+  ConfigurationError,
+  DataMappingError,
+  ExternalServiceError,
+  JudgeOutputError,
+)
 
 Payload = TypeVar('Payload', bound=BaseModel)
 
@@ -47,19 +52,23 @@ class LangChainLlmJudgeClient:
     async with self._semaphore:
       result = await self._invoke(request)
 
-    if result['parsing_error'] is not None:
-      raise DataMappingError(self._provider_name, 'failed to parse structured output', result['parsing_error'])
     raw = result['raw']
     if not isinstance(raw, AIMessage):
       raise DataMappingError(self._provider_name, 'structured output runnable did not return an AI message')
+    # A response that cannot be used still cost its tokens.
+    usage = self._usage(raw)
+    if result['parsing_error'] is not None:
+      raise JudgeOutputError(
+        self._provider_name, 'failed to parse structured output', result['parsing_error'], usage=usage
+      )
     if result['parsed'] is None:
       refusal = raw.additional_kwargs.get('refusal')
       reason = f'model refused judge request: {refusal}' if refusal else 'model returned no structured output'
-      raise DataMappingError(self._provider_name, reason)
+      raise JudgeOutputError(self._provider_name, reason, usage=usage)
     try:
       output = request.response_model.model_validate(result['parsed'])
     except ValidationError as error:
-      raise DataMappingError(self._provider_name, 'invalid structured output', error) from error
+      raise JudgeOutputError(self._provider_name, 'invalid structured output', error, usage=usage) from error
 
     return LlmJudgeResponse(
       provider=self._provider_name,
@@ -71,7 +80,7 @@ class LangChainLlmJudgeClient:
         or raw.additional_kwargs.get('response_id')
         or raw.additional_kwargs.get('id')
       ),
-      usage=self._usage(raw),
+      usage=usage,
       latency_seconds=result.get('latency_seconds'),
       attempts=result.get('attempts', 1),
     )

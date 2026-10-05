@@ -5,6 +5,7 @@ from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
 from syllo_eval.evaluation.metrics.test_support import Judge, span, truth
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionDocumentJudgeMetric,
+  ContextualPrecisionJudgment,
 )
 from syllo_eval.trace_semantics import RetrievalResult, RetrievalItem
 from syllo_eval.model import MetricComputationStatus
@@ -124,3 +125,40 @@ class ContextualPrecisionTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([(r['rank'], r['retrieved_id']) for r in result.metadata['rank_results']], [(1, 'a'), (2, 'b')])
     self.assertEqual(result.metadata['counts']['echo_mismatches'], 1)
     self.assertEqual(result.raw_output['judgments'][1]['retrieved_id'], 'typo')
+
+  async def test_a_wrong_judgment_count_is_a_misaligned_failure(self):
+    judge = Judge({'judgments': []})
+    metric = ContextualPrecisionDocumentJudgeMetric(judge_client=judge)
+    target = span(
+      retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='a', content='C')])]
+    )
+
+    result = await metric.compute(target, truth(expected_output='Expected'))
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'misaligned')
+
+  async def test_judging_can_be_replaced_without_changing_scoring(self):
+    class OneJudgmentPerItem(ContextualPrecisionDocumentJudgeMetric):
+      async def judge_items(self, span, ground_truth, rankings):
+        judgments = [
+          ContextualPrecisionJudgment(rank=rank, retrieved_id=item.retrieved_id, relevant=rank == 2, reasoning='r')
+          for items in rankings
+          for rank, item in enumerate(items, start=1)
+        ]
+        return [], judgments
+
+    metric = OneJudgmentPerItem(judge_client=Judge(), target_span_types=('retrieval',))
+    target = span(
+      retrieval=[
+        RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id=i, content='C') for i in 'ab'])
+      ]
+    )
+
+    result = await metric.compute(target, truth(expected_output='Expected'))
+
+    self.assertEqual(metric.target_span_types, ('retrieval',))
+    self.assertEqual(result.score, 0.5)
+    assert result.metadata is not None
+    self.assertEqual([entry['retrieved_id'] for entry in result.metadata['rank_results']], ['a', 'b'])

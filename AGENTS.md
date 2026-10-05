@@ -56,7 +56,7 @@ Repeat evaluation reuses stored traces and runs only metric planning and computa
 ## Persistence and execution contracts
 
 - Use repository operations through `UnitOfWork`; use `TransactionalUnitOfWork` for atomic multi-operation changes. Plain `UnitOfWork` does not create a transaction.
-- Agent/trace failures fail the sample. Individual metric failures become failed computations; orchestration or persistence failures fail the compute phase. Persist missing-target skips so reporting retains metric coverage.
+- Agent/trace failures fail the sample. Individual metric failures become failed computations; judge metrics return them with a `metadata.failure` class and the usage of every judge call. Orchestration or persistence failures fail the compute phase. Persist missing-target skips so reporting retains metric coverage.
 - Trace and compute have separate optional deadlines. The trace deadline includes the agent call; lifecycle persistence stays outside deadlines. On cancellation, persist sample failure with shielding, then propagate cancellation.
 - Reports read persisted data. Use saved sample/metric plans for totals and coverage, including missing samples and metrics with zero computations. Keep agent usage separate from judge usage and deduplicate by trace/call identity.
 - Alembic migrations are manually applied raw SQL in `syllo_eval/migrations/`, without ORM autogeneration. Never run migrations automatically from application startup or container commands. Confirm the database target before `poetry run alembic upgrade head`.

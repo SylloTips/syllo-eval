@@ -10,6 +10,10 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_claim_e
   ContextualRecallDocumentClaimExtractorMetric,
   ContextualRecallSnippetClaimExtractorMetric,
 )
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_stored_claims import (
+  ContextualRecallDocumentStoredClaimsMetric,
+  ContextualRecallSnippetStoredClaimsMetric,
+)
 from syllo_eval.evaluation.metrics.implementations.rag.ndcg_at_10 import (
   NdcgAt10DocumentMetric,
   NdcgAt10SnippetMetric,
@@ -30,6 +34,8 @@ __all__ = [
   'ContextualRecallSnippetJudgeMetric',
   'ContextualRecallDocumentClaimExtractorMetric',
   'ContextualRecallSnippetClaimExtractorMetric',
+  'ContextualRecallDocumentStoredClaimsMetric',
+  'ContextualRecallSnippetStoredClaimsMetric',
   'NdcgAt10DocumentMetric',
   'NdcgAt10SnippetMetric',
   'SetPrecisionDocumentMetric',

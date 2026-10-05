@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from syllo_eval.trace_semantics import SpanSemantics
 
@@ -97,8 +97,18 @@ class GroundTruthKey(str, Enum):
 
   EXPECTED_OUTPUT = 'expected_output'
   EXPECTED_PLAN = 'expected_plan'
+  EXPECTED_CLAIMS = 'expected_claims'
   RELEVANT_DOCUMENT_IDS = 'relevant_document_ids'
   RELEVANT_SNIPPET_IDS = 'relevant_snippet_ids'
+
+
+class ExpectedClaim(BaseModel):
+  """One atomic claim of an expected answer, stored as ground truth: ``{"claims": [{"id", "text"}, ...]}``."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  id: str = Field(min_length=1)
+  text: str = Field(min_length=1)
 
 
 class GroundTruth(BaseModel):
