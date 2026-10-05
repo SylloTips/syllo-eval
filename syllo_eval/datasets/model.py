@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+from syllo_eval.model import ExpectedClaim
 
 
 class DatasetJsonPlanStep(BaseModel):
@@ -22,6 +24,14 @@ class DatasetJsonSample(BaseModel):
   snippet_ids: list[str] = Field(default_factory=list)
   document_ids: list[str] = Field(default_factory=list)
   plan: list[DatasetJsonPlanStep] | None = None
+  claims: list[ExpectedClaim] | None = None
+
+  @field_validator('claims')
+  @classmethod
+  def claim_ids_are_unique(cls, claims: list[ExpectedClaim] | None) -> list[ExpectedClaim] | None:
+    if claims is not None and len({claim.id for claim in claims}) != len(claims):
+      raise ValueError('claim ids must be unique within a sample')
+    return claims
 
 
 class DatasetJsonPayload(BaseModel):

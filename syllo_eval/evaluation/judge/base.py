@@ -36,16 +36,29 @@ class LlmJudgeClient(Protocol):
     """Release any provider-specific resources held by the client."""
 
 
-def judge_metadata(responses: Sequence[LlmJudgeResponse]) -> dict[str, Any]:
-  if not responses:
+def judge_metadata(
+  responses: Sequence[LlmJudgeResponse], failed_usages: Sequence[dict[str, int] | None] = ()
+) -> dict[str, Any]:
+  """Judge usage of a computation. ``failed_usages`` holds one entry per call that raised, ``None`` when unknown."""
+  if not responses and not failed_usages:
     return {}
 
-  metadata: dict[str, Any] = {
-    'judge_provider': responses[0].provider,
-    'judge_model': responses[0].model,
-    'judge_calls': len(responses),
-    'judge_attempts': sum(response.attempts for response in responses),
-  }
+  metadata: dict[str, Any] = {'judge_calls': len(responses) + len(failed_usages)}
+  if failed_usages:
+    metadata['judge_failed_calls'] = len(failed_usages)
+  usage = _aggregate_usage([response.usage for response in responses] + list(failed_usages))
+  if usage is not None:
+    metadata['judge_usage'] = usage
+  if not responses:
+    return metadata
+
+  metadata.update(
+    {
+      'judge_provider': responses[0].provider,
+      'judge_model': responses[0].model,
+      'judge_attempts': sum(response.attempts for response in responses),
+    }
+  )
   latencies = [response.latency_seconds for response in responses if response.latency_seconds is not None]
   if latencies:
     metadata['judge_latency_seconds'] = round(sum(latencies), 3)
@@ -55,18 +68,12 @@ def judge_metadata(responses: Sequence[LlmJudgeResponse]) -> dict[str, Any]:
       metadata['judge_response_id'] = response_ids[0]
   elif response_ids:
     metadata['judge_response_ids'] = response_ids
-
-  usage = _aggregate_usage(responses)
-  if usage is not None:
-    metadata['judge_usage'] = usage
   return metadata
 
 
-def _aggregate_usage(responses: Sequence[LlmJudgeResponse]) -> dict[str, int] | None:
-  usage: dict[str, int] = {}
-  for response in responses:
-    if response.usage is None:
-      continue
-    for key, value in response.usage.items():
-      usage[key] = usage.get(key, 0) + value
-  return usage or None
+def _aggregate_usage(usages: Sequence[dict[str, int] | None]) -> dict[str, int] | None:
+  total: dict[str, int] = {}
+  for usage in usages:
+    for key, value in (usage or {}).items():
+      total[key] = total.get(key, 0) + value
+  return total or None

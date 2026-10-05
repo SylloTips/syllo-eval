@@ -21,6 +21,10 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
   ContextualRecallDocumentJudgeMetric,
   ContextualRecallSnippetJudgeMetric,
 )
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_stored_claims import (
+  ContextualRecallDocumentStoredClaimsMetric,
+  ContextualRecallSnippetStoredClaimsMetric,
+)
 from syllo_eval.evaluation.metrics.implementations.rag.ndcg_at_10 import (
   NdcgAt10DocumentMetric,
   NdcgAt10SnippetMetric,
@@ -51,6 +55,8 @@ BUILTIN_METRICS: tuple[type[EvaluationMetric], ...] = (
   ContextualRecallSnippetJudgeMetric,
   ContextualRecallDocumentClaimExtractorMetric,
   ContextualRecallSnippetClaimExtractorMetric,
+  ContextualRecallDocumentStoredClaimsMetric,
+  ContextualRecallSnippetStoredClaimsMetric,
 )
 
 
@@ -100,6 +106,7 @@ def build_available_metrics(
   judge_client: LlmJudgeClient | None = None,
   claim_extractor_client: ClaimExtractorClient | None = None,
   rubric_additions: Mapping[str, str] | None = None,
+  retrieval_span_types: Sequence[str] = ('agent_root',),
 ) -> list[EvaluationMetric]:
   metrics: list[EvaluationMetric] = []
   for metric_class in BUILTIN_METRICS:
@@ -111,5 +118,7 @@ def build_available_metrics(
       dependencies['rubric_addition'] = (rubric_additions or {}).get(metric_class.metric_name)
     if metric_class.requires_claim_extractor_client:
       dependencies['claim_extractor_client'] = claim_extractor_client
+    if metric_class.accepts_target_span_types:
+      dependencies['target_span_types'] = retrieval_span_types
     metrics.append(metric_class(**dependencies))
   return metrics

@@ -138,6 +138,16 @@ class EvaluationSettings(EnvSettings):
   sample_compute_timeout: float | None = Field(
     default=None, gt=0, validation_alias='EVALUATION_SAMPLE_COMPUTE_TIMEOUT_SECONDS'
   )
+  # Span types the built-in retrieval metrics score: the agent's final context by default, or for example the span
+  # type an adapter gives each search call, to score one search at a time.
+  retrieval_span_types: tuple[str, ...] = Field(default=('agent_root',), min_length=1)
+
+  @field_validator('retrieval_span_types')
+  @classmethod
+  def span_types_are_named(cls, span_types: tuple[str, ...]) -> tuple[str, ...]:
+    if any(not span_type.strip() for span_type in span_types):
+      raise ValueError('retrieval span types must be non-empty')
+    return tuple(span_type.strip() for span_type in span_types)
 
 
 class Settings(EnvSettings):

@@ -38,7 +38,7 @@ class RenderPromptTest(unittest.TestCase):
     )
     stricter_by_name = {metric.name: metric for metric in stricter}
 
-    self.assertEqual(len(judges), 8)
+    self.assertEqual(len(judges), 10)
     for metric in judges:
       prompt = cast(Any, metric).build_system_prompt()
       self.assertNotIn('Additional requirements', prompt)
