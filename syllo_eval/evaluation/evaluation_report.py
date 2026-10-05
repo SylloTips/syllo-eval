@@ -25,7 +25,7 @@ from syllo_eval.model import (
   Span,
 )
 
-_REPORT_VERSION = '1.5'
+_REPORT_VERSION = '2.0'
 _TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens')
 _FAILURE_PHASES = ('agent_call', 'trace_fetch', 'metric_compute', 'unknown')
 _FAILURE_PHASE_SET = set(_FAILURE_PHASES)
