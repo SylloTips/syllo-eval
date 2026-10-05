@@ -20,7 +20,7 @@ class ServiceFactoryTest(unittest.TestCase):
     run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
     factory = MagicMock()
     factory.return_value.available_metric_names.return_value = ['custom_metric']
-    argv = ['--agent-name', 'demo-agent', '--agent-version-tag', 'v1', '--dataset-id', str(uuid4())]
+    argv = ['run', '--agent-name', 'demo-agent', '--agent-version-tag', 'v1', '--dataset-id', str(uuid4())]
     argv += ['--metrics', 'custom_metric']
     with (
       patch.dict('os.environ', {}, clear=True),

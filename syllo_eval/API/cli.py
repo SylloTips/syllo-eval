@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import json
 import logging
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
@@ -10,6 +9,7 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from syllo_eval.service import (
+  AgentCallerSelectionError,
   EvaluationService,
   MetricSelectionError,
   ServiceFactory,
@@ -86,9 +86,18 @@ def _add_rubric_additions_argument(parser: argparse.ArgumentParser) -> None:
   )
 
 
+def build_main_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(prog=prog, description='Evaluate agents from the traces they leave.')
+  parser.add_argument(
+    'command', choices=['run', 'import', 'repeat', 'dataset'], help='Command to run; see <command> --help.'
+  )
+  parser.add_argument('args', nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+  return parser
+
+
 def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-    prog=prog,
+    prog=f'{prog} run',
     description='Run an evaluation for one agent/dataset by calling the agent for each sample.',
   )
   parser.add_argument(
@@ -356,16 +365,17 @@ def main(
   argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService, prog: str = 'syllo-eval'
 ) -> int:
   load_settings_env(override=False)
-  raw_argv = list(argv) if argv is not None else sys.argv[1:]
-  if raw_argv[:1] == ['repeat']:
-    return _main_repeat(raw_argv[1:], service_factory, prog)
-  if raw_argv[:1] == ['dataset']:
-    return _main_dataset(raw_argv[1:], prog)
-  if raw_argv[:1] == ['import']:
-    return _main_import(raw_argv[1:], service_factory, prog)
+  main_args = build_main_parser(prog).parse_args(argv)
 
+  if main_args.command == 'dataset':
+    return _main_dataset(main_args.args, prog)
+  commands = {'run': _main_run, 'import': _main_import, 'repeat': _main_repeat}
+  return commands[main_args.command](main_args.args, service_factory, prog)
+
+
+def _main_run(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:
   parser = build_parser(prog)
-  args = parser.parse_args(raw_argv)
+  args = parser.parse_args(argv)
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
@@ -395,6 +405,9 @@ def main(
         rubric_additions=args.rubric_additions,
       )
     )
+  except AgentCallerSelectionError as err:
+    logger.error('%s Score exported traces with `%s import` instead.', err, prog)
+    return 1
   except Exception:
     logger.exception('Evaluation run failed')
     return 1
