@@ -23,12 +23,15 @@ from syllo_eval.trace_semantics import Answer, ExecutionStep, PlanningData
 
 from ablation_metrics import (
   AnswerCorrectnessWT,
+  SEARCH_SPAN_TYPE,
+  ContextualPrecisionSC,
+  GoldClaimsContextualRecall,
   GoldClaimsContextualRecallSC,
   PlanCorrectnessWT,
-  SearchContextualPrecisionSC,
   render_whole_trace,
 )
 from benchmarks.common import Claim
+from benchmarks.erb import CLAIMS_KEY
 from metric_fakes import (
   QUESTION,
   ScriptedJudge,
@@ -40,9 +43,9 @@ from metric_fakes import (
   truth,
   without_judge_keys,
 )
-from metrics import AnswerCorrectness, GoldClaimsContextualRecall, SearchContextualPrecision
 
 LIMIT = 65_536
+SEARCH = (SEARCH_SPAN_TYPE,)
 CLAIMS = (Claim(id='q1-f01', text='Dana approved the budget.'), Claim(id='q1-f02', text='It was approved in May.'))
 UNIT_SPANS = (
   search_span('s', ['d1', 'd2']),
@@ -62,10 +65,10 @@ def _plan_items(metric: Any, spans: Sequence[Span]) -> list[tuple[bool, str | No
   return [(metric.matches_span(target), metric.input_skip_reason(target)) for target in spans]
 
 
-class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
+class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
   def test_scores_the_same_units_as_the_main_pass(self) -> None:
-    main = SearchContextualPrecision(judge_client=ScriptedJudge())
-    ablation = SearchContextualPrecisionSC(judge_client=ScriptedJudge(), output_token_limit=LIMIT)
+    main = ContextualPrecisionDocumentJudgeMetric(target_span_types=SEARCH, judge_client=ScriptedJudge())
+    ablation = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=ScriptedJudge(), output_token_limit=LIMIT)
 
     self.assertEqual(ablation.target_span_types, main.target_span_types)
     self.assertEqual(ablation.ground_truth_key, main.ground_truth_key)
@@ -78,10 +81,12 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     # Out of rank order: single-call judgments are matched to documents by rank, not by position.
     ablation_judge = ScriptedJudge(precision_judgments(*reversed(decisions)))
 
-    main = await SearchContextualPrecision(judge_client=main_judge).compute(target, truth())
-    ablation = await SearchContextualPrecisionSC(judge_client=ablation_judge, output_token_limit=LIMIT).compute(
+    main = await ContextualPrecisionDocumentJudgeMetric(target_span_types=SEARCH, judge_client=main_judge).compute(
       target, truth()
     )
+    ablation = await ContextualPrecisionSC(
+      target_span_types=SEARCH, judge_client=ablation_judge, output_token_limit=LIMIT
+    ).compute(target, truth())
 
     self.assertEqual(len(main_judge.requests), 3)
     self.assertEqual(len(ablation_judge.requests), 1)
@@ -95,7 +100,7 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     for count, budget in ((3, 6_000), (80, LIMIT)):
       documents = [f'd{rank}' for rank in range(1, count + 1)]
       judge = ScriptedJudge(precision_judgments(*((rank, doc, False) for rank, doc in enumerate(documents, 1))))
-      metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+      metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(count=count):
         result = await metric.compute(search_span('s', documents), truth())
         self.assertEqual(result.status, MetricComputationStatus.COMPLETED)
@@ -103,8 +108,11 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
 
   def test_prompts_keep_the_built_in_relevance_definition_and_rubric_addition(self) -> None:
     built_in = ContextualPrecisionDocumentJudgeMetric(judge_client=ScriptedJudge(), rubric_addition='Cite the policy.')
-    ablation = SearchContextualPrecisionSC(
-      judge_client=ScriptedJudge(), output_token_limit=LIMIT, rubric_addition='Cite the policy.'
+    ablation = ContextualPrecisionSC(
+      target_span_types=SEARCH,
+      judge_client=ScriptedJudge(),
+      output_token_limit=LIMIT,
+      rubric_addition='Cite the policy.',
     )
     target = search_span('s', ['d1', 'd2'])
     items = [RetrievedItem(item) for item in target.semantics.retrieval[0].items]
@@ -123,7 +131,7 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
 
   async def test_a_missing_or_repeated_rank_fails_the_unit_and_keeps_the_response(self) -> None:
     judge = ScriptedJudge(precision_judgments((1, 'd1', True), (1, 'd2', False), (3, 'd3', True)))
-    metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+    metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
     result = await metric.compute(search_span('s', ['d1', 'd2', 'd3']), truth())
 
@@ -131,7 +139,6 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     assert result.metadata is not None and result.raw_output is not None
     self.assertEqual(result.metadata['failure'], 'misaligned')
     self.assertEqual(result.metadata['alignment'], {'missing_ranks': [2], 'unknown_ranks': [], 'repeated_ranks': [1]})
-    self.assertEqual(result.metadata['expected_retrieved_ids'], ['d1', 'd2', 'd3'])
     self.assertEqual(result.metadata['max_output_tokens'], 6_000)
     self.assertEqual(result.metadata['judge_calls'], 1)
     self.assertEqual(result.metadata['judge_usage']['output_tokens'], judge.output_tokens)
@@ -145,7 +152,7 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
       (80, LIMIT, 'truncated'),
     ):
       judge = ScriptedJudge(precision_judgments((1, 'd1', True)), output_tokens=output_tokens)
-      metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+      metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       documents = [f'd{rank}' for rank in range(1, count + 1)]
       with self.subTest(count=count, output_tokens=output_tokens):
         result = await metric.compute(search_span('s', documents), truth())
@@ -154,19 +161,19 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
 
   async def test_an_unparsable_output_fails_the_unit_with_its_class(self) -> None:
     judge = ScriptedJudge(DataMappingError('gemini', 'invalid structured output'))
-    metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+    metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
     result = await metric.compute(search_span('s', ['d1', 'd2']), truth())
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None
     self.assertEqual(result.metadata['failure'], 'invalid_output')
-    self.assertEqual(result.metadata['expected_retrieved_ids'], ['d1', 'd2'])
-    self.assertNotIn('judge_calls', result.metadata)
+    self.assertEqual((result.metadata['judge_calls'], result.metadata['judge_failed_calls']), (1, 1))
+    self.assertEqual(result.metadata['max_output_tokens'], 4_000)
 
   async def test_an_observed_empty_search_scores_zero_without_calling_the_judge(self) -> None:
     judge = ScriptedJudge()
-    metric = SearchContextualPrecisionSC(judge_client=judge, output_token_limit=LIMIT)
+    metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
     result = await metric.compute(search_span('s', []), truth())
 
@@ -176,11 +183,14 @@ class SearchContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
 
 class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
   def test_scores_the_same_units_and_claims_as_the_main_pass(self) -> None:
-    main = GoldClaimsContextualRecall(judge_client=ScriptedJudge())
-    ablation = GoldClaimsContextualRecallSC(judge_client=ScriptedJudge(), output_token_limit=LIMIT)
+    main = GoldClaimsContextualRecall(target_span_types=SEARCH, judge_client=ScriptedJudge())
+    ablation = GoldClaimsContextualRecallSC(
+      target_span_types=SEARCH, judge_client=ScriptedJudge(), output_token_limit=LIMIT
+    )
 
     self.assertEqual(ablation.target_span_types, main.target_span_types)
     self.assertEqual(ablation.ground_truth_key, main.ground_truth_key)
+    self.assertEqual(main.ground_truth_key, CLAIMS_KEY)
     self.assertEqual(_plan_items(ablation, UNIT_SPANS), _plan_items(main, UNIT_SPANS))
 
   async def test_one_call_gives_the_main_pass_result_for_the_same_decisions(self) -> None:
@@ -192,10 +202,12 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
       recall_judgments(('1. Dana approved the budget', True), ('It was approved in March.', False))
     )
 
-    main = await GoldClaimsContextualRecall(judge_client=main_judge).compute(target, claims_truth(*CLAIMS))
-    ablation = await GoldClaimsContextualRecallSC(judge_client=ablation_judge, output_token_limit=LIMIT).compute(
+    main = await GoldClaimsContextualRecall(target_span_types=SEARCH, judge_client=main_judge).compute(
       target, claims_truth(*CLAIMS)
     )
+    ablation = await GoldClaimsContextualRecallSC(
+      target_span_types=SEARCH, judge_client=ablation_judge, output_token_limit=LIMIT
+    ).compute(target, claims_truth(*CLAIMS))
 
     self.assertEqual(len(main_judge.requests), 2)
     self.assertEqual(len(ablation_judge.requests), 1)
@@ -209,7 +221,10 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
   def test_prompts_keep_the_built_in_attribution_definition_and_number_the_claims(self) -> None:
     built_in = ContextualRecallDocumentJudgeMetric(judge_client=ScriptedJudge(), rubric_addition='Cite the policy.')
     ablation = GoldClaimsContextualRecallSC(
-      judge_client=ScriptedJudge(), output_token_limit=LIMIT, rubric_addition='Cite the policy.'
+      target_span_types=SEARCH,
+      judge_client=ScriptedJudge(),
+      output_token_limit=LIMIT,
+      rubric_addition='Cite the policy.',
     )
     items = [RetrievedItem(item) for item in search_span('s', ['d1']).semantics.retrieval[0].items]
 
@@ -219,21 +234,20 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn(definition, built_in_system[0])
     self.assertIn(definition, system[0])
     self.assertEqual(system[1:], built_in_system[1:])
-    user = _paragraphs(ablation.build_single_call_user_prompt(items, list(CLAIMS)))
+    user = _paragraphs(ablation.build_single_call_user_prompt(items, [claim.text for claim in CLAIMS]))
     built_in_user = _paragraphs(built_in.build_user_prompt(search_span('s', ['d1']), items, CLAIMS[0].text))
     self.assertEqual(user[1], built_in_user[1])
     self.assertEqual(user[2], 'Statements:\n1. Dana approved the budget.\n2. It was approved in May.')
 
   async def test_a_wrong_judgment_count_fails_the_unit_and_lists_its_claims(self) -> None:
     judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)))
-    metric = GoldClaimsContextualRecallSC(judge_client=judge, output_token_limit=LIMIT)
+    metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
     result = await metric.compute(search_span('s', ['d1']), claims_truth(*CLAIMS))
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None and result.raw_output is not None
     self.assertEqual(result.metadata['failure'], 'misaligned')
-    self.assertEqual(result.metadata['expected_claim_ids'], ['q1-f01', 'q1-f02'])
     self.assertEqual(result.metadata['max_output_tokens'], 4_000)
     self.assertEqual(result.metadata['judge_calls'], 1)
     self.assertEqual(len(result.raw_output['judgments']), 1)
@@ -241,7 +255,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
   async def test_a_short_output_is_truncated_only_once_it_reached_the_unit_budget(self) -> None:
     for output_tokens, failure in ((3_999, 'misaligned'), (4_000, 'truncated')):
       judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)), output_tokens=output_tokens)
-      metric = GoldClaimsContextualRecallSC(judge_client=judge, output_token_limit=LIMIT)
+      metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(output_tokens=output_tokens):
         result = await metric.compute(search_span('s', ['d1']), claims_truth(*CLAIMS))
         assert result.metadata is not None
@@ -441,14 +455,14 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     timeout = ExternalServiceError('gemini', 'judge', httpx.ReadTimeout('read timed out'))
     root = _trace()[3]
 
-    main = await AnswerCorrectness(judge_client=ScriptedJudge(timeout)).compute(root, truth())
+    main = await AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge(timeout)).compute(root, truth())
     ablation = await AnswerCorrectnessWT(
       judge_client=ScriptedJudge(timeout), load_spans=_SpanStore(_trace()).load
     ).compute(root, truth())
 
     self.assertEqual((main.status, ablation.status), (MetricComputationStatus.FAILED,) * 2)
     assert main.metadata is not None and ablation.metadata is not None
-    self.assertEqual(main.metadata, {'failure': 'timeout'})
+    self.assertEqual(main.metadata, {'failure': 'timeout', 'judge_calls': 1, 'judge_failed_calls': 1})
     self.assertEqual({key: value for key, value in ablation.metadata.items() if key != 'trace_render'}, main.metadata)
     self.assertEqual(ablation.error_message, main.error_message)
 

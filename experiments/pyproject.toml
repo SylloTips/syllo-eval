@@ -13,7 +13,6 @@ packages = [
   {include = "config.py"},
   {include = "judge.py"},
   {include = "manifest.py"},
-  {include = "metrics.py"},
   {include = "service.py"},
 ]
 

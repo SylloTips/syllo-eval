@@ -216,21 +216,6 @@ def claims_value(claims: Sequence[Claim]) -> dict[str, JsonValue]:
   return {'claims': [{'id': claim.id, 'text': claim.text} for claim in claims]}
 
 
-def claims_from_value(value: Mapping[str, Any]) -> list[Claim]:
-  """The claims of a ground-truth value written by ``claims_value``; a value without claims is malformed."""
-  raw_claims = value.get('claims')
-  if not isinstance(raw_claims, list) or not raw_claims:
-    raise ValueError('Claim ground truth must hold a non-empty "claims" list')
-  claims = []
-  for raw_claim in raw_claims:
-    claim_id = raw_claim.get('id') if isinstance(raw_claim, dict) else None
-    text = raw_claim.get('text') if isinstance(raw_claim, dict) else None
-    if not isinstance(claim_id, str) or not claim_id or not isinstance(text, str) or not text.strip():
-      raise ValueError(f'Malformed claim in ground truth: {raw_claim!r}')
-    claims.append(Claim(id=claim_id, text=text))
-  return claims
-
-
 def file_sha256(path: Path) -> str:
   digest = hashlib.sha256()
   with path.open('rb') as file:

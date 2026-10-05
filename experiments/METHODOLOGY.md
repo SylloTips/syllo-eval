@@ -81,8 +81,7 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
     and its first paragraph ends with one added sentence saying that the answer or plan is the agent root's.
   - Every unit that loads its trace records the rendered trace's span count and length in characters, judge failures
     included. A unit skipped by the built-in rule, or failing to load its trace, records none.
-  - It is compared with Answer and Plan Correctness as run in the main pass (`metrics.py`): the built-in metrics, with
-    judge failures recorded the same way in both arms.
+  - It is compared with the built-in Answer and Plan Correctness, which record judge failures the same way.
 
 ## Aggregation
 
@@ -155,10 +154,9 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
   retests and ablations):
   - `misaligned`, `truncated`, `invalid_output`, `context_overflow` and `timeout` are outcomes of the judge, and count
     as wrong in every arm;
-  - `invalid_output` is an output that does not parse or validate, or a refusal. An output cut inside a judgment no
-    longer validates, so it is recorded as invalid output rather than truncated;
+  - `invalid_output` is an output that does not parse or validate, or a refusal; an output that does not parse because
+    it reached its token limit is `truncated`;
   - `provider` and `trace_load` are infrastructure failures: the unit is re-run in every arm, not counted.
-- A failed CP or CR unit lists its documents or claims, so that each one counts as a wrong decision. A failed AC or
-  PC unit has no decisions, only a missing score.
-- A failed unit keeps the usage of its completed judge calls. A call that raised returns no usage, so cost counts
-  completed calls only.
+- Each document or claim of a failed CP or CR unit counts as a wrong decision; the computation's span and ground truth
+  identify them. A failed AC or PC unit has no decisions, only a missing score.
+- A failed unit counts every judge call it made, with the usage the provider reported, failed calls included.

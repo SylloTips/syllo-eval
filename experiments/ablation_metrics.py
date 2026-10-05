@@ -1,15 +1,18 @@
-"""The two ablations of Section 5.1. Each removes one design choice of Section 4 from the metric it is compared with.
+"""The experiments' metrics that the library does not provide as they are: the two ablations of Section 5.1, and
+recall over the ERB gold claims.
 
-- Syllo-eval-SC (single call) judges all the documents, or all the claims, of a search unit in one call instead of one
-  call each. It subclasses the metric it is compared with in ``metrics.py`` and replaces only the judging step.
-- Syllo-eval-WT (whole trace) reads the agent's whole trace instead of the observations of its target span. It
-  subclasses Answer or Plan Correctness in ``metrics.py``, puts the trace in place of the paragraph holding the answer
-  or the plan, and adds one sentence saying where in the trace that is.
+The main pass runs the built-in metrics: contextual precision on search spans (``SEARCH_SPAN_TYPE``), and Answer and
+Plan Correctness. ``GoldClaimsContextualRecall`` is the built-in stored-claims recall, reading the claims key of the
+benchmark import. Each ablation subclasses the metric it is compared with and overrides one library hook:
 
-Units, skip rules, rubrics and scoring therefore stay those of the compared metric, and so does the result metadata,
-to which an ablation only adds fields: ``trace_render`` for WT, the output budget and rank alignment of a failed SC
-unit. The prompts that change live in ``prompts/``: the built-in v1 wording, edited only where the design choice
-requires it.
+- Syllo-eval-SC (single call) replaces ``judge_items`` or ``judge_claims``: all the documents, or all the claims, of a
+  search unit are judged in one call instead of one call each.
+- Syllo-eval-WT (whole trace) replaces ``judge_input``: the user prompt holds the agent's whole canonical trace in
+  place of the paragraph with the answer or plan, and adds one sentence saying where in the trace that is.
+
+Units, skip rules, rubrics, scoring and result metadata therefore stay those of the compared metric; an ablation only
+adds metadata fields (``trace_render`` for WT; the output budget, and for CP the rank alignment, of a failed SC unit).
+The prompts that change live in ``prompts/``: the built-in v1 wording, edited only where the design choice requires it.
 """
 
 import json
@@ -22,7 +25,10 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest
+from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.judge.batch import judge_batch
+from syllo_eval.evaluation.judge.failures import mismatch_kind
+from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_actual_plan,
@@ -32,7 +38,10 @@ from syllo_eval.evaluation.metric_support.agent_outputs import (
 )
 from syllo_eval.evaluation.metric_support.retrieved_context import RetrievedItem
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
+from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
+from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
+  ContextualPrecisionDocumentJudgeMetric,
   ContextualPrecisionJudgePayload,
   ContextualPrecisionJudgment,
 )
@@ -40,27 +49,22 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
   ContextualRecallJudgePayload,
   ContextualRecallJudgment,
 )
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_stored_claims import (
+  ContextualRecallDocumentStoredClaimsMetric,
+)
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
-from syllo_eval.model import GroundTruth, Span
+from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 from syllo_eval.trace_semantics import RetrievalResult
 
-from benchmarks.common import Claim
+from benchmarks.erb import CLAIMS_KEY as ERB_GOLD_CLAIMS_KEY
 from config import EXPERIMENTS_DIR
-from metrics import (
-  AnswerCorrectness,
-  ClassifiedJudgeMetric,
-  FailureKind,
-  GoldClaimsContextualRecall,
-  JudgedUnit,
-  JudgeFailure,
-  PlanCorrectness,
-  SearchContextualPrecision,
-  StoredClaimsContextualRecall,
-  count_failure,
-  failed_result,
-  judge_each,
-)
+
+# Span type the agent adapters give each search call: its semantics carry the user question as the request, and the
+# documents the call returned as one ranked document result at the `selected` stage. Retrieval metrics target it.
+SEARCH_SPAN_TYPE = 'retrieval'
+# Failure class of a whole-trace unit whose stored trace could not be loaded or rendered: an infrastructure failure.
+TRACE_LOAD_FAILURE = 'trace_load'
 
 PROMPTS_DIR = EXPERIMENTS_DIR / 'prompts'
 
@@ -84,62 +88,89 @@ def _rendered_items(items: Sequence[RetrievedItem]) -> str:
   return '\n\n'.join(item.render_for_prompt(rank) for rank, item in enumerate(items, start=1))
 
 
-class SearchContextualPrecisionSC(SearchContextualPrecision):
-  """Syllo-eval-SC for contextual precision: every document of the search judged in one call.
+class GoldClaimsContextualRecall(ContextualRecallDocumentStoredClaimsMetric):
+  """The built-in stored-claims recall over the ERB gold claims (RQ1 attribution)."""
 
-  The output budget is the main pass's per-document budget times the number of documents, capped at the judge's
-  output limit. Judgments are matched to documents by rank; a wrong count or rank fails the unit.
+  claims_key = ERB_GOLD_CLAIMS_KEY
+  metric_name = 'contextual_recall_gold_claims'
+  metric_description = 'Contextual recall over the ERB gold claims; one judge call per claim.'
+
+
+class ContextualPrecisionSC(ContextualPrecisionDocumentJudgeMetric):
+  """Syllo-eval-SC for contextual precision: every document of a ranking judged in one call.
+
+  The output budget is the per-document call's budget times the number of documents, capped at the judge's output
+  limit. Judgments are matched to documents by rank; a wrong count or rank fails the unit.
   """
 
-  metric_name = 'contextual_precision_search_sc'
-  metric_description = 'Syllo-eval-SC: contextual precision of one search call, judging all its documents in one call.'
+  metric_name = 'contextual_precision_document_judge_sc'
+  metric_description = 'Syllo-eval-SC: contextual precision, judging all the documents of a ranking in one call.'
 
-  def __init__(self, *, judge_client: LlmJudgeClient, output_token_limit: int, rubric_addition: str | None = None):
-    super().__init__(judge_client=judge_client, rubric_addition=rubric_addition)
+  def __init__(
+    self,
+    *,
+    judge_client: LlmJudgeClient,
+    output_token_limit: int,
+    rubric_addition: str | None = None,
+    target_span_types: Sequence[str] = ('agent_root',),
+  ):
+    super().__init__(judge_client=judge_client, rubric_addition=rubric_addition, target_span_types=target_span_types)
     self._output_token_limit = output_token_limit
 
   async def judge_items(
-    self, span: Span, ground_truth: GroundTruth, items: list[RetrievedItem]
-  ) -> JudgedUnit[ContextualPrecisionJudgment] | MetricComputationResult:
-    budget = min(self.max_output_tokens * len(items), self._output_token_limit)
-    responses, failure = await judge_each(
-      [
+    self, span: Span, ground_truth: GroundTruth, rankings: list[list[RetrievedItem]]
+  ) -> tuple[list[LlmJudgeResponse], list[ContextualPrecisionJudgment]] | MetricComputationResult:
+    # An observed empty ranking needs no call.
+    judged = [
+      (items, min(self.max_output_tokens * len(items), self._output_token_limit)) for items in rankings if items
+    ]
+    budget = max((budget for _, budget in judged), default=None)
+    responses, failure = await judge_batch(
+      (
         self._judge_client.judge(
           LlmJudgeRequest(
             system_prompt=self.build_single_call_system_prompt(),
             user_prompt=self.build_single_call_user_prompt(span, ground_truth, items),
             response_model=ContextualPrecisionJudgePayload,
             temperature=0.0,
-            max_output_tokens=budget,
+            max_output_tokens=ranking_budget,
           )
         )
-      ]
+        for items, ranking_budget in judged
+      ),
+      max_output_tokens=budget,
     )
     if failure is not None:
-      return self.unit_failure(failure, items, responses, max_output_tokens=budget)
-    judgments = responses[0].output.judgments
-    ranks = [judgment.rank for judgment in judgments]
-    expected_ranks = range(1, len(items) + 1)
-    if sorted(ranks) != list(expected_ranks):
-      alignment = {
-        'missing_ranks': sorted(set(expected_ranks) - set(ranks)),
-        'unknown_ranks': sorted(set(ranks) - set(expected_ranks)),
-        'repeated_ranks': sorted(rank for rank, count in Counter(ranks).items() if count > 1),
-      }
-      message = (
-        f'Judge returned {len(judgments)} contextual precision judgments for {len(items)} ranked '
-        f'{self.variant}s: {alignment}.'
-      )
-      return self.unit_failure(
-        JudgeFailure(count_failure([len(judgments)], len(items), responses, budget), message),
-        items,
-        responses,
-        raw_output=responses[0].output.model_dump(),
-        max_output_tokens=budget,
-        alignment=alignment,
-      )
-    by_rank = {judgment.rank: judgment for judgment in judgments}
-    return JudgedUnit(responses, [by_rank[rank] for rank in expected_ranks])
+      failure.metadata = {**(failure.metadata or {}), 'max_output_tokens': budget}
+      return failure
+
+    judgments: list[ContextualPrecisionJudgment] = []
+    for (items, ranking_budget), response in zip(judged, responses):
+      ranks = [judgment.rank for judgment in response.output.judgments]
+      expected_ranks = range(1, len(items) + 1)
+      if sorted(ranks) != list(expected_ranks):
+        alignment = {
+          'missing_ranks': sorted(set(expected_ranks) - set(ranks)),
+          'unknown_ranks': sorted(set(ranks) - set(expected_ranks)),
+          'repeated_ranks': sorted(rank for rank, count in Counter(ranks).items() if count > 1),
+        }
+        message = (
+          f'Judge returned {len(ranks)} contextual precision judgments for {len(items)} ranked '
+          f'{self.variant}s: {alignment}.'
+        )
+        return _single_call_failure(
+          self.name,
+          message,
+          response,
+          responses,
+          ranking_budget,
+          variant=self.variant,
+          retrieval_kind=self.variant,
+          alignment=alignment,
+        )
+      by_rank = {judgment.rank: judgment for judgment in response.output.judgments}
+      judgments.extend(by_rank[rank] for rank in expected_ranks)
+    return responses, judgments
 
   def build_single_call_system_prompt(self) -> str:
     return render_ablation_prompt(
@@ -156,71 +187,102 @@ class SearchContextualPrecisionSC(SearchContextualPrecision):
     )
 
 
-class StoredClaimsContextualRecallSC(StoredClaimsContextualRecall):
-  """Syllo-eval-SC for contextual recall: every claim judged against the search's documents in one call.
+class GoldClaimsContextualRecallSC(GoldClaimsContextualRecall):
+  """Syllo-eval-SC for recall over the ERB gold claims: every claim judged against the documents in one call.
 
-  The output budget is the main pass's per-claim budget times the number of claims, capped at the judge's output
-  limit. Judgments are matched to claims by position; a wrong count fails the unit.
+  The output budget is the per-claim call's budget times the number of claims, capped at the judge's output limit.
+  Judgments are matched to claims by position; a wrong count fails the unit.
   """
 
-  def __init__(self, *, judge_client: LlmJudgeClient, output_token_limit: int, rubric_addition: str | None = None):
-    super().__init__(judge_client=judge_client, rubric_addition=rubric_addition)
+  metric_name = 'contextual_recall_gold_claims_sc'
+  metric_description = 'Syllo-eval-SC: contextual recall over the ERB gold claims, judging all claims in one call.'
+
+  def __init__(
+    self,
+    *,
+    judge_client: LlmJudgeClient,
+    output_token_limit: int,
+    rubric_addition: str | None = None,
+    target_span_types: Sequence[str] = ('agent_root',),
+  ):
+    super().__init__(judge_client=judge_client, rubric_addition=rubric_addition, target_span_types=target_span_types)
     self._output_token_limit = output_token_limit
 
   async def judge_claims(
-    self, span: Span, items: list[RetrievedItem], claims: list[Claim]
-  ) -> JudgedUnit[ContextualRecallJudgment] | MetricComputationResult:
+    self,
+    span: Span,
+    retrieved_items: list[RetrievedItem],
+    claims: list[str],
+    *,
+    prior_responses: Sequence[LlmJudgeResponse] = (),
+  ) -> tuple[list[LlmJudgeResponse], list[ContextualRecallJudgment]] | MetricComputationResult:
     budget = min(self.max_output_tokens * len(claims), self._output_token_limit)
-    responses, failure = await judge_each(
+    responses, failure = await judge_batch(
       [
         self._judge_client.judge(
           LlmJudgeRequest(
             system_prompt=self.build_single_call_system_prompt(),
-            user_prompt=self.build_single_call_user_prompt(items, claims),
+            user_prompt=self.build_single_call_user_prompt(retrieved_items, claims),
             response_model=ContextualRecallJudgePayload,
             temperature=0.0,
             max_output_tokens=budget,
           )
         )
-      ]
+      ],
+      prior_responses=prior_responses,
+      max_output_tokens=budget,
     )
     if failure is not None:
-      return self.unit_failure(failure, items, claims, responses, max_output_tokens=budget)
+      failure.metadata = {**(failure.metadata or {}), 'max_output_tokens': budget}
+      return failure
     judgments = responses[0].output.judgments
     if len(judgments) != len(claims):
-      return self.unit_failure(
-        JudgeFailure(
-          count_failure([len(judgments)], len(claims), responses, budget),
-          f'Judge returned {len(judgments)} contextual recall judgments for {len(claims)} statements.',
-        ),
-        items,
-        claims,
-        responses,
-        raw_output=responses[0].output.model_dump(),
-        max_output_tokens=budget,
+      return _single_call_failure(
+        self.name,
+        f'Judge returned {len(judgments)} contextual recall judgments for {len(claims)} statements.',
+        responses[0],
+        [*prior_responses, *responses],
+        budget,
+        variant=self.variant,
+        retrieval_kind=self.variant,
       )
-    return JudgedUnit(responses, list(judgments))
+    return responses, list(judgments)
 
   def build_single_call_system_prompt(self) -> str:
     return render_ablation_prompt(
       'contextual_recall_sc_system.md', variant=self.variant, rubric_addition=self._rubric_addition
     )
 
-  def build_single_call_user_prompt(self, items: list[RetrievedItem], claims: list[Claim]) -> str:
+  def build_single_call_user_prompt(self, retrieved_items: list[RetrievedItem], claims: list[str]) -> str:
     return render_ablation_prompt(
       'contextual_recall_sc_user.md',
       variant=self.variant,
-      items=_rendered_items(items),
-      claims='\n'.join(f'{index}. {claim.text}' for index, claim in enumerate(claims, start=1)),
+      items=_rendered_items(retrieved_items),
+      claims='\n'.join(f'{index}. {claim}' for index, claim in enumerate(claims, start=1)),
     )
 
 
-class GoldClaimsContextualRecallSC(StoredClaimsContextualRecallSC, GoldClaimsContextualRecall):
-  """Syllo-eval-SC for contextual recall over the ERB gold claims."""
-
-  metric_name = 'contextual_recall_gold_claims_sc'
-  metric_description = (
-    'Syllo-eval-SC: contextual recall of one search call over the ERB gold claims, judging all claims in one call.'
+def _single_call_failure(
+  metric_name: str,
+  message: str,
+  response: LlmJudgeResponse,
+  responses: Sequence[LlmJudgeResponse],
+  budget: int,
+  **metadata: Any,
+) -> MetricComputationResult:
+  """A single-call unit whose judgments do not match its items: misaligned, or truncated at the output budget."""
+  return MetricComputationResult(
+    score=None,
+    status=MetricComputationStatus.FAILED,
+    reasoning=f'Failed to compute {metric_name}: {message}',
+    metadata={
+      **metadata,
+      'failure': mismatch_kind(response, budget).value,
+      'max_output_tokens': budget,
+      **judge_metadata(responses),
+    },
+    error_message=message,
+    raw_output=response.output.model_dump(),
   )
 
 
@@ -323,11 +385,11 @@ def _quoted(value: str) -> str:
   return json.dumps(value, ensure_ascii=False)
 
 
-class _WholeTraceJudgeMetric(ClassifiedJudgeMetric, ABC):
+class _WholeTraceJudgeMetric(BaseLlmJudgeMetric, ABC):
   """Syllo-eval-WT: the judge reads the agent's whole canonical trace in place of its target span's observations.
 
-  The skip rule and the system prompt are the built-in ones. The user prompt is the built-in one with the trace in
-  place of the answer or plan paragraph, plus one sentence saying where in the trace the answer or plan is.
+  The skip rule, the system prompt and the failure handling are the built-in ones. The user prompt is the built-in one
+  with the trace in place of the answer or plan paragraph, plus one sentence saying where in the trace that is.
   """
 
   def __init__(self, *, judge_client: LlmJudgeClient, load_spans: SpanLoader, rubric_addition: str | None = None):
@@ -344,13 +406,19 @@ class _WholeTraceJudgeMetric(ClassifiedJudgeMetric, ABC):
     try:
       trace, span_count = render_whole_trace(await self._load_spans(span.trace_id), span.external_id)
     except Exception as error:
-      return failed_result(self.name, JudgeFailure(FailureKind.TRACE_LOAD, str(error)), {})
-    # Recorded for every unit, failed ones included, so that trace length never depends on the judge succeeding.
+      return MetricComputationResult(
+        score=None,
+        status=MetricComputationStatus.FAILED,
+        reasoning=f'Failed to compute {self.name}: {error}',
+        metadata={'failure': TRACE_LOAD_FAILURE},
+        error_message=str(error),
+      )
+    # Recorded for every judged unit, failed ones included, so that trace length never depends on the judge succeeding.
     trace_render = {'spans': span_count, 'chars': len(trace)}
     return self.build_whole_trace_user_prompt(span, ground_truth, trace), {'trace_render': trace_render}
 
 
-class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectness):
+class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectnessJudgeMetric):
   """Syllo-eval-WT for Answer Correctness."""
 
   metric_name = 'answer_correctness_judge_wt'
@@ -367,7 +435,7 @@ class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectness):
     )
 
 
-class PlanCorrectnessWT(_WholeTraceJudgeMetric, PlanCorrectness):
+class PlanCorrectnessWT(_WholeTraceJudgeMetric, PlanCorrectnessJudgeMetric):
   """Syllo-eval-WT for Plan Correctness."""
 
   metric_name = 'plan_correctness_judge_wt'
