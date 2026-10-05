@@ -46,6 +46,8 @@ of the trace it assesses. The paper asks three questions:
 [`METHODOLOGY.md`](METHODOLOGY.md) fixes the protocol: evaluation units, aggregation and statistics.
 [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
 expected output of each step.
+[`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
+expected output of each step.
 
 ## Layout
 
@@ -62,6 +64,7 @@ expected output of each step.
 ## Setup
 
 Run all commands from this folder. The parent project's database and migrations are shared: start Postgres with the
+root `docker-compose.yml` and apply migrations from the root folder.
 root `docker-compose.yml` and apply migrations from the root folder.
 
 ```bash
@@ -154,6 +157,12 @@ describes what each ablation changes.
 poetry run python -m unittest discover -s tests
 poetry run mypy . --check-untyped-defs --explicit-package-bases
 ```
+
+`ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
+- it creates and deletes `test-benchmark-*` datasets;
+- it is skipped when that database is unreachable, and fails when the database is not migrated.
+
+Check which database is configured before running the suite.
 
 `ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
 - it creates and deletes `test-benchmark-*` datasets;
