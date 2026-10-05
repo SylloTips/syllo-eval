@@ -114,7 +114,7 @@ class TestModel(unittest.TestCase):
     self.assertEqual(trace.external_id, span.trace_id)
     self.assertEqual(metric_target_span_type.span_type, span_type.name)
     self.assertEqual(metric_target_span_type.targeting_mode, MetricTargetingMode.SINGLE)
-    self.assertTrue(metric.requires_ground_truth)
+    self.assertEqual(metric.ground_truth_keys, [])
     self.assertIsNotNone(span.metadata)
     self.assertEqual(span.metadata, {'model': 'gpt-4o-mini', 'token_usage': {'prompt': 12, 'completion': 6}})
     self.assertEqual(span_metric_computation.span_ids, [span.external_id])

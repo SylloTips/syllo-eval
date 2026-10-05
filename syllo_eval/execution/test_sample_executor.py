@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 from types import SimpleNamespace
@@ -48,15 +49,11 @@ class _OutputLengthMetric(EvaluationMetric):
     return 'Scores by output length.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     return MetricComputationResult(
       score=float(len(str(span.output_data))),
       reasoning='Score is output length.',
@@ -81,11 +78,8 @@ class _GroundTruthMatchMetric(EvaluationMetric):
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  @property
-  def requires_ground_truth(self) -> bool:
-    return True
-
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    ground_truth = next(iter(ground_truths.values()), None)
     if ground_truth is None:
       return MetricComputationResult(score=0.0, reasoning='Missing ground truth.')
 
@@ -112,15 +106,11 @@ class _GroupedOutputLengthMetric(SpanGroupEvaluationMetric):
     return 'Sums output lengths across a span group.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, spans, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, spans, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     total_length = sum(len(str(span.output_data)) for span in spans)
     return MetricComputationResult(
       score=float(total_length),
@@ -143,15 +133,11 @@ class _FailingMetric(EvaluationMetric):
     return 'Always fails.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     raise RuntimeError('metric service unavailable')
 
 

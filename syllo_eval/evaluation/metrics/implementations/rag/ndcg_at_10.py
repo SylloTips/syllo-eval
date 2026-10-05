@@ -1,6 +1,6 @@
 import math
 from abc import ABC
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
@@ -41,16 +41,17 @@ class BaseNdcgAt10Metric(SpanEvaluationMetric, ABC):
     return retrieval_skip_reason(span, self.variant, stage=self.retrieval_stage, require_rank=True)
 
   @property
-  def ground_truth_key(self) -> str:
+  def ground_truth_keys(self) -> tuple[str, ...]:
     key = GroundTruthKey.RELEVANT_SNIPPET_IDS if self.variant == 'snippet' else GroundTruthKey.RELEVANT_DOCUMENT_IDS
-    return key.value
+    return (key.value,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     skip_result = retrieval_skip_result(
       span, metric_name=self.name, variant=self.variant, stage=self.retrieval_stage, require_rank=True
     )
     if skip_result is not None:
       return skip_result
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     if ground_truth is None:
       return self._error_result('Missing ground truth for metric computation.')
 

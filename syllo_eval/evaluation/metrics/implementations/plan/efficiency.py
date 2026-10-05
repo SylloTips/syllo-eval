@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.agent_outputs import extract_actual_plan_steps
 from syllo_eval.model import MetricComputationStatus, GroundTruth, GroundTruthKey, Span
@@ -21,15 +23,14 @@ class PlanEfficiencyMetric(SpanEvaluationMetric):
     return ('agent_root',)
 
   @property
-  def ground_truth_key(self) -> str:
-    return GroundTruthKey.EXPECTED_PLAN.value
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (GroundTruthKey.EXPECTED_PLAN.value,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     # Also support direct compute() calls that bypass the planner.
     if reason := self.input_skip_reason(span):
       return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
-    assert ground_truth is not None
-    expected_step_count = len(ground_truth.ground_truth_value['expected_plan'])
+    expected_step_count = len(ground_truths[self.ground_truth_keys[0]].ground_truth_value['expected_plan'])
     actual_step_count = len(extract_actual_plan_steps(span))
     score = expected_step_count / actual_step_count if actual_step_count else 0.0
 

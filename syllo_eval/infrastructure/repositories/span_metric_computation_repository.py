@@ -42,7 +42,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
     fields: Dict[str, Any] = {
       'evaluation_run_sample_id': entity.evaluation_run_sample_id,
       'metric': entity.metric,
-      'ground_truth_id': entity.ground_truth_id,
       'targeting_mode': entity.targeting_mode,
       'target_span_type': entity.target_span_type,
       'score': entity.score,
@@ -66,7 +65,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
     fields: Dict[str, Any] = {
       'score': entity.score,
       'status': entity.status,
-      'ground_truth_id': entity.ground_truth_id,
       'targeting_mode': entity.targeting_mode,
       'target_span_type': entity.target_span_type,
       'error_message': entity.error_message,
@@ -113,7 +111,10 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
+              ARRAY(
+                SELECT mcgt.ground_truth_id FROM metric_computation_ground_truth mcgt
+                WHERE mcgt.metric_computation_id = smc.id ORDER BY mcgt.ground_truth_id
+              ) AS ground_truth_ids,
               smc.targeting_mode,
               smc.target_span_type,
               COALESCE(
@@ -135,7 +136,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
               smc.targeting_mode,
               smc.target_span_type,
               smc.score,
@@ -172,7 +172,10 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
+              ARRAY(
+                SELECT mcgt.ground_truth_id FROM metric_computation_ground_truth mcgt
+                WHERE mcgt.metric_computation_id = smc.id ORDER BY mcgt.ground_truth_id
+              ) AS ground_truth_ids,
               smc.targeting_mode,
               smc.target_span_type,
               COALESCE(
@@ -195,7 +198,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
               smc.targeting_mode,
               smc.target_span_type,
               smc.score,
@@ -232,7 +234,10 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
+              ARRAY(
+                SELECT mcgt.ground_truth_id FROM metric_computation_ground_truth mcgt
+                WHERE mcgt.metric_computation_id = smc.id ORDER BY mcgt.ground_truth_id
+              ) AS ground_truth_ids,
               smc.targeting_mode,
               smc.target_span_type,
               ARRAY_AGG(mcm.span_id ORDER BY s.start_time, s.external_id) AS span_ids,
@@ -255,7 +260,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
               smc.id,
               smc.evaluation_run_sample_id,
               smc.metric,
-              smc.ground_truth_id,
               smc.targeting_mode,
               smc.target_span_type,
               smc.score,
@@ -400,6 +404,10 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
 
     async with conn.cursor() as cur:
       await cur.execute(query, values)
+      await cur.executemany(
+        'INSERT INTO metric_computation_ground_truth (metric_computation_id, ground_truth_id) VALUES (%s, %s)',
+        [(entity.id, ground_truth_id) for ground_truth_id in entity.ground_truth_ids],
+      )
 
       if entity.targeting_mode == MetricTargetingMode.SINGLE:
         if not entity.span_ids:
@@ -456,7 +464,10 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
           smc.id,
           smc.evaluation_run_sample_id,
           smc.metric,
-          smc.ground_truth_id,
+          ARRAY(
+            SELECT mcgt.ground_truth_id FROM metric_computation_ground_truth mcgt
+            WHERE mcgt.metric_computation_id = smc.id ORDER BY mcgt.ground_truth_id
+          ) AS ground_truth_ids,
           smc.targeting_mode,
           smc.target_span_type,
           COALESCE(
@@ -478,7 +489,6 @@ class MetricComputationRepository(BaseRepository[MetricComputation]):
           smc.id,
           smc.evaluation_run_sample_id,
           smc.metric,
-          smc.ground_truth_id,
           smc.targeting_mode,
           smc.target_span_type,
           smc.score,

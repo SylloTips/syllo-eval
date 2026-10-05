@@ -16,8 +16,9 @@ from syllo_eval.trace_semantics import RetrievalItem, RetrievalResult
 CLAIMS = {'claims': [{'id': 'c1', 'text': 'Dana approved it.'}, {'id': 'c2', 'text': 'In May.'}]}
 
 
-def claims_truth(value: dict[str, Any]) -> GroundTruth:
-  return GroundTruth(id=uuid4(), sample_id=uuid4(), key=GroundTruthKey.EXPECTED_CLAIMS.value, ground_truth_value=value)
+def claims_truth(value: dict[str, Any]) -> dict[str, GroundTruth]:
+  key = GroundTruthKey.EXPECTED_CLAIMS.value
+  return {key: GroundTruth(id=uuid4(), sample_id=uuid4(), key=key, ground_truth_value=value)}
 
 
 def judgment(statement: str, attributable: bool) -> dict[str, Any]:
@@ -40,7 +41,7 @@ class ContextualRecallStoredClaimsTest(unittest.IsolatedAsyncioTestCase):
 
     result = await metric.compute(target, claims_truth(CLAIMS))
 
-    self.assertEqual(metric.ground_truth_key, 'expected_claims')
+    self.assertEqual(metric.ground_truth_keys, ('expected_claims',))
     self.assertEqual(result.score, 0.5)
     assert result.metadata is not None
     self.assertEqual(

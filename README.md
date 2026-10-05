@@ -333,7 +333,11 @@ reports them. The report sums judge calls and cached input tokens per run and pe
 
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.
-`syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example.
+`syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example. A metric lists the
+ground-truth keys it reads in `ground_truth_keys`, and `compute(target, ground_truths)` receives those the sample has,
+by key. Every declared key is required by default; override `ground_truth_skip_reason(ground_truths)` to make some
+optional or to accept any one of them, returning `None` when the metric can run. Each computation records the ground
+truths it used.
 
 ## Configuration
 

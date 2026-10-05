@@ -1,4 +1,5 @@
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -51,12 +52,8 @@ class _PlanItemStubMetric(EvaluationMetric):
   def name(self) -> str:
     return 'persistence_failure_metric'
 
-  @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     return MetricComputationResult(score=1.0)
 
 
@@ -76,7 +73,7 @@ async def _single_plan_item():
   yield MetricPlanItem(
     metric=_PlanItemStubMetric(),
     target=SpanTarget(target_span_type='agent', span=span),
-    ground_truth=None,
+    ground_truths={},
   )
 
 
@@ -108,16 +105,16 @@ class _RecordingUnitOfWork:
 
 
 class _RaisingStubMetric(_PlanItemStubMetric):
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     raise RuntimeError('judge unavailable')
 
 
 async def _latency_plan_items():
   async for item in _single_plan_item():
     yield item
-    yield MetricPlanItem(metric=_RaisingStubMetric(), target=item.target, ground_truth=None)
-    yield MetricPlanItem(metric=_PlanItemStubMetric(), target=item.target, ground_truth=None, skip_reason='missing')
+    yield MetricPlanItem(metric=_RaisingStubMetric(), target=item.target, ground_truths={})
+    yield MetricPlanItem(metric=_PlanItemStubMetric(), target=item.target, ground_truths={}, skip_reason='missing')
 
 
 class TestPlanExecutorLatency(unittest.IsolatedAsyncioTestCase):
@@ -160,15 +157,11 @@ class _OutputLengthMetric(EvaluationMetric):
     return 'Scores by output length.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     score = float(len(str(span.output_data)))
     return MetricComputationResult(
       score=score,
@@ -195,14 +188,11 @@ class _GroundTruthMatchMetric(EvaluationMetric):
     return (self._span_type_name,)
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return True
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (self._metric_name,)
 
-  @property
-  def ground_truth_key(self) -> str | None:
-    return self._metric_name
-
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    ground_truth = ground_truths.get(self._metric_name)
     if ground_truth is None:
       return MetricComputationResult(score=0.0, reasoning='Missing ground truth.')
 
@@ -232,15 +222,11 @@ class _ContainsResponseMetric(EvaluationMetric):
     return "Checks whether output contains 'response'."
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     contains_response = 'response' in str(span.output_data)
     return MetricComputationResult(
       score=1.0 if contains_response else 0.0,
@@ -263,15 +249,11 @@ class _FailingMetric(EvaluationMetric):
     return 'Always fails.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
     raise RuntimeError('judge service unavailable')
 
 
@@ -289,15 +271,11 @@ class _GroupedOutputLengthMetric(SpanGroupEvaluationMetric):
     return 'Sums output lengths across a span group.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return (self._span_type_name,)
 
-  async def compute(self, spans, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, spans, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     total_length = sum(len(str(span.output_data)) for span in spans)
     return MetricComputationResult(
       score=float(total_length),
@@ -522,7 +500,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     length_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.length_metric_name)]
     self.assertEqual(length_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertIsNone(length_computation.ground_truth_id)
+    self.assertEqual(length_computation.ground_truth_ids, [])
     self.assertEqual(length_computation.span_ids, [self.span_id])
     self.assertEqual(length_computation.score, float(len(str(first_span.output_data))))
     self.assertEqual(length_computation.reasoning, 'Score is output length.')
@@ -530,7 +508,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     match_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.match_metric_name)]
     self.assertEqual(match_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertEqual(match_computation.ground_truth_id, self.ground_truth_ids[0])
+    self.assertEqual(match_computation.ground_truth_ids, [self.ground_truth_ids[0]])
     self.assertEqual(match_computation.span_ids, [self.span_id])
     self.assertEqual(match_computation.score, 1.0)
     self.assertEqual(match_computation.reasoning, 'Output matches expected output.')
@@ -541,7 +519,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
 
     contains_computation = computations_by_sample_and_metric[(self.evaluation_run_sample_id, self.contains_metric_name)]
     self.assertEqual(contains_computation.evaluation_run_sample_id, self.evaluation_run_sample_id)
-    self.assertIsNone(contains_computation.ground_truth_id)
+    self.assertEqual(contains_computation.ground_truth_ids, [])
     self.assertEqual(contains_computation.span_ids, [self.span_id])
     self.assertEqual(contains_computation.score, 1.0)
     self.assertEqual(contains_computation.reasoning, "Output contains 'response'.")
@@ -576,8 +554,8 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
       1.0,
     )
     self.assertEqual(
-      persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.match_metric_name)].ground_truth_id,
-      self.ground_truth_ids[1],
+      persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.match_metric_name)].ground_truth_ids,
+      [self.ground_truth_ids[1]],
     )
     self.assertEqual(
       persisted_by_sample_and_metric[(self.evaluation_run_sample_two_id, self.contains_metric_name)].score,
@@ -832,7 +810,7 @@ class TestPlanExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):
     self.created_computation_ids.extend(computation.id for computation in computations)
     self.assertEqual(computations[0].status, MetricComputationStatus.SKIPPED)
     self.assertIsNone(computations[0].score)
-    self.assertEqual(computations[0].error_message, 'Missing required ground truth.')
+    self.assertEqual(computations[0].error_message, f'Missing required ground truth: {self.match_metric_name}.')
     self.assertEqual(computations[0].span_ids, [self.span_id])
 
   async def test_execute_persists_skipped_metric_computation_when_target_span_is_missing(self) -> None:

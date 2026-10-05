@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_final_answer,
@@ -23,13 +25,14 @@ class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
     return ('agent_root',)
 
   @property
-  def ground_truth_key(self) -> str:
-    return GroundTruthKey.EXPECTED_OUTPUT.value
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (GroundTruthKey.EXPECTED_OUTPUT.value,)
 
   def build_system_prompt(self) -> str:
     return render_prompt(f'answer_correctness/{self.prompt_version}/system.md', rubric_addition=self._rubric_addition)
 
-  def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
+  def build_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> str:
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     return render_prompt(
       f'answer_correctness/{self.prompt_version}/user.md',
       expected_answer=self._extract_expected_answer(ground_truth),

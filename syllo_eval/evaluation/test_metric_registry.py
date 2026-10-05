@@ -1,6 +1,7 @@
 import asyncio
 import random
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import uuid4
 from typing import Any, cast
@@ -48,12 +49,12 @@ class DummyMetric(EvaluationMetric):
     name: str,
     description: str | None = 'Test metric',
     span_types: tuple[str, ...] = ('test_span',),
-    ground_truth_key: str | None = None,
+    ground_truth_keys: tuple[str, ...] = (),
   ):
     self._name = name
     self._description = description
     self._span_types = tuple(span_types) if span_types else ('test_span',)
-    self._ground_truth_key = ground_truth_key
+    self._ground_truth_keys = ground_truth_keys
 
   @property
   def name(self) -> str:
@@ -68,10 +69,10 @@ class DummyMetric(EvaluationMetric):
     return tuple(self._span_types)
 
   @property
-  def ground_truth_key(self) -> str | None:
-    return self._ground_truth_key
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return self._ground_truth_keys
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     return MetricComputationResult(score=1.0, reasoning='Test reasoning', metadata={'source': 'test_metric'})
 
 
@@ -90,8 +91,8 @@ class TestMetric(EvaluationMetric):
   def target_span_types(self) -> tuple[str, ...]:
     return ('planner', 'replanner', 'checker')
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del span, ground_truth  # Inputs are intentionally unused for this test metric.
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths  # Inputs are intentionally unused for this test metric.
     score = random.random()
     return MetricComputationResult(
       score=score,
@@ -119,8 +120,8 @@ class GroupMetric(SpanGroupEvaluationMetric):
   def target_span_types(self) -> tuple[str, ...]:
     return self._span_types
 
-  async def compute(self, spans, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, spans, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     return MetricComputationResult(score=float(len(spans)), reasoning='Group metric score.')
 
 
@@ -480,10 +481,10 @@ class TestMetricRegistryPersistence(unittest.IsolatedAsyncioTestCase):
       self.assertFalse(exists_1)
       self.assertTrue(exists_2)
 
-  async def test_sync_stores_metric_ground_truth_key(self) -> None:
-    """Test sync stores the ground-truth key declared by a metric implementation."""
-    metric_name = 'metric_with_ground_truth_key'
-    metric = DummyMetric(name=metric_name, span_types=('test_span',), ground_truth_key='expected_output')
+  async def test_sync_stores_metric_ground_truth_keys(self) -> None:
+    """Test sync stores the ground-truth keys declared by a metric implementation."""
+    metric_name = 'metric_with_ground_truth_keys'
+    metric = DummyMetric(name=metric_name, span_types=('test_span',), ground_truth_keys=('expected_output', 'notes'))
 
     registry = self.MetricRegistry(db_manager=self.db_manager)
     registry.register(metric)
@@ -494,7 +495,7 @@ class TestMetricRegistryPersistence(unittest.IsolatedAsyncioTestCase):
 
     self.assertIsNotNone(persisted_metric)
     assert persisted_metric is not None
-    self.assertEqual(persisted_metric.ground_truth_key, 'expected_output')
+    self.assertEqual(persisted_metric.ground_truth_keys, ['expected_output', 'notes'])
 
     async with UnitOfWork(self.db_manager) as uow:
       await _cleanup_test_metric(uow, metric_name)
@@ -566,7 +567,7 @@ class TestMetricRegistryIntegration(unittest.IsolatedAsyncioTestCase):
         ground_truth_value={},
       )
 
-      result = await metric.compute(span, ground_truth)
+      result = await metric.compute(span, {ground_truth.key: ground_truth})
       score = result.score
       if score is None:
         self.fail('Expected successful metric to return a score.')

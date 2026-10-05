@@ -5,6 +5,7 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
   ContextualRecallJudgment,
 )
 from syllo_eval.trace_semantics import RetrievalResult, RetrievalItem
+from syllo_eval.infrastructure.exceptions import JudgeOutputError
 from syllo_eval.model import MetricComputationStatus
 
 
@@ -45,6 +46,24 @@ class ContextualRecallTest(unittest.IsolatedAsyncioTestCase):
       retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='d', content='A')])]
     )
     self.assertEqual((await metric.compute(target, expected)).status, MetricComputationStatus.FAILED)
+
+  async def test_failed_decomposition_is_classified_and_keeps_its_usage(self):
+    class TruncatedJudge:
+      async def judge(self, request):
+        raise JudgeOutputError('judge', 'output does not parse', usage={'output_tokens': 2_000, 'total_tokens': 2_100})
+
+      async def aclose(self):
+        pass
+
+    metric = ContextualRecallDocumentJudgeMetric(judge_client=TruncatedJudge())
+    target = span(
+      retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='d', content='A')])]
+    )
+    result = await metric.compute(target, truth(expected_output='A'))
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'truncated')
+    self.assertEqual(result.metadata['judge_usage']['total_tokens'], 2_100)
 
   async def test_empty_context_scores_zero_without_judging(self):
     judge = Judge()

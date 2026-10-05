@@ -73,7 +73,6 @@ erDiagram
     id id PK
     id evaluation_run_sample_id FK
     string metric FK
-    id ground_truth_id FK "NULLABLE"
     enum targeting_mode "SINGLE, GROUP"
     string target_span_type FK
     float score "NULLABLE"
@@ -90,6 +89,10 @@ erDiagram
   GROUP_SPAN_METRIC_COMPUTATION_SPAN {
     id metric_computation_id PK, FK
     string span_id PK, FK
+  }
+  METRIC_COMPUTATION_GROUND_TRUTH {
+    id metric_computation_id PK, FK
+    id ground_truth_id PK, FK
   }
   SAMPLE {
     id id PK
@@ -114,8 +117,7 @@ erDiagram
   METRIC {
     string name PK
     string description "NULLABLE"
-    boolean requires_ground_truth
-    string ground_truth_key "NULLABLE"
+    string_array ground_truth_keys
   }
 
   DATASET ||--|{ SAMPLE : "has"
@@ -134,7 +136,8 @@ erDiagram
   METRIC ||--o{ SPAN_METRIC_COMPUTATION : "scored in"
   SPAN_TYPE ||--o{ SPAN_METRIC_COMPUTATION : "targeted by"
   EVALUATION_RUN_SAMPLE ||--o{ SPAN_METRIC_COMPUTATION : "has"
-  GROUND_TRUTH ||--o{ SPAN_METRIC_COMPUTATION : "used by"
+  GROUND_TRUTH ||--o{ METRIC_COMPUTATION_GROUND_TRUTH : "used by"
+  SPAN_METRIC_COMPUTATION ||--o{ METRIC_COMPUTATION_GROUND_TRUTH : "uses"
   SPAN_METRIC_COMPUTATION ||--o| SINGLE_SPAN_METRIC_COMPUTATION : "extends (SINGLE)"
   SPAN_METRIC_COMPUTATION ||--o{ GROUP_SPAN_METRIC_COMPUTATION_SPAN : "extends (GROUP)"
   SPAN ||--o| SINGLE_SPAN_METRIC_COMPUTATION : "scored by"

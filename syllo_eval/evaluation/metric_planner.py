@@ -3,7 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -119,7 +119,7 @@ class MetricPlanItem:
 
   metric: EvaluationMetric
   target: MetricTarget
-  ground_truth: GroundTruth | None
+  ground_truths: Mapping[str, GroundTruth]
   skip_reason: str | None = None
 
   @property
@@ -154,16 +154,15 @@ class MetricPlanner:
     """
     Yield metric plan items for all applicable span/metric pairs in a trace.
 
-    Notes:
-      - For metrics requiring ground truth, missing rows are skipped and logged.
-      - For metrics not requiring ground truth, missing rows are allowed and yield ground_truth=None.
+    Each item carries the sample's ground truths for the keys its metric declares; the metric's
+    ``ground_truth_skip_reason`` decides whether they are enough, and insufficient ones are skipped and logged.
     """
     async with UnitOfWork(self.db_manager) as uow:
       spans = await uow.spans.list_by_trace(trace_id)
       ground_truths = await uow.ground_truths.list_by_sample(sample_id)
 
       ground_truth_by_key = {gt.key: gt for gt in ground_truths}
-      warned_missing_required_metrics: set[str] = set()
+      warned_metrics: set[str] = set()
       spans_by_span_type: dict[str, list[Span]] = defaultdict(list)
 
       for span in spans:
@@ -171,7 +170,10 @@ class MetricPlanner:
 
       for metric in self.metric_registry.list_registered():
         normalized_metric_name = self._normalize_metric_name(metric.name)
-        ground_truth = ground_truth_by_key.get(metric.ground_truth_key) if metric.ground_truth_key else None
+        metric_ground_truths = {
+          key: ground_truth_by_key[key] for key in metric.ground_truth_keys if key in ground_truth_by_key
+        }
+        ground_truth_skip_reason = metric.ground_truth_skip_reason(metric_ground_truths)
 
         for span_type in metric.target_span_types:
           grouped_spans = [span for span in spans_by_span_type.get(span_type, []) if metric.matches_span(span)]
@@ -187,21 +189,16 @@ class MetricPlanner:
             skip_reason = f'No spans found for target span type "{span_type}".'
           else:
             targets = self._build_targets(metric, span_type, grouped_spans)
-            if ground_truth is None and metric.requires_ground_truth:
-              skip_reason = 'Missing required ground truth.'
-              if normalized_metric_name not in warned_missing_required_metrics:
-                logger.warning(
-                  'Missing required ground truth for sample_id=%s, metric=%s. Skipping metric planning item.',
-                  sample_id,
-                  metric.name,
-                )
-                warned_missing_required_metrics.add(normalized_metric_name)
+            skip_reason = ground_truth_skip_reason
+            if skip_reason is not None and normalized_metric_name not in warned_metrics:
+              logger.warning('Skipping metric=%s for sample_id=%s: %s', metric.name, sample_id, skip_reason)
+              warned_metrics.add(normalized_metric_name)
 
           for target in targets:
             yield MetricPlanItem(
               metric=metric,
               target=target,
-              ground_truth=ground_truth,
+              ground_truths=metric_ground_truths,
               skip_reason=skip_reason or self._input_skip_reason(metric, target),
             )
 

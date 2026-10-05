@@ -20,5 +20,5 @@ class AnswerMetricTest(unittest.IsolatedAsyncioTestCase):
 
   async def test_empty_answer_length_is_zero_and_missing_is_skipped(self):
     metric = ResponseLengthMetric()
-    self.assertEqual((await metric.compute(span(answer=Answer(text='')), None)).score, 0)
-    self.assertEqual((await metric.compute(span(), None)).status, MetricComputationStatus.SKIPPED)
+    self.assertEqual((await metric.compute(span(answer=Answer(text='')), {})).score, 0)
+    self.assertEqual((await metric.compute(span(), {})).status, MetricComputationStatus.SKIPPED)
