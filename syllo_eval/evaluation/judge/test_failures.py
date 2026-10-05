@@ -45,6 +45,20 @@ class ClassifyJudgeErrorTest(unittest.TestCase):
 
 
 class JudgeBatchFailureTest(unittest.IsolatedAsyncioTestCase):
+  async def test_multiple_failures_keep_all_usage_and_the_first_error(self) -> None:
+    async def failed(tokens: int) -> LlmJudgeResponse:
+      raise JudgeOutputError('fake', f'invalid output {tokens}', usage={'input_tokens': tokens})
+
+    responses, failure = await judge_batch([failed(3), failed(5)])
+
+    self.assertEqual(responses, [])
+    assert failure is not None and failure.metadata is not None
+    self.assertEqual(failure.status, MetricComputationStatus.FAILED)
+    self.assertEqual(failure.metadata['failure'], 'invalid_output')
+    self.assertIn('invalid output 3', failure.error_message or '')
+    self.assertEqual((failure.metadata['judge_calls'], failure.metadata['judge_failed_calls']), (2, 2))
+    self.assertEqual(failure.metadata['judge_usage'], {'input_tokens': 8})
+
   async def test_a_failure_is_classified_and_counts_every_call_with_its_usage(self) -> None:
     async def judged() -> LlmJudgeResponse:
       output = JudgeScorePayload(score=1, reasoning='ok')
