@@ -176,11 +176,15 @@ def _build_metric_registry(
   custom_metrics: Sequence[EvaluationMetric] = (),
   include_builtin_metrics: bool = True,
   rubric_additions: Mapping[str, str] | None = None,
+  retrieval_span_types: Sequence[str] = ('agent_root',),
 ) -> MetricRegistry:
   registry = MetricRegistry(db_manager=db_manager)
   metrics = (
     build_available_metrics(
-      judge_client=judge_client, claim_extractor_client=claim_extractor_client, rubric_additions=rubric_additions
+      judge_client=judge_client,
+      claim_extractor_client=claim_extractor_client,
+      rubric_additions=rubric_additions,
+      retrieval_span_types=retrieval_span_types,
     )
     if include_builtin_metrics
     else []
@@ -661,6 +665,7 @@ class EvaluationService:
           max_concurrent_tasks=max_concurrent_tasks,
           sample_trace_timeout=sample_trace_timeout,
           sample_compute_timeout=sample_compute_timeout,
+          retrieval_span_types=options.retrieval_span_types,
         ),
         source_run_id=source_run_id,
       )
@@ -672,6 +677,7 @@ class EvaluationService:
         custom_metrics=self._custom_metrics,
         include_builtin_metrics=self._include_builtin_metrics,
         rubric_additions=rubric_additions,
+        retrieval_span_types=options.retrieval_span_types,
       )
       await metric_registry.sync_with_persistence()
 
@@ -747,6 +753,7 @@ class EvaluationService:
     max_concurrent_tasks: int,
     sample_trace_timeout: float | None,
     sample_compute_timeout: float | None,
+    retrieval_span_types: Sequence[str],
   ) -> dict[str, object | None]:
     provider = self._settings.llm_judge.provider
     model = None
@@ -766,6 +773,8 @@ class EvaluationService:
       'max_concurrent_tasks': max_concurrent_tasks,
       'sample_trace_timeout_seconds': sample_trace_timeout,
       'sample_compute_timeout_seconds': sample_compute_timeout,
+      # The span types the built-in retrieval metrics scored; custom metrics declare their own.
+      'retrieval_span_types': list(retrieval_span_types) if self._include_builtin_metrics else None,
       'prompt_versions': {
         metric_class.metric_name: version
         for metric_class in (BUILTIN_METRICS if self._include_builtin_metrics else ())

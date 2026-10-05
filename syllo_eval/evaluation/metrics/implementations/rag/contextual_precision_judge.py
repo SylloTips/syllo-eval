@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -5,14 +6,16 @@ from pydantic import BaseModel
 from syllo_eval.evaluation.judge.batch import judge_batch
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.judge.failures import mismatch_kind
 from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
   RetrievedItem,
-  extract_retrieved_items,
+  extract_retrieval_results,
   retrieval_skip_reason,
   retrieval_skip_result,
 )
+from syllo_eval.trace_semantics import RetrievalResult
 from syllo_eval.model import GroundTruth, GroundTruthKey, MetricComputationStatus, Span
 
 
@@ -34,14 +37,22 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
   prompt_version = 'v1'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
+  accepts_target_span_types = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient, rubric_addition: str | None = None):
+  def __init__(
+    self,
+    *,
+    judge_client: LlmJudgeClient,
+    rubric_addition: str | None = None,
+    target_span_types: Sequence[str] = ('agent_root',),
+  ):
     self._judge_client = judge_client
     self._rubric_addition = rubric_addition
+    self._target_span_types = tuple(target_span_types)
 
   @property
   def target_span_types(self) -> tuple[str, ...]:
-    return ('agent_root',)
+    return self._target_span_types
 
   def matches_span(self, span: Span) -> bool:
     return any(
@@ -74,36 +85,98 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
     )
     if skip_result is not None:
       return skip_result
-    retrieved_items = self._extract_retrieved_items(span)
+    # Each ranked result set is its own ranking: several are scored separately, never joined into one list.
+    rankings = [
+      (result, [RetrievedItem(item) for item in result.items])
+      for result in extract_retrieval_results(span, self.variant, self.retrieval_stage)
+    ]
+    judged = await self.judge_items(span, ground_truth, [items for _, items in rankings])
+    if isinstance(judged, MetricComputationResult):
+      return judged
+    judge_responses, judgments = judged
+    return self._build_result(rankings, judgments, judge_responses)
 
+  async def judge_items(
+    self, span: Span, ground_truth: GroundTruth, rankings: list[list[RetrievedItem]]
+  ) -> tuple[list[LlmJudgeResponse], list[ContextualPrecisionJudgment]] | MetricComputationResult:
+    """Judge every item of every ranking, one judge call per item.
+
+    Returns the responses and one judgment per item in input order, or a FAILED result. Override to judge items another
+    way; scoring and result metadata stay the same.
+    """
+    ranked_items = [(rank, item) for items in rankings for rank, item in enumerate(items, start=1)]
     judge_responses, failure = await judge_batch(
-      (self._judge_retrieved_item(span, ground_truth, rank, item) for rank, item in enumerate(retrieved_items, start=1))
+      (self._judge_retrieved_item(span, ground_truth, rank, item) for rank, item in ranked_items),
+      max_output_tokens=self.max_output_tokens,
     )
-
     if failure is not None:
       return failure
 
     judgments: list[ContextualPrecisionJudgment] = []
-    for rank, result in enumerate(judge_responses, start=1):
+    for (rank, _), result in zip(ranked_items, judge_responses):
       payload = result.output
       if len(payload.judgments) != 1:
-        return self._failed_judgment_count_result(retrieved_items, rank, payload, result, judge_responses)
+        return self._failed_judgment_count_result(
+          [item for _, item in ranked_items], rank, payload, result, judge_responses
+        )
       judgments.append(payload.judgments[0])
+    return judge_responses, judgments
 
-    score, rank_results, relevant_count = self._score(judgments)
+  def _build_result(
+    self,
+    rankings: list[tuple[RetrievalResult, list[RetrievedItem]]],
+    judgments: list[ContextualPrecisionJudgment],
+    responses: list[LlmJudgeResponse],
+  ) -> MetricComputationResult:
+    """Score each ranking, keying every judgment to its input item rather than to the rank and id the judge echoed."""
+    scored: list[dict[str, Any]] = []
+    echo_mismatches = 0
+    remaining = iter(judgments)
+    for result, items in rankings:
+      echoed = [next(remaining) for _ in items]
+      echo_mismatches += sum(
+        (judgment.rank, judgment.retrieved_id) != (rank, item.retrieved_id)
+        for rank, (item, judgment) in enumerate(zip(items, echoed), start=1)
+      )
+      score, rank_results, relevant_count = self._score(
+        [
+          judgment.model_copy(update={'rank': rank, 'retrieved_id': item.retrieved_id})
+          for rank, (item, judgment) in enumerate(zip(items, echoed), start=1)
+        ]
+      )
+      scored.append(
+        {
+          'query': result.query,
+          'score': score,
+          'counts': {'retrieved': len(items), 'relevant': relevant_count},
+          'rank_results': rank_results,
+        }
+      )
 
+    retrieved_count = sum(ranking['counts']['retrieved'] for ranking in scored)
+    relevant_count = sum(ranking['counts']['relevant'] for ranking in scored)
     metadata: dict[str, Any] = {
       'variant': self.variant,
       'retrieval_kind': self.variant,
-      'counts': {'retrieved': len(retrieved_items), 'relevant': relevant_count},
-      'rank_results': rank_results,
+      'counts': {'retrieved': retrieved_count, 'relevant': relevant_count, 'echo_mismatches': echo_mismatches},
     }
-    metadata.update(judge_metadata(judge_responses))
+    if len(scored) == 1:
+      score = scored[0]['score']
+      metadata['rank_results'] = scored[0]['rank_results']
+      reasoning = (
+        f'Contextual precision over {retrieved_count} retrieved {self.variant}s '
+        f'with {relevant_count} relevant {self.variant}s.'
+      )
+    else:
+      score = sum(ranking['score'] for ranking in scored) / len(scored)
+      metadata['counts']['rankings'] = len(scored)
+      metadata['rankings'] = scored
+      reasoning = (
+        f'Mean contextual precision over {len(scored)} rankings of {retrieved_count} retrieved {self.variant}s '
+        f'with {relevant_count} relevant {self.variant}s.'
+      )
+    metadata.update(judge_metadata(responses))
 
-    reasoning = (
-      f'Contextual precision over {len(retrieved_items)} retrieved {self.variant}s '
-      f'with {relevant_count} relevant {self.variant}s.'
-    )
     return MetricComputationResult(
       score=score,
       reasoning=reasoning,
@@ -144,9 +217,6 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
       )
     )
 
-  def _extract_retrieved_items(self, span: Span) -> list[RetrievedItem]:
-    return extract_retrieved_items(span, self.variant, self.retrieval_stage)
-
   def _failed_judgment_count_result(
     self,
     retrieved_items: list[RetrievedItem],
@@ -164,6 +234,7 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
       'retrieval_kind': self.variant,
       'counts': {'retrieved': len(retrieved_items), 'judgments': len(payload.judgments)},
       'rank': rank,
+      'failure': mismatch_kind(judge_response, self.max_output_tokens).value,
     }
     error_metadata.update(judge_metadata(responses))
 

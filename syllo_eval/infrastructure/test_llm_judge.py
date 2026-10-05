@@ -1,20 +1,27 @@
 import asyncio
+import json
 import unittest
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
+from google.genai import types
 from google.genai.errors import ClientError
+from google.genai.models import AsyncModels
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, SecretStr
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
 from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric, JudgeScorePayload
+from syllo_eval.evaluation.metrics.test_support import Judge
 from syllo_eval.infrastructure.llm_judge import build_llm_judge_client
 from syllo_eval.infrastructure.exceptions import DataMappingError
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.infrastructure.llm_judge.openai import OpenAILlmJudgeClient
-from syllo_eval.model import GroundTruth, Span
+from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 from syllo_eval.settings import GeminiJudgeSettings, LlmJudgeSettings, OpenAIJudgeSettings
 
 
@@ -34,46 +41,21 @@ class _FakeStructuredRunnable:
     return result
 
 
-class _FakeBoundChatModel:
-  def __init__(self, parent: '_FakeChatModel', bound_kwargs: dict[str, Any]):
-    self._parent = parent
-    self._bound_kwargs = bound_kwargs
-
-  def bind(self, **kwargs: Any) -> '_FakeBoundChatModel':
-    merged_kwargs = dict(self._bound_kwargs)
-    merged_kwargs.update(kwargs)
-    return _FakeBoundChatModel(self._parent, merged_kwargs)
-
-  def with_structured_output(
-    self,
-    schema: dict[str, Any] | type[BaseModel] | None = None,
-    *,
-    method: str = 'function_calling',
-    include_raw: bool = False,
-    **kwargs: Any,
-  ) -> Any:
-    self._parent.calls.append(
-      {
-        'schema': schema,
-        'method': method,
-        'include_raw': include_raw,
-        'kwargs': kwargs,
-        'bound_kwargs': dict(self._bound_kwargs),
-      }
-    )
-    return _FakeStructuredRunnable(self._parent._result, self._parent.inputs)
-
-
 class _FakeChatModel:
-  def __init__(self, result: dict[str, Any] | list[Any]):
-    self._result = result
-    self.calls: list[dict[str, Any]] = []
-    self.inputs: list[Any] = []
-    self.bind_calls: list[dict[str, Any]] = []
+  """A chat model whose structured runnable sees only options set on a model copy, as with real LangChain models."""
 
-  def bind(self, **kwargs: Any) -> _FakeBoundChatModel:
-    self.bind_calls.append(dict(kwargs))
-    return _FakeBoundChatModel(self, kwargs)
+  def __init__(self, result: dict[str, Any] | list[Any], options: dict[str, Any] | None = None, root=None):
+    self._result = result
+    self.options = options or {}
+    self._root = root or self
+    if root is None:
+      self.calls: list[dict[str, Any]] = []
+      self.inputs: list[Any] = []
+      self.copy_updates: list[dict[str, Any]] = []
+
+  def model_copy(self, *, update: dict[str, Any]) -> '_FakeChatModel':
+    self._root.copy_updates.append(dict(update))
+    return _FakeChatModel(self._result, {**self.options, **update}, self._root)
 
   def with_structured_output(
     self,
@@ -83,12 +65,10 @@ class _FakeChatModel:
     include_raw: bool = False,
     **kwargs: Any,
   ) -> Any:
-    return _FakeBoundChatModel(self, {}).with_structured_output(
-      schema=schema,
-      method=method,
-      include_raw=include_raw,
-      **kwargs,
+    self._root.calls.append(
+      {'schema': schema, 'method': method, 'include_raw': include_raw, 'kwargs': kwargs, 'options': dict(self.options)}
     )
+    return _FakeStructuredRunnable(self._result, self._root.inputs)
 
 
 class _FakeJudgeClient:
@@ -201,12 +181,13 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     self.assertIsNotNone(response.latency_seconds)
 
     self.assertEqual(len(fake_chat_model.calls), 1)
-    self.assertEqual(fake_chat_model.bind_calls, [{'temperature': 0.0, 'max_tokens': 400}])
+    # gpt-5 reasoning models take only their default temperature, so none is sent.
+    self.assertEqual(fake_chat_model.copy_updates, [{'max_tokens': 400}])
     call = fake_chat_model.calls[0]
     self.assertIs(call['schema'], JudgeScorePayload)
     self.assertEqual(call['method'], 'json_mode')
     self.assertTrue(call['include_raw'])
-    self.assertEqual(call['bound_kwargs'], {'temperature': 0.0, 'max_tokens': 400})
+    self.assertEqual(call['options'], {'max_tokens': 400})
     self.assertEqual(call['kwargs'], {})
 
     self.assertEqual(len(fake_chat_model.inputs), 1)
@@ -334,12 +315,12 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     self.assertIsNotNone(response.latency_seconds)
 
     self.assertEqual(len(fake_chat_model.calls), 1)
-    self.assertEqual(fake_chat_model.bind_calls, [{'temperature': 0.0, 'max_output_tokens': 400}])
+    self.assertEqual(fake_chat_model.copy_updates, [{'temperature': 0.0, 'max_output_tokens': 400}])
     call = fake_chat_model.calls[0]
     self.assertEqual(call['schema'], JudgeScorePayload.model_json_schema())
     self.assertEqual(call['method'], 'json_schema')
     self.assertTrue(call['include_raw'])
-    self.assertEqual(call['bound_kwargs'], {'temperature': 0.0, 'max_output_tokens': 400})
+    self.assertEqual(call['options'], {'temperature': 0.0, 'max_output_tokens': 400})
     self.assertEqual(call['kwargs'], {})
     self.assertEqual(fake_chat_model.inputs, [[('system', 'system'), ('human', 'user')]])
 
@@ -522,6 +503,61 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     sleep_mock.assert_awaited_once_with(60.0)
 
 
+class TestJudgeOptionsReachTheProvider(unittest.IsolatedAsyncioTestCase):
+  """Real LangChain chat models with a stubbed transport: what the provider receives, not what the client binds."""
+
+  _REQUEST = LlmJudgeRequest(
+    system_prompt='system', user_prompt='user', response_model=JudgeScorePayload, max_output_tokens=123
+  )
+
+  async def test_gemini_receives_the_temperature_and_the_output_limit(self) -> None:
+    configs: list[Any] = []
+
+    async def generate_content(self: AsyncModels, *, model: str, contents: Any, config: Any = None) -> Any:
+      configs.append(config)
+      part = types.Part(text='{"score": 1, "reasoning": "ok"}')
+      return types.GenerateContentResponse(
+        candidates=[
+          types.Candidate(content=types.Content(role='model', parts=[part]), finish_reason=types.FinishReason.STOP)
+        ]
+      )
+
+    chat_model = ChatGoogleGenerativeAI(model='gemini-test', api_key='test-key')
+    client = GeminiLlmJudgeClient(
+      GeminiJudgeSettings(api_key='test-key', model='gemini-test'), max_concurrent_requests=1, chat_model=chat_model
+    )
+    with patch.object(AsyncModels, 'generate_content', generate_content):
+      await client.judge(self._REQUEST)
+
+    self.assertEqual((configs[0].temperature, configs[0].max_output_tokens), (0.0, 123))
+
+  async def test_openai_receives_the_temperature_except_on_gpt_5_reasoning_models(self) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+      bodies.append(json.loads(request.content))
+      message = {'role': 'assistant', 'content': '{"score": 1, "reasoning": "ok"}'}
+      choice = {'index': 0, 'finish_reason': 'stop', 'message': message}
+      usage = {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}
+      completion = {'id': 'c', 'object': 'chat.completion', 'created': 0, 'model': 'm', 'choices': [choice]}
+      return httpx.Response(200, json={**completion, 'usage': usage})
+
+    for model, temperature in (('deepseek-v4-flash', 0.0), ('gpt-5-mini', None)):
+      chat_model = ChatOpenAI(
+        model=model,
+        api_key=SecretStr('test-key'),
+        base_url='http://judge.invalid/v1',
+        use_responses_api=False,
+        http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+      )
+      client = OpenAILlmJudgeClient(
+        OpenAIJudgeSettings(model=model, use_responses_api=False), max_concurrent_requests=1, chat_model=chat_model
+      )
+      with self.subTest(model=model):
+        await client.judge(self._REQUEST)
+        self.assertEqual((bodies[-1].get('temperature'), bodies[-1]['max_completion_tokens']), (temperature, 123))
+
+
 class TestLlmJudgeFactory(unittest.TestCase):
   def test_factory_returns_none_when_provider_is_disabled(self) -> None:
     config = LlmJudgeSettings(
@@ -561,22 +597,24 @@ class TestLlmJudgeFactory(unittest.TestCase):
 
 
 class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
-  async def test_compute_propagates_judge_call_errors(self) -> None:
+  async def test_a_judge_call_error_is_a_classified_failed_result(self) -> None:
     metric = _TestJudgeMetric(judge_client=_FakeJudgeClient(error=RuntimeError('judge service unavailable')))
 
-    with self.assertRaises(RuntimeError) as ctx:
-      await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), None)
 
-    self.assertIn('judge service unavailable', str(ctx.exception))
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    self.assertIn('judge service unavailable', result.error_message or '')
+    self.assertEqual(result.metadata, {'failure': 'provider', 'judge_calls': 1, 'judge_failed_calls': 1})
 
-  async def test_compute_propagates_payload_validation_errors(self) -> None:
+  async def test_an_invalid_payload_is_a_failed_result_that_keeps_its_usage(self) -> None:
+    usage = {'input_tokens': 10, 'output_tokens': 4, 'total_tokens': 14}
     metric = _TestJudgeMetric(
       judge_client=OpenAILlmJudgeClient(
         config=OpenAIJudgeSettings(),
         max_concurrent_requests=1,
         chat_model=_FakeChatModel(
           {
-            'raw': AIMessage(content=''),
+            'raw': AIMessage(content='', usage_metadata=usage),
             'parsed': {'score': 'invalid', 'reasoning': 'bad payload'},
             'parsing_error': None,
           }
@@ -584,5 +622,23 @@ class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
       )
     )
 
-    with self.assertRaises(DataMappingError):
-      await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), None)
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['failure'], 'invalid_output')
+    self.assertEqual(result.metadata['judge_usage'], usage)
+
+  async def test_judge_input_can_await_the_prompt_and_add_metadata(self) -> None:
+    class AwaitedPrompt(_TestJudgeMetric):
+      async def judge_input(self, span, ground_truth):
+        return 'awaited prompt', {'prompt_source': 'loaded'}
+
+    judge = Judge({'score': 0.5, 'reasoning': 'half'})
+
+    result = await AwaitedPrompt(judge_client=judge).compute(_make_span(), None)
+
+    self.assertEqual(judge.requests[0].user_prompt, 'awaited prompt')
+    self.assertEqual(result.score, 0.5)
+    assert result.metadata is not None
+    self.assertEqual((result.metadata['prompt_source'], result.metadata['judge_calls']), ('loaded', 1))

@@ -42,4 +42,14 @@ def build_sample_ground_truths(sample_id: UUID, dataset_sample: DatasetJsonSampl
       )
     )
 
+  if dataset_sample.claims:
+    ground_truths.append(
+      GroundTruth(
+        id=uuid4(),
+        sample_id=sample_id,
+        key=GroundTruthKey.EXPECTED_CLAIMS.value,
+        ground_truth_value={'claims': [claim.model_dump() for claim in dataset_sample.claims]},
+      )
+    )
+
   return ground_truths

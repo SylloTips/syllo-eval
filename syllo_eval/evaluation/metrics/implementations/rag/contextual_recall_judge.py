@@ -1,3 +1,5 @@
+import re
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -5,6 +7,7 @@ from pydantic import BaseModel
 from syllo_eval.evaluation.judge.batch import judge_batch
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.judge.failures import mismatch_kind
 from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
@@ -38,14 +41,22 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   prompt_version = 'v1'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
+  accepts_target_span_types = True
 
-  def __init__(self, *, judge_client: LlmJudgeClient, rubric_addition: str | None = None):
+  def __init__(
+    self,
+    *,
+    judge_client: LlmJudgeClient,
+    rubric_addition: str | None = None,
+    target_span_types: Sequence[str] = ('agent_root',),
+  ):
     self._judge_client = judge_client
     self._rubric_addition = rubric_addition
+    self._target_span_types = tuple(target_span_types)
 
   @property
   def target_span_types(self) -> tuple[str, ...]:
-    return ('agent_root',)
+    return self._target_span_types
 
   def matches_span(self, span: Span) -> bool:
     return any(
@@ -74,29 +85,47 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     retrieved_items = self._extract_retrieved_items(span)
     if not retrieved_items:
       # Nothing retrieved can support a statement, so recall is 0 without calling the judge.
-      return self._build_result(retrieved_items, [], [])
+      return self._build_result(retrieved_items, [], [], [])
     decomposition_result = await self._decompose_claims(ground_truth)
     claims = decomposition_result.output.claims
 
     if not claims:
-      return self._build_result(retrieved_items, [], [decomposition_result])
+      return self._build_result(retrieved_items, [], [], [decomposition_result])
 
+    judged = await self.judge_claims(span, retrieved_items, claims, prior_responses=[decomposition_result])
+    if isinstance(judged, MetricComputationResult):
+      return judged
+    judge_results, judgments = judged
+    return self._build_result(retrieved_items, claims, judgments, [decomposition_result, *judge_results])
+
+  async def judge_claims(
+    self,
+    span: Span,
+    retrieved_items: list[RetrievedItem],
+    claims: list[str],
+    *,
+    prior_responses: Sequence[LlmJudgeResponse] = (),
+  ) -> tuple[list[LlmJudgeResponse], list[ContextualRecallJudgment]] | MetricComputationResult:
+    """Judge whether each claim is attributable to the retrieved items, one judge call per claim.
+
+    Returns the responses and one judgment per claim in input order, or a FAILED result that also counts
+    ``prior_responses``. Override to judge claims another way; scoring and result metadata stay the same.
+    """
     judge_results, failure = await judge_batch(
       (self._judge_claim(span, retrieved_items, claim) for claim in claims),
-      prior_responses=[decomposition_result],
+      prior_responses=prior_responses,
+      max_output_tokens=self.max_output_tokens,
     )
     if failure is not None:
       return failure
 
     judgments: list[ContextualRecallJudgment] = []
-    responses: list[LlmJudgeResponse] = [decomposition_result, *judge_results]
     for claim, result in zip(claims, judge_results):
       payload = result.output
       if len(payload.judgments) != 1:
-        return self._failed_judgment_count_result(claim, payload, result, responses)
+        return self._failed_judgment_count_result(claim, payload, result, [*prior_responses, *judge_results])
       judgments.append(payload.judgments[0])
-
-    return self._build_result(retrieved_items, judgments, responses)
+    return judge_results, judgments
 
   def build_decomposition_system_prompt(self) -> str:
     return render_prompt(f'contextual_recall/{self.prompt_version}/decomposition_system.md')
@@ -153,11 +182,21 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   def _build_result(
     self,
     retrieved_items: list[RetrievedItem],
+    claims: list[str],
     judgments: list[ContextualRecallJudgment],
     responses: list[LlmJudgeResponse],
+    claim_ids: Sequence[str] | None = None,
   ) -> MetricComputationResult:
-    score, statement_results, attributable_count = self._score(judgments)
-    expected_statement_count = len(judgments)
+    """Score the judgments, one per claim, keyed to the claim rather than to the statement the judge echoed."""
+    score, statement_results, attributable_count = self._score(
+      [judgment.model_copy(update={'statement': claim}) for claim, judgment in zip(claims, judgments)]
+    )
+    for statement_result, claim_id in zip(statement_results, claim_ids or ()):
+      statement_result['claim_id'] = claim_id
+    expected_statement_count = len(claims)
+    echo_mismatches = sum(
+      _comparable(judgment.statement) != _comparable(claim) for claim, judgment in zip(claims, judgments)
+    )
 
     metadata: dict[str, Any] = {
       'variant': self.variant,
@@ -166,6 +205,7 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
         'retrieved': len(retrieved_items),
         'expected_statements': expected_statement_count,
         'attributable': attributable_count,
+        'echo_mismatches': echo_mismatches,
       },
       'statement_results': statement_results,
     }
@@ -195,6 +235,7 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
       'retrieval_kind': self.variant,
       'counts': {'judgments': len(payload.judgments)},
       'statement': claim,
+      'failure': mismatch_kind(judge_response, self.max_output_tokens).value,
     }
     error_metadata.update(judge_metadata(responses))
 
@@ -227,6 +268,11 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
 
     score = attributable_count / len(judgments) if judgments else 0.0
     return score, statement_results, attributable_count
+
+
+def _comparable(statement: str) -> str:
+  """The words of a statement, without case, punctuation or a leading list number."""
+  return ' '.join(re.findall(r'\w+', re.sub(r'^\s*\d+\.\s+', '', statement))).casefold()
 
 
 class ContextualRecallDocumentJudgeMetric(BaseContextualRecallJudgeMetric):

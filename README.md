@@ -85,8 +85,10 @@ for a family of metrics.
 | `ground_truth_output` | answer correctness, contextual precision and recall |
 | `document_ids`, `snippet_ids` | set precision and recall, nDCG@10 |
 | `plan` | plan efficiency and plan correctness |
+| `claims` | contextual recall over stored claims |
 
 Plan steps accept exactly `operation`, `instruction`, and optional JSON `parameters`; any other field is rejected.
+Claims are `{"id": ..., "text": ...}` objects with ids unique within the sample.
 Dataset names are unique, so importing a name that already exists fails.
 
 ## Connecting an agent
@@ -289,9 +291,19 @@ asyncio.run(main())
 | `contextual_precision_document_judge`, `contextual_precision_snippet_judge` | Whether relevant context ranks first | LLM judge, `ground_truth_output` |
 | `contextual_recall_document_judge`, `contextual_recall_snippet_judge` | How much of the expected answer the context supports | LLM judge, `ground_truth_output` |
 | `contextual_recall_document_claim_extractor`, `contextual_recall_snippet_claim_extractor` | Contextual recall over extracted claims | LLM judge, Orbitals, `ground_truth_output` |
+| `contextual_recall_document_stored_claims`, `contextual_recall_snippet_stored_claims` | Contextual recall over the sample's stored claims, without decomposing the answer | LLM judge, `claims` |
 
 Retrieval metrics score the agent's final `selected` context, separately for documents and snippets. Rank-based
-metrics skip result sets the adapter didn't mark as ranked. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
+metrics skip result sets the adapter didn't mark as ranked. A span with several ranked result sets holds several
+independent rankings: contextual precision and nDCG@10 score each one and report their mean, while set precision, set
+recall and contextual recall use their union. Judge results name the input documents and claims; the ids and
+statements the judge repeats back are only counted, as `echo_mismatches`. The retrieval metrics score `agent_root` by
+default; set `EVALUATION_RETRIEVAL_SPAN_TYPES` to score other spans, such as one span per search call.
+
+A judge failure is a failed computation whose `metadata.failure` says why: `misaligned` (judgments that don't match the
+judged items), `truncated` (the output reached its token limit), `invalid_output`, `context_overflow`, `timeout` or
+`provider`. Failed computations keep the usage of every judge call, the failed one included when the provider reported
+it. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
 is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
 
 Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are
@@ -328,6 +340,7 @@ In Python, you can build `Settings` directly instead.
 | `EVALUATION_MAX_CONCURRENT_TASKS` | `10` | Metric computations in parallel per sample |
 | `EVALUATION_SAMPLE_TRACE_TIMEOUT_SECONDS` | — | Deadline for the agent call and trace ingestion per sample |
 | `EVALUATION_SAMPLE_COMPUTE_TIMEOUT_SECONDS` | — | Deadline for metric computation per sample |
+| `EVALUATION_RETRIEVAL_SPAN_TYPES` | `["agent_root"]` | JSON list of the span types the built-in retrieval metrics score |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 `syllo_eval/settings.py` lists every option, including timeouts and retry backoffs.
