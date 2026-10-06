@@ -36,7 +36,6 @@ from metric_fakes import (
   QUESTION,
   ScriptedJudge,
   claims_truth,
-  ground_truths,
   precision_judgments,
   recall_judgments,
   search_span,
