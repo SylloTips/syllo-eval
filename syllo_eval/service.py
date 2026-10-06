@@ -1,10 +1,15 @@
 import logging
+import os
+import pkgutil
+import sys
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
+
+from pydantic_settings import SettingsConfigDict
 
 from syllo_eval.evaluation.claim_extractor import ClaimExtractorClient
 from syllo_eval.evaluation.judge import LlmJudgeClient
@@ -38,7 +43,7 @@ from syllo_eval.infrastructure.orbitals import OrbitalsClaimExtractorClient
 from syllo_eval.infrastructure.unit_of_work import TransactionalUnitOfWork, UnitOfWork
 from syllo_eval.model import EvaluationRun, EvaluationRunSample, EvaluationSampleStatus, EvaluationStatus
 from syllo_eval.orchestration.evaluation_orchestrator import EvaluationConfig, EvaluationOrchestrator
-from syllo_eval.settings import EvaluationSettings, Settings
+from syllo_eval.settings import EnvSettings, EvaluationSettings, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -791,6 +796,22 @@ class EvaluationService:
 
 
 ServiceFactory = Callable[[Settings], EvaluationService]
+
+
+class ServiceFactorySettings(EnvSettings):
+  model_config = SettingsConfigDict(env_prefix='SYLLO_EVAL_')
+
+  service_factory: str | None = None
+
+
+def load_service_factory(path: str | None = None) -> ServiceFactory:
+  """Import ``path`` (``module:attr``), else ``SYLLO_EVAL_SERVICE_FACTORY``; default to ``EvaluationService``."""
+  path = path or ServiceFactorySettings().service_factory
+  if path is None:
+    return EvaluationService
+  if os.getcwd() not in sys.path:
+    sys.path.insert(0, os.getcwd())
+  return pkgutil.resolve_name(path)
 
 
 def _build_sample_status_counts(

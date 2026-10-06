@@ -25,4 +25,10 @@ async def judge_batch(
     if not isinstance(exc, Exception):
       raise
     responses = [task.result() for task in tasks if not task.cancelled() and task.exception() is None]
-    return responses, judge_failure_result(exc, [*prior_responses, *responses], max_output_tokens=max_output_tokens)
+    failed_errors = [error for task in tasks if not task.cancelled() and (error := task.exception()) is not None]
+    return responses, judge_failure_result(
+      exc,
+      [*prior_responses, *responses],
+      max_output_tokens=max_output_tokens,
+      failed_errors=failed_errors,
+    )

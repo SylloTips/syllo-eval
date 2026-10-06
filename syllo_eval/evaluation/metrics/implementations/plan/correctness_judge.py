@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_actual_plan,
@@ -30,17 +32,17 @@ class PlanCorrectnessJudgeMetric(BaseLlmJudgeMetric):
     return ('agent_root',)
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
+  def ground_truth_keys(self) -> tuple[str, ...]:
+    return (GroundTruthKey.EXPECTED_PLAN.value,)
 
-  @property
-  def ground_truth_key(self) -> str:
-    return GroundTruthKey.EXPECTED_PLAN.value
+  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
+    return None
 
   def build_system_prompt(self) -> str:
     return render_prompt(f'plan_correctness/{self.prompt_version}/system.md', rubric_addition=self._rubric_addition)
 
-  def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
+  def build_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> str:
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     return render_prompt(
       f'plan_correctness/{self.prompt_version}/user.md',
       request=display_text(span.semantics.request),

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanGroupEvaluationMetric
 from syllo_eval.model import GroundTruth, Span
@@ -11,15 +11,11 @@ class LlmCallsMetric(SpanGroupEvaluationMetric):
   metric_description = 'Returns the number of llm spans in the trace.'
 
   @property
-  def requires_ground_truth(self) -> bool:
-    return False
-
-  @property
   def target_span_types(self) -> tuple[str, ...]:
     return ('llm',)
 
-  async def compute(self, spans: Sequence[Span], ground_truth: GroundTruth | None) -> MetricComputationResult:
-    del ground_truth
+  async def compute(self, spans: Sequence[Span], ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del ground_truths
     llm_call_count = len(spans)
     return MetricComputationResult(
       score=float(llm_call_count),

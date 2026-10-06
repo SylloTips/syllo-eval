@@ -166,8 +166,18 @@ built in; register others with `trace_adapters_by_name={'my-source': MyTraceAdap
 
 ### Your own CLI and HTTP API
 
-Both entry points accept a service factory, so a small package of your own gets the full CLI and API with your agents
-registered:
+The installed CLI and API load a service factory by import path from the `SYLLO_EVAL_SERVICE_FACTORY` setting, and
+the CLI also from `--service-factory module:attr`. The flag wins over a factory set in code, which wins over the
+setting. The working directory is importable, so a local `my_eval.py` works without packaging:
+
+```bash
+poetry run syllo-eval --service-factory my_eval:build_service run --agent-name my-agent \
+  --agent-version-tag v1 --dataset-id <dataset-uuid>
+SYLLO_EVAL_SERVICE_FACTORY=my_eval:build_service poetry run uvicorn syllo_eval.API.app:app --port 8005
+```
+
+Both entry points also accept a service factory in Python, so a small package of your own gets the full CLI and API
+with your agents registered:
 
 ```python
 # my_eval/cli.py
@@ -206,8 +216,8 @@ script_location = syllo_eval:migrations
 ### CLI
 
 ```bash
-# Fresh run: call the agent for every sample, then score
-poetry run my-eval --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid> \
+# Fresh run: call the agent for every sample, then score (needs a registered caller)
+poetry run my-eval run --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid> \
   --metrics answer_correctness_judge,set_recall_snippet \
   --report-path reports/run.json
 
@@ -220,7 +230,13 @@ poetry run my-eval repeat <evaluation-run-uuid> --rubric-additions strict.json
 # Score exported trace files without calling the agent or the trace source
 poetry run my-eval import traces/*.json --trace-adapter my-source \
   --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid>
+
+# Print the JSON report of a stored run, or write it with --report-path
+poetry run my-eval report <evaluation-run-uuid>
 ```
+
+`import` needs no caller, so it works with the installed `syllo-eval` as is; `run` fails without one and points to
+`import`.
 
 A trace file holds one trace, `{"trace_id": "...", "spans": [...]}`, where `spans` are the source records the adapter
 expects; for `phoenix`, the flattened span records that `PhoenixClient.get_trace_json` returns. The request text comes from
@@ -231,7 +247,8 @@ Without `--metrics`, a fresh run uses every metric available with your configura
 the source run. `--rubric-additions` takes a JSON file mapping selected LLM-judge metrics to extra requirements, for
 example `{"answer_correctness_judge": "The answer must cite the warranty clause."}`; a repeat without it reuses the
 source run's additions. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
-`PARTIALLY_COMPLETED` runs, and non-zero when the run fails. Run `--help` on any command for all options.
+`PARTIALLY_COMPLETED` runs, and non-zero when the run fails. `run`, `import` and `repeat` also write the report with
+`--report-path`. Run `--help` on any command for all options.
 
 ### HTTP API
 
@@ -316,7 +333,11 @@ reports them. The report sums judge calls and cached input tokens per run and pe
 
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.
-`syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example.
+`syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example. A metric lists the
+ground-truth keys it reads in `ground_truth_keys`, and `compute(target, ground_truths)` receives those the sample has,
+by key. Every declared key is required by default; override `ground_truth_skip_reason(ground_truths)` to make some
+optional or to accept any one of them, returning `None` when the metric can run. Each computation records the ground
+truths it used.
 
 ## Configuration
 

@@ -1,7 +1,7 @@
 """Shared logic for set-based RAG metrics."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
@@ -38,16 +38,17 @@ class BaseSetRagMetric(SpanEvaluationMetric, ABC):
     return retrieval_skip_reason(span, self.variant, stage=self.retrieval_stage)
 
   @property
-  def ground_truth_key(self) -> str:
+  def ground_truth_keys(self) -> tuple[str, ...]:
     key = GroundTruthKey.RELEVANT_SNIPPET_IDS if self.variant == 'snippet' else GroundTruthKey.RELEVANT_DOCUMENT_IDS
-    return key.value
+    return (key.value,)
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     """Compute score comparing predicted IDs to ground-truth relevant IDs."""
     skip_result = retrieval_skip_result(span, metric_name=self.name, variant=self.variant, stage=self.retrieval_stage)
     if skip_result is not None:
       return skip_result
 
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     if ground_truth is None:
       return self._error_result('Missing ground truth for metric computation.')
 

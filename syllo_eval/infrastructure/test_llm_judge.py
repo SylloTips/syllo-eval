@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -99,8 +100,8 @@ class _TestJudgeMetric(BaseLlmJudgeMetric):
   def build_system_prompt(self) -> str:
     return 'system'
 
-  def build_user_prompt(self, span: Span, ground_truth: GroundTruth | None) -> str:
-    del span, ground_truth
+  def build_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> str:
+    del span, ground_truths
     return 'user'
 
 
@@ -600,7 +601,7 @@ class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
   async def test_a_judge_call_error_is_a_classified_failed_result(self) -> None:
     metric = _TestJudgeMetric(judge_client=_FakeJudgeClient(error=RuntimeError('judge service unavailable')))
 
-    result = await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), {})
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     self.assertIn('judge service unavailable', result.error_message or '')
@@ -622,7 +623,7 @@ class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
       )
     )
 
-    result = await metric.compute(_make_span(), None)
+    result = await metric.compute(_make_span(), {})
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None
@@ -631,12 +632,12 @@ class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
 
   async def test_judge_input_can_await_the_prompt_and_add_metadata(self) -> None:
     class AwaitedPrompt(_TestJudgeMetric):
-      async def judge_input(self, span, ground_truth):
+      async def judge_input(self, span, ground_truths):
         return 'awaited prompt', {'prompt_source': 'loaded'}
 
     judge = Judge({'score': 0.5, 'reasoning': 'half'})
 
-    result = await AwaitedPrompt(judge_client=judge).compute(_make_span(), None)
+    result = await AwaitedPrompt(judge_client=judge).compute(_make_span(), {})
 
     self.assertEqual(judge.requests[0].user_prompt, 'awaited prompt')
     self.assertEqual(result.score, 0.5)

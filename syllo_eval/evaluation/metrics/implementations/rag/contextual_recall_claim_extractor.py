@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from syllo_eval.evaluation.claim_extractor import (
   ClaimExtractionResult,
@@ -29,8 +29,8 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
     super().__init__(judge_client=judge_client, rubric_addition=rubric_addition, target_span_types=target_span_types)
     self._claim_extractor_client = claim_extractor_client
 
-  async def compute(self, span: Span, ground_truth: GroundTruth | None) -> MetricComputationResult:
-    assert ground_truth is not None
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    ground_truth = ground_truths[self.ground_truth_keys[0]]
 
     skip_result = retrieval_skip_result(
       span, metric_name=self.name, variant=self.variant, stage=self.retrieval_stage, require_content=True

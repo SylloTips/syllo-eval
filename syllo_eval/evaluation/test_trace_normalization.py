@@ -63,14 +63,10 @@ class DocumentGroup(SpanGroupEvaluationMetric):
   def target_span_types(self):
     return ('retrieval',)
 
-  @property
-  def requires_ground_truth(self):
-    return False
-
   def matches_span(self, span):
     return any(result.kind == 'document' for result in span.semantics.retrieval)
 
-  async def compute(self, spans, ground_truth):
+  async def compute(self, spans, ground_truths):
     ids = {item.id for s in spans for result in s.semantics.retrieval for item in result.items}
     return MetricComputationResult(score=float(len(ids)))
 
@@ -99,7 +95,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
       target.external_id = id
       spans.append(target)
     metrics = [SearchDocumentPrecision(), SearchSnippetPrecision(), DocumentGroup()]
-    truths = [truth(relevant_ids=['d1']), truth(relevant_ids=['s1'])]
+    truths = [truth(relevant_ids=['d1'])['relevant_document_ids'], truth(relevant_ids=['s1'])['relevant_snippet_ids']]
     truths[0].key = 'relevant_document_ids'
     truths[1].key = 'relevant_snippet_ids'
     uow = AsyncMock()
@@ -112,7 +108,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
       items = [item async for item in planner.iter_plan_items('t', uuid4())]
     self.assertEqual([item.target.span_ids for item in items], [['a'], ['c'], ['b'], ['a', 'c']])
     self.assertTrue(all(item.skip_reason is None for item in items))
-    self.assertEqual((await metrics[-1].compute(items[-1].target.compute_input, None)).score, 3)
+    self.assertEqual((await metrics[-1].compute(items[-1].target.compute_input, {})).score, 3)
 
     # The group hook can partition the same selected spans without rewriting ingestion.
     class PartitionedGroup(DocumentGroup):

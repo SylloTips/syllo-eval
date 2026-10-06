@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import json
 import logging
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
@@ -10,10 +9,12 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from syllo_eval.service import (
+  AgentCallerSelectionError,
   EvaluationService,
   MetricSelectionError,
   ServiceFactory,
   build_db_manager,
+  load_service_factory,
   resolve_selected_metric_names_csv,
 )
 from syllo_eval.datasets import (
@@ -86,9 +87,25 @@ def _add_rubric_additions_argument(parser: argparse.ArgumentParser) -> None:
   )
 
 
+def build_main_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(prog=prog, description='Evaluate agents from the traces they leave.')
+  parser.add_argument(
+    '--service-factory',
+    type=_parse_non_empty,
+    default=None,
+    help='module:attr of a callable that builds the EvaluationService from Settings. '
+    'Overrides the factory set in code and SYLLO_EVAL_SERVICE_FACTORY.',
+  )
+  parser.add_argument(
+    'command', choices=['run', 'import', 'repeat', 'report', 'dataset'], help='Command to run; see <command> --help.'
+  )
+  parser.add_argument('args', nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+  return parser
+
+
 def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-    prog=prog,
+    prog=f'{prog} run',
     description='Run an evaluation for one agent/dataset by calling the agent for each sample.',
   )
   parser.add_argument(
@@ -178,16 +195,16 @@ async def _run(
       selected_metric_names=selected_metric_names,
       rubric_additions=rubric_additions,
     )
-    await _write_report(service, run, report_path)
+    await _write_report(service, run.id, report_path)
     return run
   finally:
     await service.close()
 
 
-async def _write_report(service: EvaluationService, run: EvaluationRun, report_path: Path | None) -> None:
+async def _write_report(service: EvaluationService, run_id: UUID, report_path: Path | None) -> None:
   if report_path is None:
     return
-  report = await service.get_evaluation_report(run.id)
+  report = await service.get_evaluation_report(run_id)
   report_path.parent.mkdir(parents=True, exist_ok=True)
   report_path.write_text(report.model_dump_json(indent=2))
   logger.info('Evaluation report written to %s', report_path)
@@ -208,7 +225,7 @@ async def _import(service: EvaluationService, args: argparse.Namespace) -> Evalu
       rubric_additions=args.rubric_additions,
     )
     run = await started.execute()
-    await _write_report(service, run, args.report_path)
+    await _write_report(service, run.id, args.report_path)
     return run
   finally:
     await service.close()
@@ -221,6 +238,7 @@ async def _repeat(
   sample_compute_timeout: float | None,
   selected_metric_names: Sequence[str] | None,
   rubric_additions: dict[str, str] | None,
+  report_path: Path | None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
@@ -231,7 +249,20 @@ async def _repeat(
       max_concurrent_tasks=max_concurrent_tasks,
       sample_compute_timeout=sample_compute_timeout,
     )
-    return await started.execute()
+    run = await started.execute()
+    await _write_report(service, run.id, report_path)
+    return run
+  finally:
+    await service.close()
+
+
+async def _report(service: EvaluationService, run_id: UUID, report_path: Path | None) -> None:
+  try:
+    await service.initialize()
+    if report_path is None:
+      print((await service.get_evaluation_report(run_id)).model_dump_json(indent=2))
+    else:
+      await _write_report(service, run_id, report_path)
   finally:
     await service.close()
 
@@ -306,6 +337,7 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     default=None,
     help='Maximum number of concurrent metric computations per sample.',
   )
+  parser.add_argument('--report-path', type=Path, default=None, help='If set, write the JSON report to this path.')
   parser.add_argument(
     '--log-level',
     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -313,6 +345,19 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     help='Logging level.',
   )
   _add_rubric_additions_argument(parser)
+  return parser
+
+
+def build_report_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(prog=f'{prog} report', description='Print the JSON report of a stored run.')
+  parser.add_argument('run_id', type=_parse_uuid, help='Evaluation run UUID.')
+  parser.add_argument('--report-path', type=Path, default=None, help='Write the report to this path instead.')
+  parser.add_argument(
+    '--log-level',
+    choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+    default=None,
+    help='Logging level.',
+  )
   return parser
 
 
@@ -353,19 +398,26 @@ def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
 
 
 def main(
-  argv: Sequence[str] | None = None, service_factory: ServiceFactory = EvaluationService, prog: str = 'syllo-eval'
+  argv: Sequence[str] | None = None, service_factory: ServiceFactory | None = None, prog: str = 'syllo-eval'
 ) -> int:
   load_settings_env(override=False)
-  raw_argv = list(argv) if argv is not None else sys.argv[1:]
-  if raw_argv[:1] == ['repeat']:
-    return _main_repeat(raw_argv[1:], service_factory, prog)
-  if raw_argv[:1] == ['dataset']:
-    return _main_dataset(raw_argv[1:], prog)
-  if raw_argv[:1] == ['import']:
-    return _main_import(raw_argv[1:], service_factory, prog)
+  main_parser = build_main_parser(prog)
+  main_args = main_parser.parse_args(argv)
+  if main_args.service_factory is not None or service_factory is None:
+    try:
+      service_factory = load_service_factory(main_args.service_factory)
+    except (ImportError, AttributeError, ValueError) as err:
+      main_parser.error(f'Cannot load service factory: {err}')
 
+  if main_args.command == 'dataset':
+    return _main_dataset(main_args.args, prog)
+  commands = {'run': _main_run, 'import': _main_import, 'repeat': _main_repeat, 'report': _main_report}
+  return commands[main_args.command](main_args.args, service_factory, prog)
+
+
+def _main_run(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:
   parser = build_parser(prog)
-  args = parser.parse_args(raw_argv)
+  args = parser.parse_args(argv)
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
@@ -395,6 +447,9 @@ def main(
         rubric_additions=args.rubric_additions,
       )
     )
+  except AgentCallerSelectionError as err:
+    logger.error('%s Pass --service-factory, or score exported traces with `%s import`.', err, prog)
+    return 1
   except Exception:
     logger.exception('Evaluation run failed')
     return 1
@@ -516,6 +571,7 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
         sample_compute_timeout=args.sample_compute_timeout_seconds,
         selected_metric_names=selected_metric_names,
         rubric_additions=args.rubric_additions,
+        report_path=args.report_path,
       )
     )
   except Exception:
@@ -535,6 +591,17 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
     )
   )
   return _exit_code_for_status(run.status)
+
+
+def _main_report(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -> int:
+  args = build_report_parser(prog).parse_args(argv)
+  configure_logging(LoggingSettings.from_env(level_override=args.log_level))
+  try:
+    asyncio.run(_report(service_factory(Settings()), args.run_id, args.report_path))
+  except Exception:
+    logger.exception('Evaluation report failed')
+    return 1
+  return 0
 
 
 if __name__ == '__main__':

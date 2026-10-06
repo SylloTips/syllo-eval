@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 from syllo_eval.evaluation.judge import LlmJudgeResponse
-from syllo_eval.model import GroundTruth, Span
+from syllo_eval.model import GroundTruth, GroundTruthKey, Span
 from syllo_eval.trace_semantics import SpanSemantics
 
 
@@ -22,8 +22,10 @@ def span(**semantics) -> Span:
   )
 
 
-def truth(**payload) -> GroundTruth:
-  return GroundTruth(id=uuid4(), sample_id=uuid4(), key='expected_output', ground_truth_value=payload)
+def truth(**payload) -> dict[str, GroundTruth]:
+  """One ground truth under every key, so it reaches whichever key the metric reads."""
+  ground_truth = GroundTruth(id=uuid4(), sample_id=uuid4(), key='expected_output', ground_truth_value=payload)
+  return {key.value: ground_truth for key in GroundTruthKey}
 
 
 class Judge:

@@ -60,8 +60,9 @@ def judge_failure_result(
   *,
   max_output_tokens: int | None = None,
   metadata: dict[str, Any] | None = None,
+  failed_errors: Sequence[BaseException] = (),
 ) -> MetricComputationResult:
-  """A FAILED result for a judge call that raised: its failure kind, and the usage of every call, the failed one too."""
+  """Classify the first error and keep usage from all successful and failed calls."""
   return MetricComputationResult(
     score=None,
     status=MetricComputationStatus.FAILED,
@@ -69,7 +70,7 @@ def judge_failure_result(
     metadata={
       **(metadata or {}),
       'failure': classify_judge_error(error, max_output_tokens).value,
-      **judge_metadata(responses, failed_usages=[getattr(error, 'usage', None)]),
+      **judge_metadata(responses, failed_usages=[getattr(item, 'usage', None) for item in failed_errors or (error,)]),
     },
   )
 
