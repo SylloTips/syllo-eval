@@ -6,20 +6,18 @@ from syllo_eval.model import GroundTruth, GroundTruthKey
 
 def build_sample_ground_truths(sample_id: UUID, dataset_sample: DatasetJsonSample) -> list[GroundTruth]:
   """Build one ground-truth row per ground-truth kind available on a dataset sample."""
-  ground_truths = [
-    GroundTruth(
-      id=uuid4(),
-      sample_id=sample_id,
-      key=GroundTruthKey.RELEVANT_DOCUMENT_IDS.value,
-      ground_truth_value={'relevant_ids': list(dataset_sample.document_ids)},
-    ),
-    GroundTruth(
-      id=uuid4(),
-      sample_id=sample_id,
-      key=GroundTruthKey.RELEVANT_SNIPPET_IDS.value,
-      ground_truth_value={'relevant_ids': list(dataset_sample.snippet_ids)},
-    ),
-  ]
+  ground_truths: list[GroundTruth] = []
+
+  for key, relevant_ids in (
+    (GroundTruthKey.RELEVANT_DOCUMENT_IDS, dataset_sample.document_ids),
+    (GroundTruthKey.RELEVANT_SNIPPET_IDS, dataset_sample.snippet_ids),
+  ):
+    if relevant_ids is not None:
+      ground_truths.append(
+        GroundTruth(
+          id=uuid4(), sample_id=sample_id, key=key.value, ground_truth_value={'relevant_ids': list(relevant_ids)}
+        )
+      )
 
   expected_output = (dataset_sample.ground_truth_output or '').strip()
   if expected_output:

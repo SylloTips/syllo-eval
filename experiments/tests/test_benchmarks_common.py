@@ -71,7 +71,7 @@ class CheckBenchmarkTest(unittest.TestCase):
       self.assertIn(expected, errors)
 
   def test_samples_without_gold_documents_are_a_warning(self) -> None:
-    samples = [DatasetJsonSample(input_prompt='Who approved the budget?', document_ids=[])]
+    samples = [DatasetJsonSample(input_prompt='Who approved the budget?')]
     benchmark = _benchmark(samples=samples, records=[{'sample_key': 'q1'}])
 
     report = check_benchmark(benchmark, expected_samples=1)

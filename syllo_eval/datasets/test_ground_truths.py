@@ -58,17 +58,16 @@ class BuildSampleGroundTruthsTest(unittest.TestCase):
     for ground_truth in ground_truths:
       self.assertEqual(ground_truth.sample_id, SAMPLE_ID)
 
-  def test_minimal_sample_builds_only_relevant_id_rows(self) -> None:
-    sample = DatasetJsonSample(input_prompt='Count contracts')
+  def test_minimal_sample_builds_no_rows(self) -> None:
+    self.assertEqual(build_sample_ground_truths(SAMPLE_ID, DatasetJsonSample(input_prompt='Count contracts')), [])
+
+  def test_empty_relevant_ids_are_a_label(self) -> None:
+    sample = DatasetJsonSample(input_prompt='Count contracts', document_ids=[])
 
     ground_truths = build_sample_ground_truths(SAMPLE_ID, sample)
 
-    self.assertEqual(
-      {ground_truth.key for ground_truth in ground_truths},
-      {GroundTruthKey.RELEVANT_DOCUMENT_IDS.value, GroundTruthKey.RELEVANT_SNIPPET_IDS.value},
-    )
-    for ground_truth in ground_truths:
-      self.assertEqual(ground_truth.ground_truth_value, {'relevant_ids': []})
+    self.assertEqual([ground_truth.key for ground_truth in ground_truths], [GroundTruthKey.RELEVANT_DOCUMENT_IDS.value])
+    self.assertEqual(ground_truths[0].ground_truth_value, {'relevant_ids': []})
 
   def test_claims_become_one_expected_claims_row(self) -> None:
     claims = [ExpectedClaim(id='c1', text='Dana approved it.'), ExpectedClaim(id='c2', text='In May.')]

@@ -46,10 +46,12 @@ def convert(
 
   article_ids = [str(article['id']) for article in knowledge_base]
   length_by_id = {str(article['id']): len(article['contents']) for article in knowledge_base}
-  gold_ids = [doc for sample in samples for doc in sample.document_ids]
+  gold_ids = [doc for sample in samples for doc in sample.document_ids or ()]
   stats: dict[str, JsonValue] = {
     'samples_by_config': dict(Counter(str(record['config']) for record in records)),
-    'gold_documents_per_sample': {str(k): v for k, v in sorted(Counter(len(s.document_ids) for s in samples).items())},
+    'gold_documents_per_sample': {
+      str(k): v for k, v in sorted(Counter(len(s.document_ids or ()) for s in samples).items())
+    },
     'gold_references': len(gold_ids),
     'distinct_gold_documents': len(set(gold_ids)),
     'knowledge_base': {
