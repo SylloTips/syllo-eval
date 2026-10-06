@@ -87,7 +87,9 @@ for a family of metrics.
 | `plan` | plan efficiency and plan correctness |
 | `claims` | contextual recall over stored claims |
 
-Omit `document_ids` or `snippet_ids` when a sample is unlabeled, and their metrics skip it.
+Omit `document_ids` or `snippet_ids` when a sample is unlabeled, and their metrics skip it. An empty list means no
+item is relevant: set precision scores 1.0 only if nothing was selected, while set recall and nDCG@10, being
+undefined, are skipped.
 Plan steps accept exactly `operation`, `instruction`, and optional JSON `parameters`; any other field is rejected.
 Claims are `{"id": ..., "text": ...}` objects with ids unique within the sample.
 Dataset names are unique, so importing a name that already exists fails.
