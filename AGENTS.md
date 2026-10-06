@@ -59,7 +59,7 @@ Repeat evaluation reuses stored traces and runs only metric planning and computa
 - Agent/trace failures fail the sample. Individual metric failures become failed computations; judge metrics return them with a `metadata.failure` class and the usage of every judge call. Orchestration or persistence failures fail the compute phase. Persist missing-target skips so reporting retains metric coverage.
 - Trace and compute have separate optional deadlines. The trace deadline includes the agent call; lifecycle persistence stays outside deadlines. On cancellation, persist sample failure with shielding, then propagate cancellation.
 - Reports read persisted data. Use saved sample/metric plans for totals and coverage, including missing samples and metrics with zero computations. Keep agent usage separate from judge usage and deduplicate by trace/call identity.
-- Alembic migrations are manually applied raw SQL in `syllo_eval/migrations/`, without ORM autogeneration. Never run migrations automatically from application startup or container commands. Confirm the database target before `poetry run alembic upgrade head`.
+- Alembic migrations are raw SQL in `syllo_eval/migrations/`, without ORM autogeneration. Never run them from application startup or the image's command: the Compose `migrate` service applies them before the API starts, and other deployments apply them as their own step. Confirm the database target before `poetry run alembic upgrade head`.
 
 ## Where to look
 
