@@ -24,8 +24,8 @@ The three benchmarks are pinned by commit and converted as follows (`benchmarks/
 - **τ²-bench retail, 114 samples:**
   - **Prompt:** the user scenario, rendered exactly as tau2 renders it for its user simulator. This was verified
     byte-identical with tau2 on all 114 tasks.
-  - **Expected plan:** the reference tool calls in order. Each step's instruction is the sorted-key JSON of the
-    arguments, and its parameters are the arguments themselves.
+  - **Expected plan:** the reference tool calls in order. Each step's parameters are the call's arguments, and its
+    instruction is empty.
   - Tasks 24 and 57 have no reference calls. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
   - **Reward at the pin:** 112 tasks multiply the database check by the natural-language assertions, and tasks 33
     and 34 use the database check alone.
@@ -40,8 +40,8 @@ The three benchmarks are pinned by commit and converted as follows (`benchmarks/
     same units with the same document text.
   - The search span carries the user question, so the judge sees the same request as in a single-search agent.
 - **Answers (AC):** one unit per question.
-- **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, and each call's arguments
-  appear in its instruction text, because the plan judge renders operation, instruction and output only.
+- **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, with each call's arguments
+  as the step input and its result as the step output. The plan judge also sees each step's status.
 
 ## Claims
 

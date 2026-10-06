@@ -2,8 +2,7 @@
 
 A sample's input prompt is the task's user scenario exactly as tau2 renders it for its user simulator: it identifies the
 task uniquely and is what the agent's customer acts out. Each reference tool call becomes one plan step whose
-instruction renders the call's arguments, because the plan judge shows only a step's operation, instruction and output.
-The Phase 5 adapter must render executed tool calls with the same ``render_arguments``.
+parameters are the call's arguments; the Phase 5 adapter puts executed tool calls' arguments in the step input.
 """
 
 import json
@@ -54,11 +53,6 @@ def render_user_scenario(user_scenario: Mapping[str, Any]) -> str:
   return '\n'.join(lines)
 
 
-def render_arguments(arguments: Mapping[str, JsonValue]) -> str:
-  """Arguments as sorted-key JSON: key order varies across reference calls, list order is meaningful."""
-  return json.dumps(arguments, ensure_ascii=False, sort_keys=True)
-
-
 def convert(tasks: Sequence[Mapping[str, Any]], splits: Mapping[str, Sequence[str]]) -> ConvertedBenchmark:
   """Convert the tasks in file order; every task must belong to the ``base`` split, and to train or test."""
   task_ids = [task['id'] for task in tasks]
@@ -72,9 +66,7 @@ def convert(tasks: Sequence[Mapping[str, Any]], splits: Mapping[str, Sequence[st
     criteria = task['evaluation_criteria']
     actions = criteria.get('actions') or []
     plan = [
-      DatasetJsonPlanStep(
-        operation=action['name'], instruction=render_arguments(action['arguments']), parameters=action['arguments']
-      )
+      DatasetJsonPlanStep(operation=action['name'], instruction='', parameters=action['arguments'])
       for action in actions
     ]
     samples.append(DatasetJsonSample(input_prompt=render_user_scenario(task['user_scenario']), plan=plan or None))

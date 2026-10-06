@@ -18,7 +18,7 @@ class PlanCorrectnessJudgeMetric(BaseLlmJudgeMetric):
     'Uses an LLM judge to score whether the agent plan correctly solves the user request, '
     'optionally informed by an expected plan.'
   )
-  prompt_version = 'v1'
+  prompt_version = 'v2'
 
   def input_skip_reason(self, span: Span) -> str | None:
     return (
