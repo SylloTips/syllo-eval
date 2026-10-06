@@ -42,6 +42,7 @@ from metric_fakes import (
   search_span,
   span,
   truth,
+  truths,
   without_judge_keys,
 )
 
@@ -83,11 +84,11 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     ablation_judge = ScriptedJudge(precision_judgments(*reversed(decisions)))
 
     main = await ContextualPrecisionDocumentJudgeMetric(target_span_types=SEARCH, judge_client=main_judge).compute(
-      target, ground_truths(truth())
+      target, truths(truth())
     )
     ablation = await ContextualPrecisionSC(
       target_span_types=SEARCH, judge_client=ablation_judge, output_token_limit=LIMIT
-    ).compute(target, ground_truths(truth()))
+    ).compute(target, truths(truth()))
 
     self.assertEqual(len(main_judge.requests), 3)
     self.assertEqual(len(ablation_judge.requests), 1)
@@ -103,7 +104,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
       judge = ScriptedJudge(precision_judgments(*((rank, doc, False) for rank, doc in enumerate(documents, 1))))
       metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(count=count):
-        result = await metric.compute(search_span('s', documents), ground_truths(truth()))
+        result = await metric.compute(search_span('s', documents), truths(truth()))
         self.assertEqual(result.status, MetricComputationStatus.COMPLETED)
         self.assertEqual(judge.requests[0].max_output_tokens, budget)
 
@@ -134,7 +135,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     judge = ScriptedJudge(precision_judgments((1, 'd1', True), (1, 'd2', False), (3, 'd3', True)))
     metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
-    result = await metric.compute(search_span('s', ['d1', 'd2', 'd3']), ground_truths(truth()))
+    result = await metric.compute(search_span('s', ['d1', 'd2', 'd3']), truths(truth()))
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None and result.raw_output is not None
@@ -156,7 +157,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
       metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       documents = [f'd{rank}' for rank in range(1, count + 1)]
       with self.subTest(count=count, output_tokens=output_tokens):
-        result = await metric.compute(search_span('s', documents), ground_truths(truth()))
+        result = await metric.compute(search_span('s', documents), truths(truth()))
         assert result.metadata is not None
         self.assertEqual(result.metadata['failure'], failure)
 
@@ -164,7 +165,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     judge = ScriptedJudge(DataMappingError('gemini', 'invalid structured output'))
     metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
-    result = await metric.compute(search_span('s', ['d1', 'd2']), ground_truths(truth()))
+    result = await metric.compute(search_span('s', ['d1', 'd2']), truths(truth()))
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None
@@ -176,7 +177,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     judge = ScriptedJudge()
     metric = ContextualPrecisionSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
-    result = await metric.compute(search_span('s', []), ground_truths(truth()))
+    result = await metric.compute(search_span('s', []), truths(truth()))
 
     self.assertEqual(result.score, 0.0)
     self.assertEqual(judge.requests, [])
@@ -204,11 +205,11 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     )
 
     main = await GoldClaimsContextualRecall(target_span_types=SEARCH, judge_client=main_judge).compute(
-      target, ground_truths(claims_truth(*CLAIMS))
+      target, truths(claims_truth(*CLAIMS))
     )
     ablation = await GoldClaimsContextualRecallSC(
       target_span_types=SEARCH, judge_client=ablation_judge, output_token_limit=LIMIT
-    ).compute(target, ground_truths(claims_truth(*CLAIMS)))
+    ).compute(target, truths(claims_truth(*CLAIMS)))
 
     self.assertEqual(len(main_judge.requests), 2)
     self.assertEqual(len(ablation_judge.requests), 1)
@@ -244,7 +245,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)))
     metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
-    result = await metric.compute(search_span('s', ['d1']), ground_truths(claims_truth(*CLAIMS)))
+    result = await metric.compute(search_span('s', ['d1']), truths(claims_truth(*CLAIMS)))
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None and result.raw_output is not None
@@ -258,7 +259,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
       judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)), output_tokens=output_tokens)
       metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(output_tokens=output_tokens):
-        result = await metric.compute(search_span('s', ['d1']), ground_truths(claims_truth(*CLAIMS)))
+        result = await metric.compute(search_span('s', ['d1']), truths(claims_truth(*CLAIMS)))
         assert result.metadata is not None
         self.assertEqual(result.metadata['failure'], failure)
 
@@ -391,11 +392,11 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
   def test_user_prompt_replaces_only_the_answer_paragraph(self) -> None:
     root = _trace()[3]
     built_in = _paragraphs(
-      AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge()).build_user_prompt(root, ground_truths(truth()))
+      AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge()).build_user_prompt(root, truths(truth()))
     )
     ablation = AnswerCorrectnessWT(judge_client=ScriptedJudge(), load_spans=_SpanStore([]).load)
 
-    prompt = _paragraphs(ablation.build_whole_trace_user_prompt(root, ground_truths(truth()), 'TRACE'))
+    prompt = _paragraphs(ablation.build_whole_trace_user_prompt(root, truths(truth()), 'TRACE'))
 
     self.assertEqual(built_in[3], f'Actual answer:\n{extract_final_answer(root)}')
     self.assertEqual(
@@ -414,7 +415,7 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     metric = AnswerCorrectnessWT(judge_client=judge, load_spans=store.load)
     root = _trace()[3]
 
-    result = await metric.compute(root, ground_truths(truth()))
+    result = await metric.compute(root, truths(truth()))
 
     rendered, span_count = render_whole_trace(_trace(), 'root')
     self.assertEqual(store.loaded, ['trace-1'])
@@ -432,7 +433,7 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     root = _trace()[3]
     root.semantics.answer = None
 
-    result = await AnswerCorrectnessWT(judge_client=judge, load_spans=store.load).compute(root, ground_truths(truth()))
+    result = await AnswerCorrectnessWT(judge_client=judge, load_spans=store.load).compute(root, truths(truth()))
 
     self.assertEqual(result.status, MetricComputationStatus.SKIPPED)
     self.assertEqual(result.error_message, AnswerCorrectnessJudgeMetric(judge_client=judge).input_skip_reason(root))
@@ -442,11 +443,11 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     root = _trace()[3]
     load_failure = await AnswerCorrectnessWT(
       judge_client=ScriptedJudge(), load_spans=_SpanStore(ConnectionError('database unreachable')).load
-    ).compute(root, ground_truths(truth()))
+    ).compute(root, truths(truth()))
     overflow = ExternalServiceError('gemini', 'judge', ContextOverflowError('input exceeds the maximum'))
     judge_failure = await AnswerCorrectnessWT(
       judge_client=ScriptedJudge(overflow), load_spans=_SpanStore(_trace()).load
-    ).compute(root, ground_truths(truth()))
+    ).compute(root, truths(truth()))
 
     self.assertEqual((load_failure.status, judge_failure.status), (MetricComputationStatus.FAILED,) * 2)
     assert load_failure.metadata is not None and judge_failure.metadata is not None
@@ -458,10 +459,10 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     timeout = ExternalServiceError('gemini', 'judge', httpx.ReadTimeout('read timed out'))
     root = _trace()[3]
 
-    main = await AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge(timeout)).compute(root, ground_truths(truth()))
+    main = await AnswerCorrectnessJudgeMetric(judge_client=ScriptedJudge(timeout)).compute(root, truths(truth()))
     ablation = await AnswerCorrectnessWT(
       judge_client=ScriptedJudge(timeout), load_spans=_SpanStore(_trace()).load
-    ).compute(root, ground_truths(truth()))
+    ).compute(root, truths(truth()))
 
     self.assertEqual((main.status, ablation.status), (MetricComputationStatus.FAILED,) * 2)
     assert main.metadata is not None and ablation.metadata is not None
@@ -473,13 +474,15 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
 class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
   def test_user_prompt_replaces_only_the_plan_paragraph(self) -> None:
     root = _trace()[3]
-    plan_truth = truth(key='expected_plan', expected_plan=[{'operation': 'search', 'instruction': '{"query": "x"}'}])
+    plan_truths = truths(
+      truth(key='expected_plan', expected_plan=[{'operation': 'search', 'instruction': '{"query": "x"}'}])
+    )
     built_in = _paragraphs(
-      PlanCorrectnessJudgeMetric(judge_client=ScriptedJudge()).build_user_prompt(root, ground_truths(plan_truth))
+      PlanCorrectnessJudgeMetric(judge_client=ScriptedJudge()).build_user_prompt(root, plan_truths)
     )
     ablation = PlanCorrectnessWT(judge_client=ScriptedJudge(), load_spans=_SpanStore([]).load)
 
-    prompt = _paragraphs(ablation.build_whole_trace_user_prompt(root, ground_truths(plan_truth), 'TRACE'))
+    prompt = _paragraphs(ablation.build_whole_trace_user_prompt(root, plan_truths, 'TRACE'))
 
     self.assertEqual(built_in[2], f'Actual plan (ordered steps the agent took):\n{extract_actual_plan(root)}')
     self.assertEqual(

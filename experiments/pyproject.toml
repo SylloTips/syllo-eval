@@ -17,6 +17,8 @@ packages = [
   {include = "manifest.py"},
   {include = "service.py"},
 ]
+# Read at run time from beside config.py, so they must ship in the wheel as well.
+include = [{path = "prompts/*.md", format = ["sdist", "wheel"]}]
 
 [tool.poetry.scripts]
 syllo-exp = "cli:main"
