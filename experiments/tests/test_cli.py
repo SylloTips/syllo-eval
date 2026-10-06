@@ -1,25 +1,29 @@
 import hashlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import httpx
 import psycopg
 import yaml
 
-from syllo_eval.model import Dataset
+from syllo_eval.infrastructure.exceptions import NotFoundError
+from syllo_eval.model import Dataset, EvaluationStatus, MetricComputationStatus
 
 from benchmarks.common import ImportOutcome
 from cli import main
 from config import CONFIG_DIR
+from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS
 from manifest import Manifest, StepStatus
 
 
@@ -239,6 +243,181 @@ class BenchmarksSelectionCliTest(_ConfigDirTestCase):
     self.assertEqual(status, 2)
     self.assertIn('Not pinned', errors.getvalue())
     self.assertFalse(self.manifest.exists())
+
+
+class DeepEvalCliTest(unittest.TestCase):
+  """Runs `deepeval` with the database, judge and service replaced by fakes."""
+
+  def setUp(self) -> None:
+    self._directory = tempfile.TemporaryDirectory()
+    self.manifest = Path(self._directory.name) / 'manifest.jsonl'
+    self.source_run, self.run_id = uuid4(), uuid4()
+    self.metrics = {key: SimpleNamespace(name=f'deepeval_{key}') for key in METRIC_KEYS}
+    self.service = MagicMock()
+    self.service.__aenter__.return_value = self.service
+    self.service.repeat_evaluation = AsyncMock()
+    self.build_service = MagicMock(return_value=self.service)
+    self.db_manager = MagicMock()
+    self.db_manager.health_check = AsyncMock(return_value=True)
+    # The computations the finished run persisted, as the CLI reads them back.
+    self.computations: list[SimpleNamespace] = []
+    self.environment = {'GOOGLE_API_KEY': 'test-key'}
+
+  def tearDown(self) -> None:
+    self._directory.cleanup()
+
+  def _finishing(self, status: EvaluationStatus) -> None:
+    run = SimpleNamespace(id=self.run_id, status=status)
+    self.service.repeat_evaluation.return_value = SimpleNamespace(run=run, execute=AsyncMock(return_value=run))
+
+  def _computation(self, metric: str, status: MetricComputationStatus, failure: str | None = None) -> None:
+    metadata: dict[str, Any] = {'failure': failure} if failure else {'judge_calls': 1}
+    self.computations.append(SimpleNamespace(metric=metric, status=status, metadata=metadata))
+
+  def _deepeval(self, *args: str) -> tuple[int, str]:
+    @asynccontextmanager
+    async def fake_database(settings: Any) -> AsyncIterator[object]:
+      yield self.db_manager
+
+    @asynccontextmanager
+    async def fake_judge(config: Any, settings: Any) -> AsyncIterator[object]:
+      yield object()
+
+    uow = MagicMock()
+    uow.__aenter__.return_value = uow
+    uow.metric_computations.list_by_evaluation_run = AsyncMock(return_value=self.computations)
+    with (
+      patch.dict(os.environ, self.environment),
+      patch('cli.load_environment'),
+      patch('cli.open_database', fake_database),
+      patch('cli.open_deepeval_judge', fake_judge),
+      patch('cli.deepeval_metrics', return_value=self.metrics) as deepeval_metrics,
+      patch('cli.build_service', self.build_service),
+      patch('cli.UnitOfWork', return_value=uow),
+    ):
+      # GeminiJudgeSettings reads the key under either name.
+      for name in ('GOOGLE_API_KEY', 'GEMINI_API_KEY'):
+        if name not in self.environment:
+          os.environ.pop(name, None)
+      status, output = _run(['deepeval', '--source-run', str(self.source_run), '--manifest', str(self.manifest), *args])
+    if deepeval_metrics.called:
+      self.assertEqual(deepeval_metrics.call_args.kwargs, {'output_token_limit': 65536})
+    return status, output
+
+  def test_repeats_the_source_run_with_the_selected_metrics_and_records_the_run(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    self._computation('deepeval_precision', MetricComputationStatus.COMPLETED)
+    self._computation('deepeval_precision', MetricComputationStatus.FAILED, 'misaligned')
+    self._computation('deepeval_answer', MetricComputationStatus.FAILED, 'invalid_output')
+
+    status, output = self._deepeval('--metrics', 'answer', 'precision', '--max-concurrent-samples', '1')
+
+    self.assertEqual(status, 0, output)
+    self.service.repeat_evaluation.assert_awaited_once_with(
+      source_run_id=self.source_run,
+      metrics=['deepeval_precision', 'deepeval_answer'],
+      max_concurrent_samples=1,
+    )
+    self.assertEqual(
+      self.build_service.call_args.kwargs['metrics'], [self.metrics['precision'], self.metrics['answer']]
+    )
+    records = Manifest(self.manifest).records()
+    self.assertEqual([record.step for record in records], [f'deepeval:{self.source_run}:precision+answer'] * 2)
+    self.assertEqual([record.status for record in records], [StepStatus.STARTED, StepStatus.COMPLETED])
+    self.assertEqual([record.run_ids for record in records], [(self.run_id,)] * 2)
+    # Judge outcomes count as wrong decisions, so failed units of these classes leave the step complete.
+    self.assertEqual(
+      records[-1].details,
+      {
+        'source_run_id': str(self.source_run),
+        'deepeval_version': DEEPEVAL_VERSION,
+        'metrics': ['deepeval_precision', 'deepeval_answer'],
+        'run_status': 'COMPLETED',
+        'failed_units': {'deepeval_answer': {'invalid_output': 1}, 'deepeval_precision': {'misaligned': 1}},
+      },
+    )
+    self.assertIn(str(self.run_id), output)
+    self.assertIn('deepeval_precision failed units: 1 misaligned', output)
+
+  def test_units_that_failed_without_a_judge_outcome_fail_the_step(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    # A metric that raised records no failure class.
+    for failure in ('provider', 'trace_load', None):
+      with self.subTest(failure=failure):
+        self.manifest = Path(self._directory.name) / f'manifest-{failure}.jsonl'
+        self.computations = []
+        self._computation('deepeval_recall', MetricComputationStatus.FAILED, 'timeout')
+        self._computation('deepeval_recall', MetricComputationStatus.FAILED, failure)
+
+        status, output = self._deepeval('--metrics', 'recall')
+
+        self.assertEqual(status, 1)
+        self.assertIn('1 units failed without a judge outcome', output)
+        record = Manifest(self.manifest).latest()[f'deepeval:{self.source_run}:recall']
+        self.assertEqual((record.status, record.run_ids), (StepStatus.FAILED, (self.run_id,)))
+        self.assertEqual(
+          record.details['failed_units'], {'deepeval_recall': {'timeout': 1, failure or 'unclassified': 1}}
+        )
+
+  def test_a_run_that_does_not_complete_fails_the_step(self) -> None:
+    self._finishing(EvaluationStatus.PARTIALLY_COMPLETED)
+
+    status, _ = self._deepeval()
+
+    self.assertEqual(status, 1)
+    record = Manifest(self.manifest).latest()[f'deepeval:{self.source_run}:precision+recall+answer']
+    self.assertEqual((record.status, record.details['run_status']), (StepStatus.FAILED, 'PARTIALLY_COMPLETED'))
+
+  def test_a_source_run_that_cannot_be_repeated_is_recorded_as_failed(self) -> None:
+    self.service.repeat_evaluation.side_effect = NotFoundError('evaluation_run', self.source_run)
+
+    status, output = self._deepeval('--metrics', 'recall')
+
+    self.assertEqual(status, 1)
+    self.assertIn('deepeval: failed: NotFoundError', output)
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual((record.step, record.status), (f'deepeval:{self.source_run}:recall', StepStatus.FAILED))
+
+  def test_an_unreachable_database_is_recorded_as_failed(self) -> None:
+    self.db_manager.health_check.return_value = False
+
+    status, output = self._deepeval()
+
+    self.assertEqual(status, 1)
+    self.assertIn('deepeval: failed: ConnectionError: Database health check failed', output)
+    self.build_service.assert_not_called()
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual(record.status, StepStatus.FAILED)
+
+  def test_a_failure_after_the_run_started_keeps_the_run_and_details(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    handle = self.service.repeat_evaluation.return_value
+    handle.execute.side_effect = psycopg.OperationalError('server closed the connection')
+
+    status, _ = self._deepeval('--metrics', 'precision')
+
+    self.assertEqual(status, 1)
+    started, failed = Manifest(self.manifest).records()
+    self.assertEqual((started.status, failed.status), (StepStatus.STARTED, StepStatus.FAILED))
+    self.assertEqual(failed.run_ids, (self.run_id,))
+    self.assertEqual(failed.details['metrics'], ['deepeval_precision'])
+    self.assertEqual(failed.details['error'], 'OperationalError: server closed the connection')
+
+  def test_without_a_judge_key_nothing_runs(self) -> None:
+    self.environment = {}
+    errors = io.StringIO()
+
+    with redirect_stderr(errors):
+      status, _ = self._deepeval()
+
+    self.assertEqual(status, 2)
+    self.assertIn('GOOGLE_API_KEY', errors.getvalue())
+    self.db_manager.health_check.assert_not_awaited()
+    self.assertFalse(self.manifest.exists())
+
+  def test_rejects_scoring_fewer_than_one_sample_at_a_time(self) -> None:
+    with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+      self._deepeval('--max-concurrent-samples', '0')
 
 
 if __name__ == '__main__':

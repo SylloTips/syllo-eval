@@ -6,14 +6,18 @@ callers, trace clients, adapters and custom metrics.
 
 It also uses the library's persistence layer, the `UnitOfWork` repositories in `syllo_eval.infrastructure`, for
 ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`), and for the stored
-traces that the whole-trace ablation reads (`ablation_metrics.py`). It relies on `datasets.get_by_name`,
-`samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create` and `spans.list_by_trace`.
+traces that the whole-trace ablation reads (`ablation_metrics.py`) and the failures a judge run recorded (`cli.py`).
+It relies on `datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create`,
+`spans.list_by_trace` and `metric_computations.list_by_evaluation_run`.
 
-The ablations also rely on a few library internals:
+The ablations and the DeepEval baseline also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
-- the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` imports to render prompts and traces;
-- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts.
+- the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
+  render prompts, traces and test cases;
+- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts;
+- `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
+  usage and retries rate limits as the library's judge client does.
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
@@ -48,6 +52,7 @@ expected output of each step.
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
+| `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -115,7 +120,10 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 The main pass runs the built-in metrics. `ablation_metrics.py` adds recall over the ERB gold claims and the two
 ablations. Each ablation subclasses the metric it is compared with and overrides one library hook, so both arms score
 the same units with the same rubric, scoring, failure handling and result metadata; an ablation only adds metadata
-fields. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation changes.
+fields. `deepeval_baseline.py` adds the DeepEval baseline the same way: each DeepEval metric replaces how the compared
+metric judges, and keeps its units, skip rules and result metadata. The retrieval metrics also keep its scoring; the
+answer metric's score is G-Eval's. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation and the baseline
+change.
 
 | Metric | Unit | Judge calls per unit | Compared with |
 |---|---|---|---|
@@ -127,6 +135,9 @@ fields. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation changes.
 | `answer_correctness_judge_wt` | one question | one | `answer_correctness_judge` |
 | `plan_correctness_judge` (built-in) | one τ²-bench trajectory | one | |
 | `plan_correctness_judge_wt` | one τ²-bench trajectory | one | `plan_correctness_judge` |
+| `deepeval_contextual_precision` | one search call | one | `contextual_precision_document_judge` |
+| `deepeval_contextual_recall_gold_claims` | one search call | one | `contextual_recall_gold_claims` |
+| `deepeval_answer_correctness` | one question | one | `answer_correctness_judge` |
 
 - **Search units:** the retrieval metrics are built with `target_span_types=(SEARCH_SPAN_TYPE,)`, so each search call
   is one unit. Each agent's adapter must emit every search call as a `retrieval` span, with the user question as its
@@ -134,10 +145,33 @@ fields. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation changes.
 - **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
   never decomposes the expected answer, so a unit makes one judge call per claim. Recall over `decomposed_claims` (RQ2)
   and `expected_claims_verified` (RQ3) is the same subclass with another key, once those ground truths are imported.
+  DeepEval's recall over `expected_claims_verified` is likewise its gold-claims metric with that key.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
 - **Failures:** a failed unit records its cause in `metadata['failure']` (the library's classes, plus `trace_load` for
   a whole-trace unit whose trace could not be loaded) and the usage of every judge call.
+
+## DeepEval baseline
+
+```bash
+poetry run syllo-exp deepeval --source-run <run id>                       # precision, recall and answer
+poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQA: Table 2 compares relevance only
+```
+
+- **What it does:** it repeats a collection run on its stored traces with the selected DeepEval metrics. The new run's
+  report counts DeepEval's judge calls and tokens as it counts Syllo-eval's.
+- **Manifest:** the step is `deepeval:<source run>:<metrics>`, with the new run's id, the metric names, the DeepEval
+  version and the failed units per metric and failure class.
+- **Completion:** the step completes when the run does and every failed unit failed with an outcome of the judge,
+  which counts as wrong ([`METHODOLOGY.md`](METHODOLOGY.md), Failures). A unit that failed in any other way, such as
+  a provider error, is unscored, so the step is recorded as failed and the command exits with 1.
+- **Requirements:** the database and `GOOGLE_API_KEY` for the shared judge (`configs/models.yaml`). No agent is called.
+- **Cost:** Table 4 measures one sample at a time. That is the default unless `EVALUATION_MAX_CONCURRENT_SAMPLES` is
+  set, and `--max-concurrent-samples 1` makes it explicit.
+- **Offline:** `deepeval_env.py` turns off DeepEval's telemetry and its loading of `.env` files, and keeps its working
+  files in `outputs/deepeval/`. DeepEval reads these switches when it is imported, so code that uses DeepEval imports
+  `deepeval_baseline` first, which imports the switches before DeepEval. `pyproject.toml` disables DeepEval's pytest
+  plugin, which pytest would import first.
 
 ## Verification
 
@@ -160,9 +194,8 @@ The parent project's `poetry run ruff check .` and `poetry run ruff format .` al
 2. **Judge.** Every judge evaluation repeats a collection run on its stored traces:
    - the main pass and two retests;
    - the gold-claim pass;
-   - the SC and WT ablations.
-
-   DeepEval scores the same units offline.
+   - the SC and WT ablations;
+   - the DeepEval baseline (`syllo-exp deepeval`).
 3. **Construct.** RQ3 lists and padded traces are imported as new traces.
 4. **Annotate.** Humans grade 180 answers and verify ERB facts.
 5. **Analyze.** Tables 2–4 and every red placeholder are regenerated from the exports.
