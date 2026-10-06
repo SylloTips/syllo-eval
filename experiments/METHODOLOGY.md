@@ -26,7 +26,7 @@ The three benchmarks are pinned by commit and converted as follows (`benchmarks/
     byte-identical with tau2 on all 114 tasks.
   - **Expected plan:** the reference tool calls in order. Each step's parameters are the call's arguments, and its
     instruction is empty.
-  - Tasks 24 and 57 have no reference calls. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
+  - Tasks 24 and 57 have no reference calls, so Plan Correctness skips them. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
   - **Reward at the pin:** 112 tasks multiply the database check by the natural-language assertions, and tasks 33
     and 34 use the database check alone.
   - Only 40 of those 112 tasks have assertions (61 in total), graded by tau2's LLM judge. tau2 scores a task without

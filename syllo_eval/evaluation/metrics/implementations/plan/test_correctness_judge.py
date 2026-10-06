@@ -17,3 +17,4 @@ class PlanningJudgeTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.score, 1)
     self.assertIn('operation=search', judge.requests[0].user_prompt)
     self.assertIn('Find evidence', judge.requests[0].user_prompt)
+    self.assertEqual(metric.ground_truth_skip_reason({}), 'Missing required ground truth: expected_plan.')
