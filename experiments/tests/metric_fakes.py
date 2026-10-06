@@ -101,6 +101,11 @@ def claims_truth(*claims: Claim, key: str = 'expected_claims_gold') -> GroundTru
   return GroundTruth(id=uuid4(), sample_id=uuid4(), key=key, ground_truth_value=claims_value(list(claims)))
 
 
+def truths(*ground_truths: GroundTruth) -> dict[str, GroundTruth]:
+  """A sample's ground truths as metrics receive them: keyed by their key."""
+  return {ground_truth.key: ground_truth for ground_truth in ground_truths}
+
+
 def precision_judgments(*decisions: tuple[int, str, bool]) -> dict[str, Any]:
   return {
     'judgments': [
