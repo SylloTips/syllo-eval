@@ -9,7 +9,7 @@ class PlanEfficiencyMetric(SpanEvaluationMetric):
   """Scores plan efficiency by comparing executed step count to the expected plan length."""
 
   metric_name = 'plan_efficiency'
-  metric_description = 'Expected plan steps divided by observed execution steps.'
+  metric_description = 'Expected plan steps divided by observed execution steps, capped at 1.'
 
   def input_skip_reason(self, span: Span) -> str | None:
     return (
@@ -32,7 +32,7 @@ class PlanEfficiencyMetric(SpanEvaluationMetric):
       return MetricComputationResult(score=None, status=MetricComputationStatus.SKIPPED, error_message=reason)
     expected_step_count = len(ground_truths[self.ground_truth_keys[0]].ground_truth_value['expected_plan'])
     actual_step_count = len(extract_actual_plan_steps(span))
-    score = expected_step_count / actual_step_count if actual_step_count else 0.0
+    score = min(1.0, expected_step_count / actual_step_count) if actual_step_count else 0.0
 
     return MetricComputationResult(
       score=score,
