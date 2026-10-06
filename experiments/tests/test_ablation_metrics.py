@@ -502,15 +502,16 @@ class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
       ],
     )
 
-  async def test_runs_without_an_expected_plan_like_the_built_in(self) -> None:
+  async def test_requires_an_expected_plan_like_the_built_in(self) -> None:
     judge = ScriptedJudge(_score_reply)
     metric = PlanCorrectnessWT(judge_client=judge, load_spans=_SpanStore(_trace()).load)
+    plan_truths = truths(truth(key='expected_plan', expected_plan=[{'operation': 'search'}]))
 
-    result = await metric.compute(_trace()[3], {})
+    result = await metric.compute(_trace()[3], plan_truths)
 
-    self.assertIsNone(metric.ground_truth_skip_reason({}))
+    self.assertEqual(metric.ground_truth_skip_reason({}), 'Missing required ground truth: expected_plan.')
     self.assertEqual(result.score, 0.7)
-    self.assertNotIn('Expected plan', judge.requests[0].user_prompt)
+    self.assertIn('Expected plan (the reference solution):\nStep 1: operation=search', judge.requests[0].user_prompt)
     self.assertEqual(
       judge.requests[0].system_prompt, PlanCorrectnessJudgeMetric(judge_client=judge).build_system_prompt()
     )

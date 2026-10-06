@@ -12,7 +12,7 @@ benchmark import. Each ablation subclasses the metric it is compared with and ov
 
 Units, skip rules, rubrics, scoring and result metadata therefore stay those of the compared metric; an ablation only
 adds metadata fields (``trace_render`` for WT; the output budget, and for CP the rank alignment, of a failed SC unit).
-The prompts that change live in ``prompts/``: the built-in v1 wording (v2 for Plan Correctness, the same text), edited
+The prompts that change live in ``prompts/``: the built-in v1 wording (v2 for Plan Correctness), edited
 only where the design choice requires it.
 """
 
