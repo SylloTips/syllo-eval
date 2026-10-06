@@ -15,7 +15,8 @@ The ablations and the DeepEval baseline also rely on a few library internals:
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
   render prompts, traces and test cases;
-- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts;
+- the built-in v1 prompt templates that `prompts/` edits (v2 for Plan Correctness, the same text): a new built-in
+  prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
   usage and retries rate limits as the library's judge client does.
 
