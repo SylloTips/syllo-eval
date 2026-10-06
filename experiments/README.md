@@ -13,7 +13,8 @@ The ablations also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` imports to render prompts and traces;
-- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts.
+- the built-in v1 prompt templates that `prompts/` edits (v2 for Plan Correctness, the same text): a new built-in
+  prompt version needs new ablation prompts.
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
