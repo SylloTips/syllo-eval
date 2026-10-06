@@ -1,0 +1,8 @@
+# Only what the image needs: keeps .env, .git and experiments/ (with its data) out of the build context.
+*
+!pyproject.toml
+!poetry.lock
+!README.md
+!alembic.ini
+!syllo_eval
+**/__pycache__

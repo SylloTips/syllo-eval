@@ -15,5 +15,30 @@ services:
     volumes:
       - syllo-eval-db:/var/lib/postgresql
 
+  # The HTTP API; the same image runs the CLI: `docker compose run --rm syllo-eval syllo-eval --help`.
+  syllo-eval:
+    build: .
+    image: syllo-eval
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - '8005:8005'
+
+  # Applies pending migrations once, then exits; the API starts only after it succeeds.
+  migrate:
+    extends: syllo-eval
+    command: ['alembic', 'upgrade', 'head']
+    depends_on: !override
+      db:
+        condition: service_healthy
+    ports: !reset []
+
 volumes:
   syllo-eval-db:

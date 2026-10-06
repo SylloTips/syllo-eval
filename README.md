@@ -46,7 +46,8 @@ docker compose up -d db
 poetry run alembic upgrade head
 ```
 
-Migrations are applied manually and never on startup. Check which database your `.env` points to before running them.
+Outside Docker, migrations are applied manually and never on startup. Check which database your `.env` points to before
+running them.
 
 Import a dataset and list what is registered:
 
@@ -57,6 +58,22 @@ poetry run syllo-eval dataset list
 
 The engine ships no agent integration, so a fresh evaluation needs a caller for your agent first. See
 [Connecting an agent](#connecting-an-agent).
+
+### Docker
+
+The `syllo-eval` image runs the HTTP API by default and the CLI on demand. It reads settings from the environment;
+Compose passes your `.env` and points the database at its `db` service. Its `migrate` service applies pending
+migrations, so the API starts on an up-to-date schema:
+
+```bash
+docker compose up -d        # db, then migrate, then the API on http://localhost:8005
+docker compose run --rm -v "$PWD:/work" -w /work syllo-eval syllo-eval dataset import my-dataset.json
+```
+
+Migrations change the database `.env` points to; check it before the first `up`.
+
+To load your own agents, install your package into an image built from this one and set
+`SYLLO_EVAL_SERVICE_FACTORY` (see [Your own CLI and HTTP API](#your-own-cli-and-http-api)).
 
 ## Datasets
 
@@ -299,7 +316,7 @@ asyncio.run(main())
 | Metric | Measures | Needs |
 |---|---|---|
 | `llm_calls` | Number of LLM spans in the trace | — |
-| `plan_efficiency` | Expected plan steps divided by executed steps | `plan` |
+| `plan_efficiency` | Expected plan steps divided by executed steps, capped at 1 | `plan` |
 | `set_precision_document`, `set_precision_snippet` | Precision of the selected IDs | `document_ids` / `snippet_ids` |
 | `set_recall_document`, `set_recall_snippet` | Recall of the selected IDs | `document_ids` / `snippet_ids` |
 | `ndcg_at_10_document`, `ndcg_at_10_snippet` | Binary-relevance nDCG@10 of the ranked selection | `document_ids` / `snippet_ids` |
