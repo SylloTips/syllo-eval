@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.common import check_benchmark
-from benchmarks.tau2 import build, convert, render_arguments, render_user_scenario
+from benchmarks.tau2 import build, convert, render_user_scenario
 
 
 def _scenario(**instructions: Any) -> dict[str, Any]:
@@ -85,11 +85,6 @@ class RenderUserScenarioTest(unittest.TestCase):
     self.assertNotIn('Unknown info', render_user_scenario(_scenario()))
 
 
-class RenderArgumentsTest(unittest.TestCase):
-  def test_sorts_keys_but_keeps_list_order_and_unicode(self) -> None:
-    self.assertEqual(render_arguments({'b': ['9', '3'], 'a': 'café'}), '{"a": "café", "b": ["9", "3"]}')
-
-
 class ConvertTest(unittest.TestCase):
   def test_reference_tool_calls_become_the_expected_plan(self) -> None:
     benchmark = convert(TASKS, SPLITS)
@@ -97,7 +92,7 @@ class ConvertTest(unittest.TestCase):
     plan = benchmark.samples[0].plan
     assert plan is not None
     self.assertEqual([step.operation for step in plan], ['get_order_details', 'return_delivered_order_items'])
-    self.assertEqual(plan[1].instruction, '{"item_ids": ["9", "3"], "order_id": "#W1", "payment_method_id": "card_1"}')
+    self.assertEqual(plan[1].instruction, '')
     self.assertEqual(plan[1].parameters, RETURN['arguments'])
     self.assertIsNone(benchmark.samples[1].plan)
     self.assertEqual(benchmark.samples[0].input_prompt, render_user_scenario(TASKS[0]['user_scenario']))

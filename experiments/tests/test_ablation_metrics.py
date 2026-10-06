@@ -19,7 +19,7 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
 )
 from syllo_eval.infrastructure.exceptions import DataMappingError, ExternalServiceError
 from syllo_eval.model import MetricComputationStatus, Span
-from syllo_eval.trace_semantics import Answer, ExecutionStep, PlanningData
+from syllo_eval.trace_semantics import Answer, ExecutionStep, PlannedStep, PlanningData, PlanSnapshot
 
 from ablation_metrics import (
   AnswerCorrectnessWT,
@@ -265,7 +265,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
 
 def _trace(trace_id: str = 'trace-1', prefix: str = '') -> list[Span]:
   """An agent run (root, LLM call, search, nested tool) plus a span outside the agent, out of order."""
-  steps = [ExecutionStep(id='1', operation='search', instruction='{"query": "budget"}', output='2 documents')]
+  steps = [ExecutionStep(id='1', operation='search', input={'query': 'budget'}, output='2 documents')]
 
   def ident(name: str) -> str:
     return f'{prefix}{name}'
@@ -338,6 +338,14 @@ class RenderWholeTraceTest(unittest.TestCase):
     self.assertIn('output:\nSearch the knowledge base.', rendered)
     self.assertNotIn('"answer": "Dana did."', rendered)
     self.assertNotIn('budget approval', rendered)
+
+  def test_a_plan_renders_only_its_observed_step_fields(self) -> None:
+    steps = [PlannedStep(id='1', operation='lookup'), PlannedStep(id='2', operation='search', parameters={'q': 'x'})]
+    root = span('root', 'agent_root', parent=None, planning=PlanningData(plans=[PlanSnapshot(id='p', steps=steps)]))
+
+    rendered, _ = render_whole_trace([root], 'root')
+
+    self.assertIn('plan p:\nStep 1: operation=lookup\nStep 2: operation=search\n  parameters: {"q": "x"}', rendered)
 
   def test_a_re_identified_copy_renders_the_same(self) -> None:
     self.assertEqual(
@@ -474,7 +482,7 @@ class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
   def test_user_prompt_replaces_only_the_plan_paragraph(self) -> None:
     root = _trace()[3]
     plan_truths = truths(
-      truth(key='expected_plan', expected_plan=[{'operation': 'search', 'instruction': '{"query": "x"}'}])
+      truth(key='expected_plan', expected_plan=[{'operation': 'search', 'parameters': {'query': 'x'}}])
     )
     built_in = _paragraphs(
       PlanCorrectnessJudgeMetric(judge_client=ScriptedJudge()).build_user_prompt(root, plan_truths)
@@ -494,15 +502,16 @@ class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
       ],
     )
 
-  async def test_runs_without_an_expected_plan_like_the_built_in(self) -> None:
+  async def test_requires_an_expected_plan_like_the_built_in(self) -> None:
     judge = ScriptedJudge(_score_reply)
     metric = PlanCorrectnessWT(judge_client=judge, load_spans=_SpanStore(_trace()).load)
+    plan_truths = truths(truth(key='expected_plan', expected_plan=[{'operation': 'search'}]))
 
-    result = await metric.compute(_trace()[3], {})
+    result = await metric.compute(_trace()[3], plan_truths)
 
-    self.assertIsNone(metric.ground_truth_skip_reason({}))
+    self.assertEqual(metric.ground_truth_skip_reason({}), 'Missing required ground truth: expected_plan.')
     self.assertEqual(result.score, 0.7)
-    self.assertNotIn('Expected plan', judge.requests[0].user_prompt)
+    self.assertIn('Expected plan (the reference solution):\nStep 1: operation=search', judge.requests[0].user_prompt)
     self.assertEqual(
       judge.requests[0].system_prompt, PlanCorrectnessJudgeMetric(judge_client=judge).build_system_prompt()
     )

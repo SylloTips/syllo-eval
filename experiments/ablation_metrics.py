@@ -12,7 +12,8 @@ benchmark import. Each ablation subclasses the metric it is compared with and ov
 
 Units, skip rules, rubrics, scoring and result metadata therefore stay those of the compared metric; an ablation only
 adds metadata fields (``trace_render`` for WT; the output budget, and for CP the rank alignment, of a failed SC unit).
-The prompts that change live in ``prompts/``: the built-in v1 wording, edited only where the design choice requires it.
+The prompts that change live in ``prompts/``: the built-in v1 wording (v2 for Plan Correctness), edited
+only where the design choice requires it.
 """
 
 import json
@@ -352,7 +353,9 @@ def _span_sections(span: Span) -> tuple[list[str], list[str]]:
   if planning is not None:
     for plan in planning.plans:
       supersedes = f' (supersedes {plan.supersedes_plan_id})' if plan.supersedes_plan_id is not None else ''
-      after_children += _section(f'plan {plan.id}{supersedes}', render_plan([step.model_dump() for step in plan.steps]))
+      after_children += _section(
+        f'plan {plan.id}{supersedes}', render_plan([step.model_dump(exclude_defaults=True) for step in plan.steps])
+      )
     if planning.executed_steps is not None:
       after_children += _section('executed steps', extract_actual_plan(span))
   if semantics.answer is not None:

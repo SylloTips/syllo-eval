@@ -1,3 +1,4 @@
+import json
 from collections.abc import Sequence
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
@@ -53,24 +54,17 @@ def render_plan(steps: Sequence[object]) -> str:
 
 def _render_step(index: int, step: object) -> str | None:
   if isinstance(step, ExecutionStep):
-    operation: object = step.operation
-    instruction: object = step.instruction
-    output: object = step.output
-  elif isinstance(step, dict):
-    operation = step.get('operation')
-    instruction = step.get('instruction')
-    output = step.get('output')
-  else:
+    # Defaults mean not observed: an 'unknown' status, empty instruction, or missing input or output.
+    step = step.model_dump(exclude_defaults=True)
+  elif not isinstance(step, dict):
     return None
 
-  operation_text = non_empty_text(operation) or '<unknown operation>'
+  operation_text = non_empty_text(step.get('operation')) or '<unknown operation>'
   parts = [f'Step {index}: operation={operation_text}']
-  instruction_text = _render_step_field(instruction)
-  if instruction_text is not None:
-    parts.append(f'  instruction: {instruction_text}')
-  output_text = _render_step_field(output)
-  if output_text is not None:
-    parts.append(f'  output: {output_text}')
+  for name in ('status', 'instruction', 'input', 'parameters', 'output'):
+    text = _render_step_field(step.get(name))
+    if text is not None:
+      parts.append(f'  {name}: {text}')
   return '\n'.join(parts)
 
 
@@ -79,7 +73,7 @@ def _render_step_field(value: object) -> str | None:
     return None
   if isinstance(value, str):
     return non_empty_text(value)
-  return str(value)
+  return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def skipped_retrieval_result(metric_name: str, reason: str, *, variant: str) -> MetricComputationResult:
