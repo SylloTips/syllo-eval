@@ -607,7 +607,7 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     ):
       inherited = await snapshot(None)
       self.assertEqual(inherited['rubric_additions'], {'answer_correctness_judge': 'Cite a source.'})
-      self.assertEqual(inherited['prompt_versions'], {'answer_correctness_judge': 'v1', 'plan_correctness_judge': 'v1'})
+      self.assertEqual(inherited['prompt_versions'], {'answer_correctness_judge': 'v1', 'plan_correctness_judge': 'v2'})
       replaced = await snapshot({' Plan_Correctness_Judge ': ' Be strict. '})
       self.assertEqual(replaced['rubric_additions'], {'plan_correctness_judge': 'Be strict.'})
       self.assertEqual((await snapshot({}))['rubric_additions'], {})
