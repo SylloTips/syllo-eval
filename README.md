@@ -299,7 +299,7 @@ asyncio.run(main())
 | Metric | Measures | Needs |
 |---|---|---|
 | `llm_calls` | Number of LLM spans in the trace | — |
-| `plan_efficiency` | Expected plan steps divided by executed steps | `plan` |
+| `plan_efficiency` | Expected plan steps divided by executed steps, capped at 1 | `plan` |
 | `set_precision_document`, `set_precision_snippet` | Precision of the selected IDs | `document_ids` / `snippet_ids` |
 | `set_recall_document`, `set_recall_snippet` | Recall of the selected IDs | `document_ids` / `snippet_ids` |
 | `ndcg_at_10_document`, `ndcg_at_10_snippet` | Binary-relevance nDCG@10 of the ranked selection | `document_ids` / `snippet_ids` |
