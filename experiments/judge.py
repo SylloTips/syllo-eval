@@ -32,18 +32,23 @@ class ConfiguredTemperatureJudgeClient:
     await self._inner.aclose()
 
 
-@asynccontextmanager
-async def open_judge_client(config: JudgeConfig, settings: GeminiJudgeSettings) -> AsyncIterator[LlmJudgeClient]:
-  """Yield the shared judge. ``settings`` supplies the API key; everything else comes from the experiment config."""
-  chat_model = ChatGoogleGenerativeAI(
+def build_chat_model(config: JudgeConfig, settings: GeminiJudgeSettings) -> ChatGoogleGenerativeAI:
+  """The judge model of every framework: the API key comes from ``settings``, the rest from the experiment config."""
+  return ChatGoogleGenerativeAI(
     model=config.model,
     api_key=settings.api_key,
     timeout=config.timeout_seconds,
-    # The client retries rate limits itself, honouring the server's retry hints.
+    # The callers retry rate limits themselves, honouring the server's retry hints.
     max_retries=1,
     convert_system_message_to_human=True,
     thinking_level=config.thinking_level,
   )
+
+
+@asynccontextmanager
+async def open_judge_client(config: JudgeConfig, settings: GeminiJudgeSettings) -> AsyncIterator[LlmJudgeClient]:
+  """Yield the shared judge. ``settings`` supplies the API key; everything else comes from the experiment config."""
+  chat_model = build_chat_model(config, settings)
   client = GeminiLlmJudgeClient(
     settings.model_copy(update={'model': config.model, 'max_retries': config.max_retries}),
     max_concurrent_requests=config.max_concurrent_requests,

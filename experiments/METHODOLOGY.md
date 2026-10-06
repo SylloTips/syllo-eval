@@ -83,6 +83,44 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
     included. A unit skipped by the built-in rule, or failing to load its trace, records none.
   - It is compared with the built-in Answer and Plan Correctness, which record judge failures the same way.
 
+## DeepEval baseline
+
+DeepEval 4.2.6, pinned in `pyproject.toml`, runs in test-case mode (`deepeval_baseline.py`): each unit becomes one
+`LLMTestCase`, measured by one DeepEval metric. Each metric subclasses the Syllo-eval metric it is compared with and
+replaces only how that metric judges, so units, skip rules and result metadata stay the compared metric's. So does the
+scoring of the retrieval metrics; answers get G-Eval's score.
+
+- **Judge:**
+  - The model, temperature, thinking level, timeout, concurrency limit and rate-limit retries are the shared judge's.
+  - Each DeepEval prompt is sent as the only message, with the JSON schema of DeepEval's output as structured output,
+    as DeepEval's own Gemini model sends it. No output limit is set, as DeepEval sets none.
+  - Gemini's safety settings stay the shared judge's defaults, which DeepEval's own Gemini model would turn off. A
+    blocked response fails its unit the same way in every arm.
+  - An output that does not parse or validate fails the unit as `invalid_output`, as in Syllo-eval. DeepEval's lenient
+    JSON parsing, which drops verdicts it cannot read, is never reached.
+- **Contextual precision:** `ContextualPrecisionMetric` in the `llm` eval mode, without its summary reason, so a unit
+  is one call.
+  - The input is the search request, the expected output is the expected answer, and the retrieval context is the
+    unit's documents in rank order.
+  - Each document is its title, a blank line and its content: DeepEval nodes carry text only, without the ids,
+    location and retrieval score of the per-document prompt.
+- **Contextual recall:** `ContextualRecallMetric` with the same settings and retrieval context.
+  - The expected output is the unit's claims, one per line. DeepEval judges each sentence of the expected output, and
+    each gold claim is one sentence without line breaks.
+  - The metric refuses a claim that spans lines rather than split it.
+- **Answers:** G-Eval with the Correctness metric of DeepEval's documentation, verbatim.
+  - The criteria, the three evaluation steps, and input, actual output and expected output as parameters.
+  - With the steps given, DeepEval generates none, so a unit is one call. G-Eval scores from 0 to 10, and DeepEval
+    divides the score by 10.
+  - ERB's ground truths carry no rubric or notes, so both arms see the same question, answer and expected answer.
+- **Plans:** DeepEval's plan metrics read its own traces and grade no reference plan, so plans have no DeepEval arm.
+- **Alignment:** verdicts are matched to documents and claims by position, and the compared metric scores them with
+  the formula DeepEval uses. DeepEval would score whatever verdicts it gets. Here a unit fails as misaligned unless it
+  gets exactly one verdict per document or claim. It fails as truncated instead when the count is wrong and the output
+  reached the judge's output limit of 65,536 tokens.
+- **Cost:** every DeepEval call is recorded as a judge call with the usage the provider reported. Run reports therefore
+  count DeepEval's calls, tokens, cached tokens and latency as they count Syllo-eval's, failed units included.
+
 ## Aggregation
 
 - **Question scores:**
@@ -157,6 +195,8 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
   - `invalid_output` is an output that does not parse or validate, or a refusal; an output that does not parse because
     it reached its token limit is `truncated`;
   - `provider` and `trace_load` are infrastructure failures: the unit is re-run in every arm, not counted.
+  - A judge run with such a failure, or with a unit that failed without a recorded class, is incomplete: the manifest
+    records its step as failed, with the failed units per metric and class.
 - Each document or claim of a failed CP or CR unit counts as a wrong decision; the computation's span and ground truth
   identify them. A failed AC or PC unit has no decisions, only a missing score.
 - A failed unit counts every judge call it made, with the usage the provider reported, failed calls included.

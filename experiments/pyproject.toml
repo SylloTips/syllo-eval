@@ -11,6 +11,8 @@ packages = [
   {include = "benchmarks"},
   {include = "cli.py"},
   {include = "config.py"},
+  {include = "deepeval_baseline.py"},
+  {include = "deepeval_env.py"},
   {include = "judge.py"},
   {include = "manifest.py"},
   {include = "service.py"},
@@ -28,6 +30,7 @@ httpx = "^0.28.1"
 psycopg = "^3.3.3"
 pyarrow = "^21.0.0"
 pyyaml = "^6.0"
+deepeval = "4.2.6"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "1.14.1"
@@ -40,3 +43,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.mypy]
 ignore_missing_imports = true
 exclude = ["\\.venv"]
+
+# DeepEval's pytest plugin would import DeepEval before deepeval_env sets its switches. The suite runs with unittest.
+[tool.pytest.ini_options]
+addopts = "-p no:deepeval"

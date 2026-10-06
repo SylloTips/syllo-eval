@@ -97,6 +97,11 @@ def truth(key: str = 'expected_output', **value: Any) -> GroundTruth:
   return GroundTruth(id=uuid4(), sample_id=uuid4(), key=key, ground_truth_value=value or {key: EXPECTED_ANSWER})
 
 
+def ground_truths(*items: GroundTruth) -> dict[str, GroundTruth]:
+  """The sample's ground truths keyed by ground-truth key, as the planner passes them to a metric."""
+  return {item.key: item for item in items}
+
+
 def claims_truth(*claims: Claim, key: str = 'expected_claims_gold') -> GroundTruth:
   return GroundTruth(id=uuid4(), sample_id=uuid4(), key=key, ground_truth_value=claims_value(list(claims)))
 
