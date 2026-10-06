@@ -18,6 +18,7 @@ def _models() -> dict[str, Any]:
       'timeout_seconds': 300,
       'max_retries': 5,
       'max_concurrent_requests': 4,
+      'output_token_limit': 65536,
     },
   }
 

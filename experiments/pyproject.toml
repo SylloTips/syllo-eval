@@ -7,6 +7,7 @@ license = "MIT"
 readme = "README.md"
 # The modules live directly in this folder, which is the import root.
 packages = [
+  {include = "ablation_metrics.py"},
   {include = "benchmarks"},
   {include = "cli.py"},
   {include = "config.py"},
@@ -14,6 +15,8 @@ packages = [
   {include = "manifest.py"},
   {include = "service.py"},
 ]
+# Read at run time from beside config.py, so they must ship in the wheel as well.
+include = [{path = "prompts/*.md", format = ["sdist", "wheel"]}]
 
 [tool.poetry.scripts]
 syllo-exp = "cli:main"

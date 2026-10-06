@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from syllo_eval.datasets.model import DatasetJsonPlanStep, DatasetJsonSample
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
+from syllo_eval.model import ExpectedClaim
 from syllo_eval.testing_database import setup_test_database
 
 from benchmarks.common import (
@@ -104,6 +105,16 @@ class WriteReadBenchmarkTest(unittest.TestCase):
     self.assertEqual(len(records), 2)
     self.assertEqual(report['source'], {'pin': 'abc'})
     self.assertEqual(report['knowledge_base_documents'], 3)
+
+
+class ClaimsValueTest(unittest.TestCase):
+  def test_claims_are_stored_in_the_library_claims_format(self) -> None:
+    value = claims_value([Claim(id='q1-f01', text='Dana approved it.'), Claim(id='q1-f02', text='It was in May.')])
+
+    self.assertEqual(
+      [ExpectedClaim.model_validate(claim) for claim in cast(list[Any], value['claims'])],
+      [ExpectedClaim(id='q1-f01', text='Dana approved it.'), ExpectedClaim(id='q1-f02', text='It was in May.')],
+    )
 
 
 class ImportBenchmarkValidationTest(unittest.IsolatedAsyncioTestCase):

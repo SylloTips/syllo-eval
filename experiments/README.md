@@ -5,9 +5,17 @@ project and is not part of the published package. It plugs into `syllo-eval` thr
 callers, trace clients, adapters and custom metrics.
 
 It also uses the library's persistence layer, the `UnitOfWork` repositories in `syllo_eval.infrastructure`, for
-ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`). It relies on
-`datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key` and `ground_truths.bulk_create`. The
-library's test suite does not run this folder's tests, so changes to these methods must keep them passing.
+ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`), and for the stored
+traces that the whole-trace ablation reads (`ablation_metrics.py`). It relies on `datasets.get_by_name`,
+`samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create` and `spans.list_by_trace`.
+
+The ablations also rely on a few library internals:
+- `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
+  `_extract_expected_answer` of Answer Correctness;
+- the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` imports to render prompts and traces;
+- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts.
+
+The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
 ## What the experiments measure
 
@@ -31,6 +39,8 @@ of the trace it assesses. The paper asks three questions:
 [`METHODOLOGY.md`](METHODOLOGY.md) fixes the protocol: evaluation units, aggregation and statistics.
 [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
 expected output of each step.
+[`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
+expected output of each step.
 
 ## Layout
 
@@ -39,6 +49,7 @@ expected output of each step.
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
+| `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -46,6 +57,7 @@ expected output of each step.
 ## Setup
 
 Run all commands from this folder. The parent project's database and migrations are shared: start Postgres with the
+root `docker-compose.yml` and apply migrations from the root folder.
 root `docker-compose.yml` and apply migrations from the root folder.
 
 ```bash
@@ -101,12 +113,47 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 - WixQA: cite "Wix.com AI Research".
 - τ²-bench: Copyright (c) 2025 Sierra Research.
 
+## Metrics
+
+The main pass runs the built-in metrics. `ablation_metrics.py` adds recall over the ERB gold claims and the two
+ablations. Each ablation subclasses the metric it is compared with and overrides one library hook, so both arms score
+the same units with the same rubric, scoring, failure handling and result metadata; an ablation only adds metadata
+fields. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation changes.
+
+| Metric | Unit | Judge calls per unit | Compared with |
+|---|---|---|---|
+| `contextual_precision_document_judge` (built-in) | one search call | one per document | |
+| `contextual_precision_document_judge_sc` | one search call | one | `contextual_precision_document_judge` |
+| `contextual_recall_gold_claims` | one search call | one per gold claim | |
+| `contextual_recall_gold_claims_sc` | one search call | one | `contextual_recall_gold_claims` |
+| `answer_correctness_judge` (built-in) | one question | one | |
+| `answer_correctness_judge_wt` | one question | one | `answer_correctness_judge` |
+| `plan_correctness_judge` (built-in) | one τ²-bench trajectory | one | |
+| `plan_correctness_judge_wt` | one τ²-bench trajectory | one | `plan_correctness_judge` |
+
+- **Search units:** the retrieval metrics are built with `target_span_types=(SEARCH_SPAN_TYPE,)`, so each search call
+  is one unit. Each agent's adapter must emit every search call as a `retrieval` span, with the user question as its
+  request and the returned documents as one ranked `selected` document result.
+- **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
+  never decomposes the expected answer, so a unit makes one judge call per claim. Recall over `decomposed_claims` (RQ2)
+  and `expected_claims_verified` (RQ3) is the same subclass with another key, once those ground truths are imported.
+- **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
+  metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
+- **Failures:** a failed unit records its cause in `metadata['failure']` (the library's classes, plus `trace_load` for
+  a whole-trace unit whose trace could not be loaded) and the usage of every judge call.
+
 ## Verification
 
 ```bash
 poetry run python -m unittest discover -s tests
 poetry run mypy . --check-untyped-defs --explicit-package-bases
 ```
+
+`ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
+- it creates and deletes `test-benchmark-*` datasets;
+- it is skipped when that database is unreachable, and fails when the database is not migrated.
+
+Check which database is configured before running the suite.
 
 `ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
 - it creates and deletes `test-benchmark-*` datasets;

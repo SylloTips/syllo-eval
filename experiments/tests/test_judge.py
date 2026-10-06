@@ -37,6 +37,7 @@ def _judge_config(**overrides: Any) -> JudgeConfig:
     'timeout_seconds': 300,
     'max_retries': 7,
     'max_concurrent_requests': 3,
+    'output_token_limit': 65536,
   }
   return JudgeConfig(**{**fields, **overrides})
 
