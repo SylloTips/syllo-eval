@@ -18,7 +18,7 @@ The prompts that change live in ``prompts/``: the built-in v1 wording, edited on
 import json
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import cache
 from string import Template
 from typing import Any
@@ -397,11 +397,11 @@ class _WholeTraceJudgeMetric(BaseLlmJudgeMetric, ABC):
     self._load_spans = load_spans
 
   @abstractmethod
-  def build_whole_trace_user_prompt(self, span: Span, ground_truth: GroundTruth | None, trace: str) -> str:
+  def build_whole_trace_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth], trace: str) -> str:
     """The built-in user prompt, with ``trace`` in place of the target's observations."""
 
   async def judge_input(
-    self, span: Span, ground_truth: GroundTruth | None
+    self, span: Span, ground_truths: Mapping[str, GroundTruth]
   ) -> tuple[str, dict[str, Any]] | MetricComputationResult:
     try:
       trace, span_count = render_whole_trace(await self._load_spans(span.trace_id), span.external_id)
@@ -415,7 +415,7 @@ class _WholeTraceJudgeMetric(BaseLlmJudgeMetric, ABC):
       )
     # Recorded for every judged unit, failed ones included, so that trace length never depends on the judge succeeding.
     trace_render = {'spans': span_count, 'chars': len(trace)}
-    return self.build_whole_trace_user_prompt(span, ground_truth, trace), {'trace_render': trace_render}
+    return self.build_whole_trace_user_prompt(span, ground_truths, trace), {'trace_render': trace_render}
 
 
 class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectnessJudgeMetric):
@@ -424,7 +424,8 @@ class AnswerCorrectnessWT(_WholeTraceJudgeMetric, AnswerCorrectnessJudgeMetric):
   metric_name = 'answer_correctness_judge_wt'
   metric_description = 'Syllo-eval-WT: answer correctness judged from the whole canonical trace, not the final answer.'
 
-  def build_whole_trace_user_prompt(self, span: Span, ground_truth: GroundTruth | None, trace: str) -> str:
+  def build_whole_trace_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth], trace: str) -> str:
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     return render_ablation_prompt(
       'answer_correctness_wt_user.md',
       expected_answer=self._extract_expected_answer(ground_truth),
@@ -441,7 +442,8 @@ class PlanCorrectnessWT(_WholeTraceJudgeMetric, PlanCorrectnessJudgeMetric):
   metric_name = 'plan_correctness_judge_wt'
   metric_description = 'Syllo-eval-WT: plan correctness judged from the whole canonical trace, not the executed steps.'
 
-  def build_whole_trace_user_prompt(self, span: Span, ground_truth: GroundTruth | None, trace: str) -> str:
+  def build_whole_trace_user_prompt(self, span: Span, ground_truths: Mapping[str, GroundTruth], trace: str) -> str:
+    ground_truth = ground_truths.get(self.ground_truth_keys[0])
     return render_ablation_prompt(
       'plan_correctness_wt_user.md',
       request=display_text(span.semantics.request),
