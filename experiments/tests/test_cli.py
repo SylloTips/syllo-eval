@@ -26,6 +26,7 @@ from config import CONFIG_DIR
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS
 from indexing.embedding import EmbeddingError, Embeddings
 from indexing.pipeline import EmbedOutcome, LoadOutcome
+from indexing.vector_store import VectorStoreError
 from manifest import Manifest, StepStatus
 
 
@@ -348,7 +349,7 @@ class IndexCliTest(_ConfigDirTestCase):
 
   def test_load_records_the_collection_it_filled(self) -> None:
     @asynccontextmanager
-    async def fake_store() -> AsyncIterator[object]:
+    async def fake_store(settings: Any) -> AsyncIterator[object]:
       yield object()
 
     load = AsyncMock(return_value=LoadOutcome(collection='wixqa-test', points=5))
@@ -359,6 +360,21 @@ class IndexCliTest(_ConfigDirTestCase):
     self.assertIn('wixqa: 5 documents loaded into collection wixqa-test', output)
     record = Manifest(self.manifest).latest()['index:load:wixqa']
     self.assertEqual((record.status, record.details), (StepStatus.COMPLETED, {'collection': 'wixqa-test', 'points': 5}))
+
+  def test_a_vector_store_failure_is_recorded_and_the_next_knowledge_base_still_loads(self) -> None:
+    @asynccontextmanager
+    async def fake_store(settings: Any) -> AsyncIterator[object]:
+      yield object()
+
+    outcome = LoadOutcome(collection='wixqa-test', points=5)
+    load = AsyncMock(side_effect=[VectorStoreError('Qdrant could not count the points of erb-test: refused'), outcome])
+    with patch('cli.open_vector_store', fake_store), patch('cli.index_pipeline.load_knowledge_base', load):
+      status, output = self._index('load')
+
+    self.assertEqual(status, 1)
+    self.assertIn('erb: failed: VectorStoreError: Qdrant could not count the points of erb-test: refused', output)
+    self.assertEqual(self._status('index:load:erb'), StepStatus.FAILED)
+    self.assertEqual(self._status('index:load:wixqa'), StepStatus.COMPLETED)
 
   def test_only_benchmarks_with_a_knowledge_base_can_be_indexed(self) -> None:
     with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

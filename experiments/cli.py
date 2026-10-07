@@ -26,7 +26,7 @@ from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, EmbeddingConfig, load_
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, open_deepeval_judge
 from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
-from indexing.vector_store import VectorStore, open_vector_store
+from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
 from manifest import Manifest, StepStatus
 from service import build_service, open_database
 
@@ -234,7 +234,7 @@ async def _run_index_step(args: argparse.Namespace) -> int:
     async with open_embedding_client(embedding, settings) as client:
       results = [await _embed(name, source, args.data_dir, client, embedding, manifest) for name, source in selected]
   else:
-    async with open_vector_store() as store:
+    async with open_vector_store(QdrantSettings()) as store:
       results = [await _load(name, source, args.data_dir, store, embedding, manifest) for name, source in selected]
   return 0 if all(results) else 1
 
@@ -280,7 +280,7 @@ async def _load(
   manifest.append(step, StepStatus.STARTED)
   try:
     outcome = await index_pipeline.load_knowledge_base(name, source, data_dir, store, config)
-  except (FileNotFoundError, PinnedFileMismatchError, ValueError) as error:
+  except (FileNotFoundError, PinnedFileMismatchError, VectorStoreError, ValueError) as error:
     return _record_failure(manifest, step, name, error)
   manifest.append(step, StepStatus.COMPLETED, details={'collection': outcome.collection, 'points': outcome.points})
   print(f'{name}: {outcome.points:,} documents loaded into collection {outcome.collection}')

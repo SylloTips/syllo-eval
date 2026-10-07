@@ -54,9 +54,12 @@ services:
       DB_NAME: ${DB_NAME:-syllo-eval-paper}
       DB_PASSWORD: ${DB_PASSWORD}
       PHOENIX_BASE_URL: http://phoenix:6006
+      QDRANT_URL: http://qdrant:6333
     depends_on:
       db:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     volumes:
       - ./data:/app/experiments/data
       - ./outputs:/app/experiments/outputs
