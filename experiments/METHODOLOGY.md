@@ -52,6 +52,39 @@ The search tool retrieves from one index per knowledge base: all 511,962 ERB doc
   as `search_query`.
   - Texts are never truncated; ERB's longest document has 11,467 tokens.
   - Vectors are compared by cosine.
+- **BM25:** Qdrant indexes the embedded text with its built-in BM25 (`Qdrant/bm25`) and default options:
+  - English stopwords and Snowball stemming, k1 = 1.2, b = 0.75, and inverse document frequency over the collection;
+  - as the average document length, the mean number of words that are not stopwords: 227.8 for WixQA.
+
+## Search tool
+
+Every agent searches through the same MCP tool, `search_knowledge_base` (`search_tool/`), which returns ten documents
+per call.
+
+- **Rankings:** each search ranks the knowledge base twice, keeping the top 50 of each ranking:
+  - by the cosine of the query's embedding, computed exactly rather than through the approximate index;
+  - by BM25.
+  - Equal scores are ordered by document id, also at the cut.
+- **Fusion:** reciprocal rank fusion with k = 60 and ranks from 1: a document scores the sum of 1 / (60 + rank) over the
+  rankings that hold it. Ties go to the better best rank, then to the better dense rank. The server fuses the rankings
+  itself, because Qdrant's own fusion orders ties at random.
+- **Determinism:** with exact rankings, cuts and tie-breaks that depend only on scores and ids, the same query returns
+  the same ten documents.
+- **Degraded configurations (RQ2):** a fraction f of the ten results is replaced with documents of the same knowledge
+  base drawn at random:
+  - f x 10 positions are chosen uniformly; a count that is not whole is rounded up with a probability equal to its
+    fractional part, so that on average exactly f of the results are replaced. For f = 0.25, that is 2 or 3 of the
+    10, each half of the time; for f = 0.5, always 5.
+  - Each replacement is drawn uniformly from the documents not among the ten; the other documents keep their ranks.
+  - The draws are seeded by the server's seed and the query, so they repeat with the query.
+- **Document length:** a per-document cap, if any, is chosen before the pilot from the gold length statistics of
+  `data/<benchmark>/report.json`, in characters: `gold_document_chars`, `longest_gold_document_chars_per_sample` and,
+  for the RQ3 claims, ERB's `claim_gold_document_chars`. The tool can cut each document after a number of characters
+  and mark the cut.
+- **Call log:** the server logs every search that reaches the tool, with what it returned and which ranks were random,
+  or with its error, so the search units extracted from traces can be checked against it.
+- **Unreachable tool:** a question whose agent could not reach the search tool, as when Open Deep Research drops a
+  server it cannot connect to, is an infrastructure failure and runs again. It is not a question with no search.
 
 ## Evaluation units
 

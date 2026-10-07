@@ -9,7 +9,6 @@ import asyncio
 import logging
 import random
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -31,7 +30,8 @@ QUERY_INPUT_TYPE: InputType = 'search_query'
 
 # Cohere's tokenizer averages 3.7 characters per token on ERB, so 3 rarely estimates below the billed count.
 _CHARS_PER_TOKEN = 3
-_WINDOW_SECONDS = 60.0
+# How far requests may run ahead of the quota's even pace, in seconds of tokens.
+_BURST_SECONDS = 2.0
 _RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _BACKOFF_SECONDS = 2.0
 _MAX_BACKOFF_SECONDS = 60.0
@@ -87,50 +87,57 @@ def request_batches(texts: Sequence[str], max_tokens: int) -> list[range]:
 
 @dataclass(slots=True)
 class Reservation:
-  sent_at: float
   # Estimated when the request is sent, and settled to the billed count once it returns.
   tokens: int
 
 
 class TokenRateLimiter:
-  """Keeps the tokens sent in any 60-second window within the deployment's quota.
+  """Spaces requests so that their tokens flow at the deployment's quota, ``tokens_per_minute / 60`` a second.
 
-  A request waiting for room checks again whenever the oldest reservation expires or a reservation settles below its
-  estimate. A request estimated above the whole quota waits for an empty window.
+  Azure enforces the quota over windows of seconds, so a burst is throttled even when the minute's total is within the
+  quota. A request goes once the requests before it are at most ``burst_seconds`` ahead of the even pace, so the
+  tokens sent run ahead by at most that plus one request. Settling a request at its billed count pulls the pace back
+  by the tokens it was overestimated by; a waiting request checks again then.
   """
 
   def __init__(
-    self, tokens_per_minute: int, *, clock: Callable[[], float] = time.monotonic, sleep: Sleep = asyncio.sleep
+    self,
+    tokens_per_minute: int,
+    *,
+    burst_seconds: float = _BURST_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Sleep = asyncio.sleep,
   ):
-    self._quota = tokens_per_minute
+    self._rate = tokens_per_minute / 60
+    self._burst = burst_seconds
     self._clock = clock
     self._sleep = sleep
-    self._window: deque[Reservation] = deque()
+    # When the tokens reserved so far are paid for at the even pace.
+    self._paid_at = clock()
     self._lock = asyncio.Lock()
     self._settled = asyncio.Event()
 
   async def reserve(self, tokens: int) -> Reservation:
-    """Wait until the window has room for ``tokens``, then count them in it."""
+    """Wait until ``tokens`` keep the requests on pace, then count them."""
     async with self._lock:
       while True:
         now = self._clock()
-        while self._window and self._window[0].sent_at <= now - _WINDOW_SECONDS:
-          self._window.popleft()
-        if not self._window or sum(sent.tokens for sent in self._window) + tokens <= self._quota:
-          reservation = Reservation(sent_at=now, tokens=tokens)
-          self._window.append(reservation)
-          return reservation
+        wait = self._paid_at - self._burst - now
+        if wait <= 0:
+          self._paid_at = max(self._paid_at, now) + tokens / self._rate
+          return Reservation(tokens=tokens)
         self._settled.clear()
-        expiry = asyncio.ensure_future(self._sleep(self._window[0].sent_at + _WINDOW_SECONDS - now))
+        pace = asyncio.ensure_future(self._sleep(wait))
         settled = asyncio.ensure_future(self._settled.wait())
         try:
-          await asyncio.wait((expiry, settled), return_when=asyncio.FIRST_COMPLETED)
+          await asyncio.wait((pace, settled), return_when=asyncio.FIRST_COMPLETED)
         finally:
-          expiry.cancel()
+          pace.cancel()
           settled.cancel()
 
   def settle(self, reservation: Reservation, tokens: int) -> None:
-    """Count a returned request at its billed tokens, which may make room for a waiting one."""
+    """Count a returned request at its billed tokens, which may let a waiting one go sooner."""
+    self._paid_at -= (reservation.tokens - tokens) / self._rate
     reservation.tokens = tokens
     self._settled.set()
 

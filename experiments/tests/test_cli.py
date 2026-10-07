@@ -21,7 +21,7 @@ from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import Dataset, EvaluationStatus, MetricComputationStatus
 
 from benchmarks.common import ImportOutcome
-from cli import main
+from cli import DEFAULT_MANIFEST, main
 from config import CONFIG_DIR
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS
 from indexing.embedding import EmbeddingError, Embeddings
@@ -379,6 +379,71 @@ class IndexCliTest(_ConfigDirTestCase):
   def test_only_benchmarks_with_a_knowledge_base_can_be_indexed(self) -> None:
     with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
       self._index('embed', '--only', 'tau2')
+
+
+class SearchServerCliTest(unittest.TestCase):
+  """Runs `search-server` with the server itself replaced by a fake."""
+
+  def _serve(self, *args: str, environment: dict[str, str] | None = None) -> tuple[int, str, AsyncMock]:
+    if environment is None:
+      environment = {'AZURE_FOUNDRY_BASE_URL': 'https://foundry.example', 'AZURE_FOUNDRY_API_KEY': 'test-key'}
+    errors = io.StringIO()
+    with (
+      patch.dict(os.environ, environment),
+      patch('cli.load_environment'),
+      patch('cli.logging.basicConfig'),
+      patch('search_tool.server.serve', AsyncMock(side_effect=self.serve_error)) as serve,
+      redirect_stderr(errors),
+    ):
+      for name in ('AZURE_FOUNDRY_BASE_URL', 'AZURE_FOUNDRY_API_KEY'):
+        if name not in environment:
+          os.environ.pop(name, None)
+      status, _ = _run(['search-server', *args])
+    return status, errors.getvalue(), serve
+
+  def setUp(self) -> None:
+    self.serve_error: Exception | None = None
+
+  def test_serves_the_collection_with_the_given_options(self) -> None:
+    status, _, serve = self._serve(
+      '--collection', 'erb-69916e3', '--swap-fraction', '0.25', '--seed', '3', '--port', '8101'
+    )
+
+    self.assertEqual(status, 0)
+    [call] = serve.await_args_list
+    self.assertEqual(call.args[0], 'erb-69916e3')
+    self.assertEqual(call.args[1].model, 'Cohere-Embed-V5-Fast')
+    self.assertEqual(
+      call.kwargs,
+      {
+        'swap_fraction': 0.25,
+        'seed': 3,
+        'max_document_chars': None,
+        'call_log': DEFAULT_MANIFEST.parent / 'search_calls' / 'erb-69916e3-8101.jsonl',
+        'host': '127.0.0.1',
+        'port': 8101,
+      },
+    )
+
+  def test_a_collection_it_cannot_serve_is_reported_before_serving(self) -> None:
+    self.serve_error = ValueError('Collection erb-69916e3 was not loaded for hybrid search')
+
+    status, errors, _ = self._serve('--collection', 'erb-69916e3')
+
+    self.assertEqual(status, 1)
+    self.assertIn('search-server: Collection erb-69916e3 was not loaded for hybrid search', errors)
+
+  def test_without_foundry_credentials_nothing_is_served(self) -> None:
+    status, errors, serve = self._serve('--collection', 'erb-69916e3', environment={})
+
+    self.assertEqual(status, 2)
+    self.assertIn('AZURE_FOUNDRY_BASE_URL and AZURE_FOUNDRY_API_KEY', errors)
+    serve.assert_not_awaited()
+
+  def test_rejects_a_swap_fraction_outside_zero_to_one(self) -> None:
+    for fraction in ('1', '-0.1'):
+      with self.subTest(fraction=fraction), self.assertRaises(SystemExit):
+        self._serve('--collection', 'erb-69916e3', '--swap-fraction', fraction)
 
 
 class DeepEvalCliTest(unittest.TestCase):

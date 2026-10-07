@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import logging
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
@@ -92,6 +93,31 @@ def build_parser() -> argparse.ArgumentParser:
   )
   deepeval.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
   deepeval.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
+
+  search = commands.add_parser(
+    'search-server',
+    help='Serve the search tool of one knowledge base over MCP.',
+    description="Serve the agents' search tool over MCP at http://<host>:<port>/mcp.",
+  )
+  search.add_argument('--collection', required=True, help='Qdrant collection to search, such as erb-69916e3.')
+  search.add_argument(
+    '--swap-fraction',
+    type=_fraction,
+    default=0.0,
+    help='Share of the results replaced by random documents of the same knowledge base (default: 0).',
+  )
+  search.add_argument('--seed', type=int, default=0, help='Seed of the random replacements (default: 0).')
+  search.add_argument(
+    '--max-document-chars', type=_positive_int, help='Cut each returned document at this length (default: no cut).'
+  )
+  search.add_argument(
+    '--call-log',
+    type=Path,
+    help='JSON Lines file of every search (default: outputs/search_calls/<collection>-<port>.jsonl).',
+  )
+  search.add_argument('--host', default='127.0.0.1', help='Interface to listen on (default: 127.0.0.1).')
+  search.add_argument('--port', type=_positive_int, default=8000, help='Port to listen on (default: 8000).')
+  search.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
   return parser
 
 
@@ -106,6 +132,13 @@ def _positive_int(value: str) -> int:
   number = int(value)
   if number < 1:
     raise argparse.ArgumentTypeError(f'must be at least 1, got {number}')
+  return number
+
+
+def _fraction(value: str) -> float:
+  number = float(value)
+  if not 0 <= number < 1:
+    raise argparse.ArgumentTypeError(f'must be at least 0 and below 1, got {number}')
   return number
 
 
@@ -127,6 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return _run_benchmark_step(args)
   elif args.command == 'index':
     return asyncio.run(_run_index_step(args))
+  elif args.command == 'search-server':
+    return _serve_search(args)
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
   return 0
@@ -285,6 +320,47 @@ async def _load(
   manifest.append(step, StepStatus.COMPLETED, details={'collection': outcome.collection, 'points': outcome.points})
   print(f'{name}: {outcome.points:,} documents loaded into collection {outcome.collection}')
   return True
+
+
+def _serve_search(args: argparse.Namespace) -> int:
+  """Serve the search tool until interrupted; a collection or setting that cannot serve fails before it starts."""
+  embedding = load_config(args.config_dir).models.embedding
+  load_environment()
+  foundry = AzureFoundrySettings()
+  if foundry.base_url is None or foundry.api_key is None:
+    print(
+      'The search tool embeds queries, so it needs AZURE_FOUNDRY_BASE_URL and AZURE_FOUNDRY_API_KEY.', file=sys.stderr
+    )
+    return 2
+  logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+  # Each search would otherwise log every HTTP request and MCP message it makes, and FastMCP every failed search with
+  # a full traceback; the search logs its own failures in one line.
+  for noisy in ('httpx', 'mcp'):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+  logging.getLogger('fastmcp.fastmcp.tools.tool_manager').setLevel(logging.CRITICAL)
+  call_log = args.call_log or DEFAULT_MANIFEST.parent / 'search_calls' / f'{args.collection}-{args.port}.jsonl'
+  # Imported here: the MCP framework is slow to import, and only this command needs it.
+  from search_tool import server as search_server
+
+  try:
+    asyncio.run(
+      search_server.serve(
+        args.collection,
+        embedding,
+        foundry,
+        QdrantSettings(),
+        swap_fraction=args.swap_fraction,
+        seed=args.seed,
+        max_document_chars=args.max_document_chars,
+        call_log=call_log,
+        host=args.host,
+        port=args.port,
+      )
+    )
+  except (ValueError, VectorStoreError) as error:
+    print(f'search-server: {error}', file=sys.stderr)
+    return 1
+  return 0
 
 
 async def _score_with_deepeval(args: argparse.Namespace) -> int:

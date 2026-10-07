@@ -56,9 +56,10 @@ expected output of each step.
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
+| `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
 | `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
-| `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
+| `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
@@ -141,8 +142,8 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 ## Search indexes
 
 The agents search the ERB and WixQA knowledge bases through the search tool, which reads one vector-store collection
-per knowledge base. A collection holds one point per document: the benchmarks label relevance per document, so
-documents are never chunked.
+per knowledge base. A collection holds one point per document, with its embedding and its BM25 term weights: the
+benchmarks label relevance per document, so documents are never chunked.
 
 ```bash
 scripts/index-benchmark.sh wixqa   # about 3M tokens, a few minutes: a quick check of the setup
@@ -167,17 +168,22 @@ scripts/index-benchmark.sh erb     # about 670M tokens, about 12 hours at the de
     Shards made with another spec are refused: delete the folder to embed again. Renaming the dataset or re-pinning
     the other files of the benchmark keeps them.
   - **Report:** `report.json`, written last, marks a complete index, with the documents, shards and billed tokens.
-  - **Pacing:** requests stay within the deployment's `tokens_per_minute`. Throttled requests, server errors and
-    network failures are retried, each retry printing a warning.
+  - **Pacing:** requests are spaced evenly at the deployment's `tokens_per_minute`: a request goes once the requests
+    before it are at most 2 seconds ahead of that pace, because Azure throttles bursts over windows of seconds.
+    Throttled requests, server errors and network failures are retried, each retry printing a warning.
 - **Load:** upserts every document into the collection named after its dataset, `erb-69916e3` or `wixqa-d662dc4`,
   then checks that the collection holds exactly the index's documents.
   - The vector store is Qdrant (`indexing/vector_store.py`), at `QDRANT_URL` (default `http://localhost:6333`, the
     Compose service) with the optional key `QDRANT_API_KEY`. A failing request fails only that knowledge base.
-  - The collection compares vectors by cosine: the vectors of the longest documents are not unit length. An existing
-    collection with another size or distance is refused: delete it to load again.
-  - The collection keeps its vectors in memory, about 4.2 GB for ERB.
+  - Each point has two vectors. `dense` is the embedding, compared by cosine: the vectors of the longest documents
+    are not unit length. `bm25` holds the BM25 weights that Qdrant computes from the embedded text; Qdrant weighs
+    them by inverse document frequency when it searches.
+  - The collection's metadata records the dataset, the model, the dimension and the documents' mean BM25 length. An
+    existing collection with other vectors or metadata is refused: delete it to load again.
+  - The collection keeps its vectors in memory: for ERB, about 4.2 GB of dense vectors and 1 to 2 GB for the BM25
+    index, more while loading.
 - **Points:** a point's id is the UUIDv5 of the dataset name and document id, so loading again replaces the same
-  points. Its payload:
+  points. A point's payload:
 
 | Field | Content |
 |---|---|
@@ -189,6 +195,70 @@ scripts/index-benchmark.sh erb     # about 670M tokens, about 12 hours at the de
 | `url`, `article_type` | WixQA: the Help Center URL, and `article`, `feature_request` or `known_issue` |
 
 [`METHODOLOGY.md`](METHODOLOGY.md) lists the indexing rules.
+
+## Search tool
+
+The agents search through an MCP server, which offers a single tool, `search_knowledge_base(query)`. It returns the
+10 best documents of a hybrid search: the documents whose embeddings are nearest to the query's, and the best BM25
+matches, fused by reciprocal rank.
+
+```bash
+poetry run syllo-exp search-server --collection erb-69916e3 --port 8101                        # erb, f = 0
+poetry run syllo-exp search-server --collection erb-69916e3 --port 8101 --swap-fraction 0.25  # erb/react/sonnet/f0.25
+poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101                      # wixqa
+```
+
+- **Switching configurations:** the agents keep one URL. To switch them to another configuration, stop the server and
+  relaunch it on the same port with that configuration's collection and swap fraction, as above. Every call-log record
+  carries the server's settings and its time, so a search can be traced to the configuration that ran then.
+- **Endpoint:** streamable HTTP at `http://<host>:<port>/mcp`, stateless, so concurrent agents share one server. It
+  listens on 127.0.0.1 unless `--host` says otherwise. The tool's name, description and schema are the same on every
+  server.
+- **Startup:** a server refuses a collection loaded without its dense and BM25 vectors, or embedded with another model
+  or dimension than [`configs/models.yaml`](configs/models.yaml)'s, and warns while Qdrant is still optimizing the
+  collection. It needs the Azure Foundry key, to embed queries. Run the servers on the host with `poetry run`: the
+  Compose `experiments` container publishes no ports.
+- **Output:** one JSON object, both as text and as structured content. `id` is the `document_id` of the gold lists,
+  and `call_id` identifies the search in the call log:
+
+  ```json
+  {"call_id": "87e80b95…", "query": "…", "results": [{"rank": 1, "id": "…", "title": "…", "text": "…"}, …]}
+  ```
+
+  A search unit is a tool output that parses as such an object; anything else is a failed call, since the agents'
+  clients do not all keep MCP's error flag. The server's own failures read `The search failed: <reason>`.
+- **Determinism:** the same query always returns the same documents. Qdrant ranks the documents both ways, and the
+  server cuts and fuses the rankings itself, ordering equal scores by id: Qdrant's own fusion orders ties at random,
+  and its cut picks among tied documents by how it stores them.
+- **Degraded configurations:** `--swap-fraction f` replaces a fraction f of the results with documents drawn at random
+  from the same collection, for RQ2's known order. The draws depend only on `--seed` and the query.
+- **Long documents:** `--max-document-chars N` cuts each returned text after N characters and appends ` [truncated]`.
+  It is off by default: the cap is still to be chosen from the gold length statistics of the conversion,
+  `gold_document_chars` and `longest_gold_document_chars_per_sample` in `data/<benchmark>/report.json`.
+- **Call log:** every search that reaches the tool is appended to `--call-log`, by default
+  `outputs/search_calls/<collection>-<port>.jsonl`. A record holds the server's settings, the call id, time and query,
+  and either the returned ids, the ranks of the random documents and the ids they replaced, or the error. Traces can be
+  checked against it: Dify, for one, can leave a call out of its traces. A call that MCP rejects, without a string
+  `query`, never reaches the tool.
+
+### Connecting the agents
+
+- **Dify** (1.17.1): add the server under Integrations > Tools > MCP > Add MCP Server (HTTP), at
+  `http://host.docker.internal:<port>/mcp`.
+  - Dify calls external servers through its `ssrf_proxy`, which refuses private addresses. Set
+    `SSRF_PROXY_ALLOW_PRIVATE_DOMAINS=host.docker.internal` in Dify's `docker/.env` and recreate `ssrf_proxy`. On
+    Linux, also give `ssrf_proxy` `extra_hosts: ['host.docker.internal:host-gateway']`, and serve on `--host 0.0.0.0`.
+  - Dify's classic Agent app switches to function calling whenever the model supports it. A ReAct agent needs a
+    Chatflow or Workflow Agent node with the ReAct strategy.
+- **smolagents:** `MCPClient({'url': 'http://127.0.0.1:<port>/mcp', 'transport': 'streamable-http'},
+  structured_output=False)`, so that the CodeAgent reads the same JSON text as the other agents. Its environment needs
+  `mcp<2`, and the CodeAgent needs `json` among its authorized imports to parse the results.
+- **Open Deep Research:** `search_api: 'none'` and `mcp_config: {'url': 'http://127.0.0.1:<port>', 'tools':
+  ['search_knowledge_base'], 'auth_required': False}`. It appends `/mcp` to the URL itself. Its researcher prompt still
+  names web search, so set `mcp_prompt` to point it at the knowledge base.
+  - It drops a server it cannot reach, or a URL ending in `/mcp`, without an error, at every researcher step: its
+    researchers then answer without searching. Check before each run that `search_knowledge_base` is among its tools,
+    and after each question that the trace holds its searches.
 
 ## Metrics
 
@@ -259,13 +329,10 @@ poetry run mypy . --check-untyped-defs --explicit-package-bases
 - it creates and deletes `test-benchmark-*` datasets;
 - it is skipped when that database is unreachable, and fails when the database is not migrated.
 
-Check which database is configured before running the suite.
+`QdrantServerTest` (in `tests/test_vector_store.py`) runs against the Qdrant at `QDRANT_URL`, by default the Compose
+service: it creates and deletes `test-search-*` collections, and it is skipped when that server is unreachable.
 
-`ImportBenchmarkTest` (in `tests/test_benchmarks_common.py`) runs against the database that the `.env` files select:
-- it creates and deletes `test-benchmark-*` datasets;
-- it is skipped when that database is unreachable, and fails when the database is not migrated.
-
-Check which database is configured before running the suite.
+Check which database and Qdrant are configured before running the suite.
 
 The parent project's `poetry run ruff check .` and `poetry run ruff format .` also cover this folder.
 
