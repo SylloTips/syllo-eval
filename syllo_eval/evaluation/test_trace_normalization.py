@@ -145,6 +145,20 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class IngestionTest(unittest.IsolatedAsyncioTestCase):
+  async def test_phoenix_lookup_filters_on_the_configured_attribute(self):
+    response = {
+      'data': {'projects': {'edges': [{'node': {'spans': {'edges': [{'node': {'context': {'traceId': 't'}}}]}}}]}}
+    }
+    for attribute, expected in [
+      ('request_id', "attributes['request_id'] == 'r1'"),
+      ('metadata.message_id', "attributes['metadata']['message_id'] == 'r1'"),
+    ]:
+      with self.subTest(attribute=attribute):
+        client = PhoenixClient(PhoenixSettings(project_id='p', request_id_attribute=attribute))
+        with patch.object(client, '_post_graphql', new=AsyncMock(return_value=response)) as post:
+          self.assertEqual(await client.get_trace_id_by_request_id('r1'), 't')
+        self.assertEqual(post.call_args.args[1]['filterCondition'], expected)
+
   async def test_phoenix_fetch_preserves_status_through_normalization(self):
     client = PhoenixClient(PhoenixSettings())
     for source, expected in [('OK', 'success'), ('ERROR', 'error'), ('UNSET', 'unset'), (None, 'unset')]:

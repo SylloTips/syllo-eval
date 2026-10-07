@@ -367,6 +367,7 @@ In Python, you can build `Settings` directly instead.
 | `DB_PASSWORD` | — | Required |
 | `PHOENIX_BASE_URL` | `http://localhost:6006` | Phoenix server |
 | `PHOENIX_API_KEY`, `PHOENIX_PROJECT_ID` | — | Phoenix authentication and project |
+| `PHOENIX_REQUEST_ID_ATTRIBUTE` | `request_id` | Root-span attribute matched against the request ID; dots address nested attributes, e.g. `metadata.request_id` |
 | `PHOENIX_REQUEST_ID_EXCLUDED_ROOT_SPAN_NAMES` | `[]` | JSON list of root span names to ignore when resolving request IDs |
 | `LLM_JUDGE_PROVIDER` | — | `openai` or `gemini`; enables the judge metrics |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | —, `https://api.openai.com/v1`, `gpt-5-mini` | OpenAI judge |

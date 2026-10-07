@@ -226,11 +226,12 @@ class PhoenixClient:
 
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(seconds=self.config.request_id_lookup_time_window_seconds)
+    attribute_path = ''.join(f'[{_filter_literal(key)}]' for key in self.config.request_id_attribute.split('.'))
     body = await self._post_graphql(
       self._REQUEST_ID_LOOKUP_QUERY,
       {
         'projectName': self.config.project_id,
-        'filterCondition': f"attributes['request_id'] == {_filter_literal(request_id)}",
+        'filterCondition': f'attributes{attribute_path} == {_filter_literal(request_id)}',
         'first': self._REQUEST_ID_LOOKUP_PAGE_SIZE,
         'start': _format_iso_datetime(start_time),
         'end': _format_iso_datetime(end_time),

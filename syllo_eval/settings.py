@@ -73,6 +73,8 @@ class PhoenixSettings(EnvSettings):
   request_id_lookup_initial_backoff_seconds: float = Field(default=2.0, gt=0)
   request_id_lookup_max_backoff_seconds: float = Field(default=30.0, gt=0)
   request_id_lookup_time_window_seconds: float = Field(default=600.0, gt=0)
+  # Root-span attribute holding the request ID; dots address nested attributes, e.g. `metadata.request_id`.
+  request_id_attribute: str = Field(default='request_id', pattern=r'^[^.]+(\.[^.]+)*$')
   request_id_excluded_root_span_names: tuple[str, ...] = ()
 
   @field_validator('request_id_excluded_root_span_names')
