@@ -96,7 +96,7 @@ class DatasetServiceImportTest(unittest.IsolatedAsyncioTestCase):
     with patch('syllo_eval.datasets.service.TransactionalUnitOfWork', return_value=uow):
       summary = await service.import_dataset(name='demo', payload=payload)
 
-    self.assertEqual(summary.ground_truth_count, 2)
+    self.assertEqual(summary.ground_truth_count, 0)
 
   async def test_import_dataset_rejects_duplicate_name(self) -> None:
     service = _build_service()

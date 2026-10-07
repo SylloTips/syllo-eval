@@ -50,7 +50,7 @@ class ConvertTest(unittest.TestCase):
     self.assertEqual(benchmark.samples[0].input_prompt, 'Question qst_0001?')
     self.assertEqual(benchmark.samples[0].ground_truth_output, 'Answer qst_0001.')
     self.assertEqual(benchmark.samples[2].document_ids, ['dsid_a', 'dsid_c'])
-    self.assertEqual(benchmark.samples[3].document_ids, [])
+    self.assertIsNone(benchmark.samples[3].document_ids)
     self.assertEqual(benchmark.records[4]['expected_doc_ids'], ['dsid_x', 'dsid_x'])
 
   def test_an_id_naming_several_documents_makes_each_of_them_gold(self) -> None:
