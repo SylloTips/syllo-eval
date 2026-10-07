@@ -89,7 +89,7 @@ for a family of metrics.
 
 Omit `document_ids` or `snippet_ids` when a sample is unlabeled, and their metrics skip it. An empty list means no
 item is relevant: set precision scores 1.0 only if nothing was selected, while set recall and nDCG@10, being
-undefined, are skipped.
+undefined, are skipped. Set precision also skips samples with relevant items but nothing selected.
 Plan steps accept exactly `operation`, `instruction`, and optional JSON `parameters`; any other field is rejected.
 Claims are `{"id": ..., "text": ...}` objects with ids unique within the sample.
 Dataset names are unique, so importing a name that already exists fails.

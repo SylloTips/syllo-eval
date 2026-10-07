@@ -28,9 +28,9 @@ class SetMetricsTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.status, MetricComputationStatus.SKIPPED)
 
   async def test_empty_set_conventions(self):
-    # (relevant, retrieved) -> (recall, precision); None is a skip. Precision scores each 0/0 by convention.
+    # (relevant, retrieved) -> (recall, precision); None is a skip. Precision scores 1.0 when both sets are empty.
     cases = {
-      (('d1',), ()): (0.0, 0.0),
+      (('d1',), ()): (0.0, None),
       (('d1',), ('x',)): (0.0, 0.0),
       ((), ()): (None, 1.0),
       ((), ('x',)): (None, 0.0),
@@ -49,7 +49,12 @@ class SetMetricsTest(unittest.IsolatedAsyncioTestCase):
           self.assertEqual((await recall.compute(target, ground_truths)).score, expected_recall)
         precision = SetPrecisionDocumentMetric()
         self.assertIsNone(precision.ground_truth_skip_reason(ground_truths))
-        self.assertEqual((await precision.compute(target, ground_truths)).score, expected_precision)
+        result = await precision.compute(target, ground_truths)
+        if expected_precision is None:
+          self.assertEqual(result.status, MetricComputationStatus.SKIPPED)
+          self.assertEqual(result.error_message, 'Nothing selected, so precision is undefined.')
+        else:
+          self.assertEqual(result.score, expected_precision)
 
   def test_recall_leaves_malformed_labels_to_compute(self):
     self.assertIsNone(SetRecallDocumentMetric().ground_truth_skip_reason(truth(relevant_ids='invalid')))
