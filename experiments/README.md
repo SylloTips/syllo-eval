@@ -57,15 +57,33 @@ expected output of each step.
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, vector store interface, pipeline |
 | `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base |
+| `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup
 
-Run all commands from this folder. The parent project's database and migrations are shared: start Postgres with the
-root `docker-compose.yml` and apply migrations from the root folder.
-root `docker-compose.yml` and apply migrations from the root folder.
+Run all commands from this folder.
+
+### Campaign environment
+
+`docker-compose.yml` here runs Postgres (the campaign and Phoenix databases), Qdrant, Phoenix, and an `experiments`
+image that runs `syllo-exp` and the migrations. Settings come only from `experiments/.env`, which must set
+`DB_PASSWORD`; `DB_NAME` defaults to `syllo-eval-paper`. Ports bind to localhost, and Postgres uses host port 5433.
+
+```bash
+docker compose up -d
+docker compose run --rm experiments alembic upgrade head   # after checking DB_NAME
+docker compose run --rm experiments syllo-exp configurations
+```
+
+Run `docker compose build experiments` after changing the code. `data/` and `outputs/` are mounted from this folder.
+
+### Without Docker
+
+The parent project's database and migrations are shared: start Postgres with the root `docker-compose.yml` and apply
+migrations from the root folder.
 
 ```bash
 poetry install

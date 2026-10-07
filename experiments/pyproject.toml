@@ -33,6 +33,10 @@ pyarrow = "^21.0.0"
 pyyaml = "^6.0"
 deepeval = "4.2.6"
 
+[tool.poetry.group.migrations.dependencies]
+alembic = "^1.18.5"
+sqlalchemy = "^2.0.36"
+
 [tool.poetry.group.dev.dependencies]
 mypy = "1.14.1"
 types-pyyaml = "^6.0"
