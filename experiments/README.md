@@ -55,17 +55,35 @@ expected output of each step.
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
-| `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, vector store interface, pipeline |
+| `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base |
+| `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup
 
-Run all commands from this folder. The parent project's database and migrations are shared: start Postgres with the
-root `docker-compose.yml` and apply migrations from the root folder.
-root `docker-compose.yml` and apply migrations from the root folder.
+Run all commands from this folder.
+
+### Campaign environment
+
+`docker-compose.yml` here runs Postgres (the campaign and Phoenix databases), Qdrant, Phoenix, and an `experiments`
+image that runs `syllo-exp` and the migrations. Settings come only from `experiments/.env`, which must set
+`DB_PASSWORD`; `DB_NAME` defaults to `syllo-eval-paper`. Ports bind to localhost, and Postgres uses host port 5433.
+
+```bash
+docker compose up -d
+docker compose run --rm experiments alembic upgrade head   # after checking DB_NAME
+docker compose run --rm experiments syllo-exp configurations
+```
+
+Run `docker compose build experiments` after changing the code. `data/` and `outputs/` are mounted from this folder.
+
+### Without Docker
+
+The parent project's database and migrations are shared: start Postgres with the root `docker-compose.yml` and apply
+migrations from the root folder.
 
 ```bash
 poetry install
@@ -133,8 +151,7 @@ scripts/index-benchmark.sh erb     # about 670M tokens, about 12 hours at the de
 
 - **Launch:** the script runs `syllo-exp index embed --only <benchmark>`, then `syllo-exp index load --only
   <benchmark>`, which can also run alone. It writes a copy of its output to `outputs/logs/` and keeps a Mac awake while
-  it runs. Both steps resume, so after an interruption run it again. Until the vector store has its Qdrant
-  implementation, the load step fails once the embeddings are written.
+  it runs. Both steps resume, so after an interruption run it again.
 - **Model:** `embedding` in [`configs/models.yaml`](configs/models.yaml), Cohere Embed 5 Fast at 2,048 dimensions, its
   full size. Documents are embedded as `search_document`; the search tool must embed queries with the same model and
   dimension, as `search_query`.
@@ -154,9 +171,11 @@ scripts/index-benchmark.sh erb     # about 670M tokens, about 12 hours at the de
     network failures are retried, each retry printing a warning.
 - **Load:** upserts every document into the collection named after its dataset, `erb-69916e3` or `wixqa-d662dc4`,
   then checks that the collection holds exactly the index's documents.
-  - The vector store is an interface (`indexing/vector_store.py`) whose Qdrant implementation is not written yet.
-  - The collection must compare vectors by cosine: the vectors of the longest documents are not unit length.
-  - ERB's vectors take about 4.2 GB, which Qdrant keeps in memory unless the collection stores them on disk.
+  - The vector store is Qdrant (`indexing/vector_store.py`), at `QDRANT_URL` (default `http://localhost:6333`, the
+    Compose service) with the optional key `QDRANT_API_KEY`. A failing request fails only that knowledge base.
+  - The collection compares vectors by cosine: the vectors of the longest documents are not unit length. An existing
+    collection with another size or distance is refused: delete it to load again.
+  - The collection keeps its vectors in memory, about 4.2 GB for ERB.
 - **Points:** a point's id is the UUIDv5 of the dataset name and document id, so loading again replaces the same
   points. Its payload:
 
