@@ -55,6 +55,8 @@ expected output of each step.
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
+| `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, vector store interface, pipeline |
+| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` also writes to the configured database (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -117,6 +119,57 @@ The benchmarks are MIT-licensed. A release of derived data must keep their notic
 - ERB: Copyright (c) 2026 DanswerAI, Inc.
 - WixQA: cite "Wix.com AI Research".
 - τ²-bench: Copyright (c) 2025 Sierra Research.
+
+## Search indexes
+
+The agents search the ERB and WixQA knowledge bases through the search tool, which reads one vector-store collection
+per knowledge base. A collection holds one point per document: the benchmarks label relevance per document, so
+documents are never chunked.
+
+```bash
+scripts/index-benchmark.sh wixqa   # about 3M tokens, a few minutes: a quick check of the setup
+scripts/index-benchmark.sh erb     # about 670M tokens, about 12 hours at the deployment's 1M tokens a minute
+```
+
+- **Launch:** the script runs `syllo-exp index embed --only <benchmark>`, then `syllo-exp index load --only
+  <benchmark>`, which can also run alone. It writes a copy of its output to `outputs/logs/` and keeps a Mac awake while
+  it runs. Both steps resume, so after an interruption run it again. Until the vector store has its Qdrant
+  implementation, the load step fails once the embeddings are written.
+- **Model:** `embedding` in [`configs/models.yaml`](configs/models.yaml), Cohere Embed 5 Fast at 2,048 dimensions, its
+  full size. Documents are embedded as `search_document`; the search tool must embed queries with the same model and
+  dimension, as `search_query`.
+  - The model is a deployment of an Azure AI Foundry resource, called through Cohere's v2 embed API at
+    `<AZURE_FOUNDRY_BASE_URL>/providers/cohere/v2/embed` with the key `AZURE_FOUNDRY_API_KEY`.
+  - `AZURE_FOUNDRY_BASE_URL` is the resource endpoint, `https://<resource>.services.ai.azure.com`, without `/models`
+    or `/openai/v1`.
+- **Embed:** writes the vectors to `data/<benchmark>/index/` in Parquet shards of 2,048 documents, each with the tokens
+  billed for it; ERB's take about 4.2 GB.
+  - **Resume:** an interrupted run starts again at the first missing shard. Two runs cannot embed the same index at
+    once.
+  - **Spec:** `spec.json` records the pin of the knowledge-base file, the model, the dimension and the embedded text.
+    Shards made with another spec are refused: delete the folder to embed again. Renaming the dataset or re-pinning
+    the other files of the benchmark keeps them.
+  - **Report:** `report.json`, written last, marks a complete index, with the documents, shards and billed tokens.
+  - **Pacing:** requests stay within the deployment's `tokens_per_minute`. Throttled requests, server errors and
+    network failures are retried, each retry printing a warning.
+- **Load:** upserts every document into the collection named after its dataset, `erb-69916e3` or `wixqa-d662dc4`,
+  then checks that the collection holds exactly the index's documents.
+  - The vector store is an interface (`indexing/vector_store.py`) whose Qdrant implementation is not written yet.
+  - The collection must compare vectors by cosine: the vectors of the longest documents are not unit length.
+  - ERB's vectors take about 4.2 GB, which Qdrant keeps in memory unless the collection stores them on disk.
+- **Points:** a point's id is the UUIDv5 of the dataset name and document id, so loading again replaces the same
+  points. Its payload:
+
+| Field | Content |
+|---|---|
+| `document_id` | the id that `dataset.json`'s gold lists use, so a retrieved document is compared with the labels as is |
+| `source_document_id` | the id in the benchmark file; ERB's four renamed duplicates have `document_id` `<doc_id>__2` |
+| `dataset` | the dataset name, which carries the pinned commit |
+| `title`, `text` | the document's title and body, without NUL characters |
+| `source_type` | ERB: where the document comes from, such as `slack`, `gmail` or `confluence` |
+| `url`, `article_type` | WixQA: the Help Center URL, and `article`, `feature_request` or `known_issue` |
+
+[`METHODOLOGY.md`](METHODOLOGY.md) lists the indexing rules.
 
 ## Metrics
 

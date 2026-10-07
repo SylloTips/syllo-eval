@@ -40,10 +40,31 @@ class JudgeConfig(_ConfigModel):
   output_token_limit: int = Field(gt=0)
 
 
+class EmbeddingConfig(_ConfigModel):
+  provider: Literal['azure_foundry']
+  # The Foundry deployment name.
+  model: str = Field(min_length=1)
+  label: str = Field(min_length=1)
+  output_dimension: int = Field(gt=0)
+  timeout_seconds: float = Field(gt=0)
+  max_retries: int = Field(ge=1)
+  max_concurrent_requests: int = Field(ge=1)
+  # The deployment's rate limit, and the estimated tokens a single request may carry.
+  tokens_per_minute: int = Field(gt=0)
+  max_request_tokens: int = Field(gt=0)
+
+  @model_validator(mode='after')
+  def _check_request_budget(self) -> 'EmbeddingConfig':
+    if self.max_request_tokens > self.tokens_per_minute:
+      raise ValueError('max_request_tokens cannot exceed tokens_per_minute')
+    return self
+
+
 class ModelsConfig(_ConfigModel):
   agents: dict[str, ModelRef] = Field(min_length=1)
   customer_simulator: ModelRef
   judge: JudgeConfig
+  embedding: EmbeddingConfig
 
 
 class Configuration(_ConfigModel):

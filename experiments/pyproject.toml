@@ -13,6 +13,7 @@ packages = [
   {include = "config.py"},
   {include = "deepeval_baseline.py"},
   {include = "deepeval_env.py"},
+  {include = "indexing"},
   {include = "judge.py"},
   {include = "manifest.py"},
   {include = "service.py"},

@@ -7,20 +7,20 @@ agents:
     label: Claude Sonnet 5.5
   deepseek:
     provider: deepseek
-    model: deepseek-v4.1-flash  # paper placeholder
+    model: deepseek-v4.1-flash # paper placeholder
     label: DeepSeek-V4.1-Flash
 
 # Plays the customer in tau2-bench.
 customer_simulator:
   provider: openai
-  model: gpt-6-luna  # paper placeholder
+  model: gpt-6-luna # paper placeholder
   label: GPT 6 Luna
 
 # One judge for every framework (Syllo-eval, its ablations, DeepEval). Temperature and thinking level are frozen at
 # the pilot gate: the paper uses temperature 0, while Google recommends the default 1.0 for Gemini 3 models.
 judge:
   provider: gemini
-  model: gemini-3.8-flash  # paper placeholder
+  model: gemini-3.8-flash # paper placeholder
   label: Gemini 3.8 Flash
   temperature: 0.0
   thinking_level: null
@@ -30,3 +30,18 @@ judge:
   # Every Gemini Flash release so far returns at most 65,536 output tokens. A single-call ablation asks for 2,000 per
   # item, as the per-item call does, capped at this limit.
   output_token_limit: 65536
+
+# Embedding options for ERB and WixQA datasets. We rely on Cohere Embed 5 Fast in an Azure AI Foundry deployment.
+# In indexing, we embed each document with one vector. In search, also embed in the agents' search queries.
+embedding:
+  provider: azure_foundry
+  model: Cohere-Embed-V5-Fast
+  label: Cohere Embed 5 Fast
+  output_dimension: 2048
+  timeout_seconds: 120
+  max_retries: 8
+  max_concurrent_requests: 16
+  # The deployment's quota. At 1,000,000 tokens a minute, ERB's ~670M tokens take about 12 hours.
+  tokens_per_minute: 1000000
+  # A request counts at its estimate until it returns, so small requests keep the quota busy.
+  max_request_tokens: 25000
