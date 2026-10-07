@@ -6,7 +6,7 @@ The query files have no question id, so a sample is keyed by its config and 0-ba
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,13 @@ from pydantic import JsonValue
 
 from syllo_eval.datasets.model import DatasetJsonSample
 
-from benchmarks.common import ConvertedBenchmark, length_summary, longest_gold_lengths, percentiles
+from benchmarks.common import (
+  ConvertedBenchmark,
+  KnowledgeDocument,
+  length_summary,
+  longest_gold_lengths,
+  percentiles,
+)
 
 QUERY_FILES = {'wixqa_expertwritten': 'expertwritten', 'wixqa_simulated': 'simulated'}
 
@@ -78,6 +84,19 @@ def convert(
 def build(paths: Mapping[str, Path]) -> ConvertedBenchmark:
   queries = {config: read_jsonl(paths[role]) for config, role in QUERY_FILES.items()}
   return convert(queries, read_jsonl(paths['knowledge_base']))
+
+
+def knowledge_base(paths: Mapping[str, Path]) -> Iterator[KnowledgeDocument]:
+  """The Help Center articles in file order. An article's ``contents`` starts with its title."""
+  for article in read_jsonl(paths['knowledge_base']):
+    article_id = str(article['id'])
+    yield KnowledgeDocument(
+      document_id=article_id,
+      source_document_id=article_id,
+      title=article['title'],
+      text=article['contents'].replace('\x00', ''),
+      metadata={'url': article['url'], 'article_type': article['article_type']},
+    )
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

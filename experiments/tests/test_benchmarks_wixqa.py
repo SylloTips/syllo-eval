@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from benchmarks.common import check_benchmark
-from benchmarks.wixqa import build, convert
+from benchmarks.common import KnowledgeDocument, check_benchmark
+from benchmarks.wixqa import build, convert, knowledge_base
 
 EXPERT_WRITTEN = [
   {
@@ -108,6 +108,28 @@ class BuildTest(unittest.TestCase):
 
     self.assertEqual(len(benchmark.samples), 3)
     self.assertEqual(benchmark.samples[2].input_prompt, 'How to publish?')
+
+
+class KnowledgeBaseTest(unittest.TestCase):
+  def test_reads_the_articles_in_order_with_their_url_and_type(self) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / 'kb.jsonl'
+      path.write_text(''.join(json.dumps(row) + '\n' for row in KNOWLEDGE_BASE), encoding='utf-8')
+
+      documents = list(knowledge_base({'knowledge_base': path}))
+
+    self.assertEqual([document.document_id for document in documents], ['k1', 'k2', 'k3'])
+    self.assertEqual(
+      documents[0],
+      KnowledgeDocument(
+        document_id='k1',
+        source_document_id='k1',
+        title='Domains',
+        text='Domains\nBody',
+        metadata={'url': 'https://support.example/1', 'article_type': 'article'},
+      ),
+    )
+    self.assertEqual(documents[2].metadata['article_type'], 'feature_request')
 
 
 if __name__ == '__main__':

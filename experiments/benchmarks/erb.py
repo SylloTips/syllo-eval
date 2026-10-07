@@ -6,7 +6,7 @@ for constrained and conflicting questions many of them are grading instructions 
 """
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,14 @@ from pydantic import JsonValue
 
 from syllo_eval.datasets.model import DatasetJsonSample
 
-from benchmarks.common import Claim, ConvertedBenchmark, length_summary, longest_gold_lengths, percentiles
+from benchmarks.common import (
+  Claim,
+  ConvertedBenchmark,
+  KnowledgeDocument,
+  length_summary,
+  longest_gold_lengths,
+  percentiles,
+)
 
 UNANSWERABLE_TYPE = 'info_not_found'
 GOLD_CLAIM_TYPES = ('basic', 'semantic')
@@ -142,3 +149,22 @@ def build(paths: Mapping[str, Path]) -> ConvertedBenchmark:
     [length_by_id[doc] for doc in claim_gold_ids if doc in length_by_id]
   )
   return benchmark
+
+
+def knowledge_base(paths: Mapping[str, Path], batch_size: int = 4_096) -> Iterator[KnowledgeDocument]:
+  """The knowledge-base documents in file order, under the ids the gold lists use.
+
+  The rows are read in batches, because the content column holds 2.5 GB of text.
+  """
+  documents = pq.ParquetFile(paths['documents'])
+  document_ids = unique_document_ids(documents.read(columns=['doc_id']).column('doc_id').to_pylist())
+  batches = documents.iter_batches(batch_size, columns=['doc_id', 'source_type', 'title', 'content'])
+  rows = (row for batch in batches for row in batch.to_pylist())
+  for document_id, row in zip(document_ids, rows, strict=True):
+    yield KnowledgeDocument(
+      document_id=document_id,
+      source_document_id=row['doc_id'],
+      title=row['title'],
+      text=row['content'].replace('\x00', ''),
+      metadata={'source_type': row['source_type']},
+    )

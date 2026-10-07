@@ -22,8 +22,11 @@ from syllo_eval.settings import GeminiJudgeSettings, Settings
 
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
-from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, load_config, load_environment
+from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, EmbeddingConfig, load_config, load_environment
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, open_deepeval_judge
+from indexing import pipeline as index_pipeline
+from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
+from indexing.vector_store import VectorStore, open_vector_store
 from manifest import Manifest, StepStatus
 from service import build_service, open_database
 
@@ -45,6 +48,10 @@ _BENCHMARK_STEPS = {
   'convert': 'Convert the pinned files into syllo-eval datasets and check them.',
   'import': 'Import the converted datasets and their claim ground truths into the database.',
 }
+_INDEX_STEPS = {
+  'embed': 'Embed every knowledge-base document into data/<benchmark>/index, resuming an interrupted run.',
+  'load': 'Load the embedded documents into the vector store, one collection per knowledge base.',
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,12 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
   benchmark_commands = benchmarks.add_subparsers(dest='step', required=True)
   for step, description in _BENCHMARK_STEPS.items():
     command = benchmark_commands.add_parser(step, help=description, description=description)
-    command.add_argument(
-      '--only', nargs='+', choices=sorted(benchmark_steps.BUILDERS), help='Benchmarks to process (default: all).'
-    )
-    command.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
-    command.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Folder for downloads and converted data.')
-    command.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
+    _add_benchmark_step_arguments(command, benchmark_steps.BUILDERS)
+
+  index = commands.add_parser('index', help='Embed the knowledge bases and load them into the vector store.')
+  index_commands = index.add_subparsers(dest='step', required=True)
+  for step, description in _INDEX_STEPS.items():
+    command = index_commands.add_parser(step, help=description, description=description)
+    _add_benchmark_step_arguments(command, index_pipeline.KNOWLEDGE_BASES)
 
   deepeval = commands.add_parser(
     'deepeval',
@@ -85,6 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
   deepeval.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
   deepeval.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
   return parser
+
+
+def _add_benchmark_step_arguments(command: argparse.ArgumentParser, benchmarks: Mapping[str, Any]) -> None:
+  command.add_argument('--only', nargs='+', choices=sorted(benchmarks), help='Benchmarks to process (default: all).')
+  command.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  command.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Folder for downloads and converted data.')
+  command.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
 
 
 def _positive_int(value: str) -> int:
@@ -110,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
       print(f'{step:<48} {record.status.value:<10} {record.recorded_at:%Y-%m-%d %H:%M} runs: {runs}')
   elif args.command == 'benchmarks':
     return _run_benchmark_step(args)
+  elif args.command == 'index':
+    return asyncio.run(_run_index_step(args))
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
   return 0
@@ -192,6 +209,82 @@ async def _import_benchmarks(
       )
       results.append(True)
   return results
+
+
+async def _run_index_step(args: argparse.Namespace) -> int:
+  """Embed or load each selected knowledge base; a failing one is recorded and the others still run."""
+  config = load_config(args.config_dir)
+  unpinned = sorted(set(args.only or ()) - set(config.benchmarks))
+  if unpinned:
+    print(f'Not pinned in {args.config_dir / "benchmarks.yaml"}: {", ".join(unpinned)}', file=sys.stderr)
+    return 2
+  selected = [
+    (name, source)
+    for name, source in config.benchmarks.items()
+    if name in index_pipeline.KNOWLEDGE_BASES and (not args.only or name in args.only)
+  ]
+  embedding = config.models.embedding
+  manifest = Manifest(args.manifest)
+  load_environment()
+  if args.step == 'embed':
+    settings = AzureFoundrySettings()
+    if settings.base_url is None or settings.api_key is None:
+      print('Embedding needs AZURE_FOUNDRY_BASE_URL and AZURE_FOUNDRY_API_KEY.', file=sys.stderr)
+      return 2
+    async with open_embedding_client(embedding, settings) as client:
+      results = [await _embed(name, source, args.data_dir, client, embedding, manifest) for name, source in selected]
+  else:
+    async with open_vector_store() as store:
+      results = [await _load(name, source, args.data_dir, store, embedding, manifest) for name, source in selected]
+  return 0 if all(results) else 1
+
+
+async def _embed(
+  name: str, source: BenchmarkSource, data_dir: Path, embedder: Embedder, config: EmbeddingConfig, manifest: Manifest
+) -> bool:
+  step = f'index:embed:{name}'
+  details: dict[str, Any] = {'model': config.model, 'output_dimension': config.output_dimension}
+  # An interrupted run leaves the step started; running it again resumes at the first missing shard.
+  manifest.append(step, StepStatus.STARTED, details=details)
+
+  def report(progress: index_pipeline.ShardProgress) -> None:
+    print(
+      f'{name}: shard {progress.shard} embedded; {progress.documents:,} documents done, '
+      f'{progress.input_tokens:,} tokens billed by this run',
+      flush=True,
+    )
+
+  try:
+    outcome = await index_pipeline.embed_knowledge_base(name, source, data_dir, embedder, config, progress=report)
+  except (EmbeddingError, PinnedFileMismatchError, index_pipeline.IndexInProgressError, ValueError) as error:
+    return _record_failure(manifest, step, name, error, details=details)
+  details.update(
+    documents=outcome.documents,
+    shards=outcome.shards,
+    embedded_shards=outcome.embedded_shards,
+    input_tokens=outcome.input_tokens,
+    run_input_tokens=outcome.run_input_tokens,
+  )
+  manifest.append(step, StepStatus.COMPLETED, details=details)
+  print(
+    f'{name}: {outcome.documents:,} documents embedded in {outcome.shards} shards, {outcome.embedded_shards} by this '
+    f'run; {outcome.input_tokens:,} tokens billed in all; written to {data_dir / name / index_pipeline.INDEX_DIR}'
+  )
+  return True
+
+
+async def _load(
+  name: str, source: BenchmarkSource, data_dir: Path, store: VectorStore, config: EmbeddingConfig, manifest: Manifest
+) -> bool:
+  step = f'index:load:{name}'
+  manifest.append(step, StepStatus.STARTED)
+  try:
+    outcome = await index_pipeline.load_knowledge_base(name, source, data_dir, store, config)
+  except (FileNotFoundError, PinnedFileMismatchError, ValueError) as error:
+    return _record_failure(manifest, step, name, error)
+  manifest.append(step, StepStatus.COMPLETED, details={'collection': outcome.collection, 'points': outcome.points})
+  print(f'{name}: {outcome.points:,} documents loaded into collection {outcome.collection}')
+  return True
 
 
 async def _score_with_deepeval(args: argparse.Namespace) -> int:

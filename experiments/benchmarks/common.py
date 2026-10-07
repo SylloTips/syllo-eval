@@ -39,6 +39,20 @@ class Claim:
 ClaimsByKey = dict[str, dict[str, list[Claim]]]
 
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocument:
+  """A knowledge-base document, as the search index stores it."""
+
+  # The id the benchmark's gold lists use; the id in the benchmark file differs only for renamed ERB duplicates.
+  document_id: str
+  source_document_id: str
+  title: str
+  # The body without NUL characters: PostgreSQL JSONB rejects them once a document reaches a trace.
+  text: str
+  # Benchmark fields kept with the document, such as an ERB document's source type.
+  metadata: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(slots=True)
 class ConvertedBenchmark:
   """A benchmark converted to syllo-eval samples; ``records[i]`` holds the benchmark fields of ``samples[i]``."""

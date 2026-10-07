@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import BenchmarkSource, Configuration, ExperimentConfig, load_config
+from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, load_config
 
 
 def _models() -> dict[str, Any]:
@@ -20,7 +20,23 @@ def _models() -> dict[str, Any]:
       'max_concurrent_requests': 4,
       'output_token_limit': 65536,
     },
+    'embedding': _embedding(),
   }
+
+
+def _embedding(**overrides: Any) -> dict[str, Any]:
+  fields: dict[str, Any] = {
+    'provider': 'azure_foundry',
+    'model': 'embed-1',
+    'label': 'Embedder',
+    'output_dimension': 1024,
+    'timeout_seconds': 60,
+    'max_retries': 3,
+    'max_concurrent_requests': 2,
+    'tokens_per_minute': 100_000,
+    'max_request_tokens': 50_000,
+  }
+  return {**fields, **overrides}
 
 
 def _source(**overrides: Any) -> dict[str, Any]:
@@ -58,6 +74,13 @@ class ConfigurationShapeTest(unittest.TestCase):
     for fields in invalid:
       with self.subTest(fields=fields), self.assertRaises(ValidationError):
         Configuration(id='invalid', model='model-a', **fields)
+
+
+class EmbeddingConfigTest(unittest.TestCase):
+  def test_a_request_must_fit_within_the_quota(self) -> None:
+    self.assertEqual(EmbeddingConfig.model_validate(_embedding(max_request_tokens=100_000)).max_request_tokens, 100_000)
+    with self.assertRaisesRegex(ValidationError, 'cannot exceed tokens_per_minute'):
+      EmbeddingConfig.model_validate(_embedding(max_request_tokens=100_001))
 
 
 class ExperimentConfigTest(unittest.TestCase):

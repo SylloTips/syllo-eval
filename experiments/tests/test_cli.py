@@ -24,6 +24,8 @@ from benchmarks.common import ImportOutcome
 from cli import main
 from config import CONFIG_DIR
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS
+from indexing.embedding import EmbeddingError, Embeddings
+from indexing.pipeline import EmbedOutcome, LoadOutcome
 from manifest import Manifest, StepStatus
 
 
@@ -243,6 +245,124 @@ class BenchmarksSelectionCliTest(_ConfigDirTestCase):
     self.assertEqual(status, 2)
     self.assertIn('Not pinned', errors.getvalue())
     self.assertFalse(self.manifest.exists())
+
+
+class IndexCliTest(_ConfigDirTestCase):
+  """Runs `index` with the embedding model and the vector store replaced by fakes."""
+
+  def _index(self, *args: str, environment: dict[str, str] | None = None) -> tuple[int, str]:
+    if environment is None:
+      environment = {'AZURE_FOUNDRY_BASE_URL': 'https://foundry.example', 'AZURE_FOUNDRY_API_KEY': 'test-key'}
+    with patch.dict(os.environ, environment), patch('cli.load_environment'):
+      for name in ('AZURE_FOUNDRY_BASE_URL', 'AZURE_FOUNDRY_API_KEY'):
+        if name not in environment:
+          os.environ.pop(name, None)
+      return _run(
+        [
+          'index',
+          *args,
+          '--config-dir',
+          str(self.config_dir),
+          '--data-dir',
+          str(self.data_dir),
+          '--manifest',
+          str(self.manifest),
+        ]
+      )
+
+  def _pin_wixqa_knowledge_base(self, articles: list[dict[str, str]]) -> None:
+    content = ''.join(json.dumps(article) + '\n' for article in articles).encode()
+    (self.data_dir / 'wixqa' / 'raw').mkdir(parents=True)
+    (self.data_dir / 'wixqa' / 'raw' / 'kb.jsonl').write_bytes(content)
+    path = self.config_dir / 'benchmarks.yaml'
+    benchmarks = yaml.safe_load(path.read_text(encoding='utf-8'))
+    pin = {'path': 'kb.jsonl', 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest()}
+    benchmarks['wixqa']['files'] = {'knowledge_base': pin}
+    path.write_text(yaml.safe_dump(benchmarks), encoding='utf-8')
+
+  def test_embed_writes_the_index_reports_progress_and_records_the_step(self) -> None:
+    self._pin_wixqa_knowledge_base(
+      [
+        {'id': f'k{index}', 'url': f'https://e.x/{index}', 'title': 'T', 'contents': 'T\nB', 'article_type': 'article'}
+        for index in range(3)
+      ]
+    )
+
+    class Embedder:
+      async def embed(self, texts: list[str], input_type: str) -> Embeddings:
+        return Embeddings(vectors=[[0.25] * 8 for _ in texts], input_tokens=2 * len(texts))
+
+    @asynccontextmanager
+    async def fake_client(config: Any, settings: Any) -> AsyncIterator[object]:
+      self.assertEqual(settings.api_key, 'test-key')
+      yield Embedder()
+
+    with patch('cli.open_embedding_client', fake_client):
+      status, output = self._index('embed', '--only', 'wixqa')
+
+    self.assertEqual(status, 0, output)
+    self.assertIn('wixqa: shard 0 embedded; 3 documents done, 6 tokens billed by this run', output)
+    self.assertTrue((self.data_dir / 'wixqa' / 'index' / 'report.json').exists())
+    started, completed = Manifest(self.manifest).records()
+    self.assertEqual(
+      (started.step, started.status, completed.status), ('index:embed:wixqa', StepStatus.STARTED, StepStatus.COMPLETED)
+    )
+    self.assertEqual(
+      completed.details,
+      {
+        'model': 'Cohere-Embed-V5-Fast',
+        'output_dimension': 2048,
+        'documents': 3,
+        'shards': 1,
+        'embedded_shards': 1,
+        'input_tokens': 6,
+        'run_input_tokens': 6,
+      },
+    )
+
+  def test_a_failing_knowledge_base_is_recorded_and_the_next_one_still_embeds(self) -> None:
+    @asynccontextmanager
+    async def fake_client(config: Any, settings: Any) -> AsyncIterator[object]:
+      yield object()
+
+    outcome = EmbedOutcome(documents=5, shards=3, embedded_shards=2, input_tokens=50, run_input_tokens=30)
+    embed = AsyncMock(side_effect=[EmbeddingError('The embedding request was rejected: 401 denied'), outcome])
+    with patch('cli.open_embedding_client', fake_client), patch('cli.index_pipeline.embed_knowledge_base', embed):
+      status, output = self._index('embed')
+
+    self.assertEqual(status, 1)
+    self.assertEqual([call.args[0] for call in embed.call_args_list], ['erb', 'wixqa'])
+    self.assertIn('erb: failed: EmbeddingError: The embedding request was rejected: 401 denied', output)
+    self.assertEqual(self._status('index:embed:erb'), StepStatus.FAILED)
+    self.assertEqual(self._status('index:embed:wixqa'), StepStatus.COMPLETED)
+
+  def test_embed_without_foundry_credentials_runs_nothing(self) -> None:
+    errors = io.StringIO()
+
+    with redirect_stderr(errors):
+      status, _ = self._index('embed', environment={})
+
+    self.assertEqual(status, 2)
+    self.assertIn('AZURE_FOUNDRY_BASE_URL and AZURE_FOUNDRY_API_KEY', errors.getvalue())
+    self.assertFalse(self.manifest.exists())
+
+  def test_load_records_the_collection_it_filled(self) -> None:
+    @asynccontextmanager
+    async def fake_store() -> AsyncIterator[object]:
+      yield object()
+
+    load = AsyncMock(return_value=LoadOutcome(collection='wixqa-test', points=5))
+    with patch('cli.open_vector_store', fake_store), patch('cli.index_pipeline.load_knowledge_base', load):
+      status, output = self._index('load', '--only', 'wixqa')
+
+    self.assertEqual(status, 0, output)
+    self.assertIn('wixqa: 5 documents loaded into collection wixqa-test', output)
+    record = Manifest(self.manifest).latest()['index:load:wixqa']
+    self.assertEqual((record.status, record.details), (StepStatus.COMPLETED, {'collection': 'wixqa-test', 'points': 5}))
+
+  def test_only_benchmarks_with_a_knowledge_base_can_be_indexed(self) -> None:
+    with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+      self._index('embed', '--only', 'tau2')
 
 
 class DeepEvalCliTest(unittest.TestCase):

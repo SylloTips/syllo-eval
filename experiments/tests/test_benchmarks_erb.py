@@ -6,8 +6,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from benchmarks.common import Claim, check_benchmark
-from benchmarks.erb import CLAIMS_KEY, build, convert, unique_document_ids
+from benchmarks.common import Claim, KnowledgeDocument, check_benchmark
+from benchmarks.erb import CLAIMS_KEY, build, convert, knowledge_base, unique_document_ids
 
 
 def _question(question_id: str, question_type: str, expected_doc_ids: list[str], facts: list[str]) -> dict[str, Any]:
@@ -129,6 +129,35 @@ class BuildTest(unittest.TestCase):
 
       with self.assertRaisesRegex(ValueError, 'Unexpected ERB question columns'):
         build(paths)
+
+
+class KnowledgeBaseTest(unittest.TestCase):
+  def test_reads_the_documents_in_order_under_the_gold_ids_without_nul_characters(self) -> None:
+    contents = ['A', 'B', 'C', 'nul\x00inside', 'D', 'X again', '']
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / 'documents.parquet'
+      sources = ['slack', 'gmail', 'jira', 'slack', 'linear', 'slack', 'github']
+      titles = [f'Title {index}' for index in range(7)]
+      pq.write_table(
+        pa.table({'doc_id': DOCUMENT_IDS, 'source_type': sources, 'title': titles, 'content': contents}), path
+      )
+
+      # Batches of two rows, so that documents span several batches.
+      documents = list(knowledge_base({'documents': path}, batch_size=2))
+
+    self.assertEqual([document.document_id for document in documents], unique_document_ids(DOCUMENT_IDS))
+    self.assertEqual(
+      documents[5],
+      KnowledgeDocument(
+        document_id='dsid_x__2',
+        source_document_id='dsid_x',
+        title='Title 5',
+        text='X again',
+        metadata={'source_type': 'slack'},
+      ),
+    )
+    self.assertEqual(documents[3].text, 'nulinside')
+    self.assertEqual(documents[6].text, '')
 
 
 if __name__ == '__main__':

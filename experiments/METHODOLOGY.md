@@ -33,6 +33,26 @@ The three benchmarks are pinned by commit and converted as follows (`benchmarks/
     assertions as met, so the other 74 tasks are rewarded on the database check alone.
   - Action matching never enters the reward.
 
+## Search indexes
+
+The search tool retrieves from one index per knowledge base: all 511,962 ERB documents and all 6,221 WixQA articles
+(`indexing/`).
+
+- **Units:** one point per document, never chunked, because the gold labels are per document. Empty documents are
+  indexed too.
+- **Ids:** each point carries the id that the gold lists use, so retrieved documents are compared with the labels
+  directly.
+- **Text:** the body as released, without its NUL characters (37 ERB documents). ERB's Gmail bodies keep the Python
+  list repr of the release.
+- **Embedded text:** the title, a blank line and the body.
+  - A body that already starts with its title, as a whole word, is embedded alone. This applies to every WixQA
+    article and to 709 ERB documents.
+  - An ERB Slack message from `support-alex` in channel `support` still gets its title: 988 such documents.
+- **Model:** Cohere Embed 5 Fast at 2,048 dimensions, its full size, with documents as `search_document` and queries
+  as `search_query`.
+  - Texts are never truncated; ERB's longest document has 11,467 tokens.
+  - Vectors are compared by cosine.
+
 ## Evaluation units
 
 - **Retrieval (CP, CR, R, NDCG@10):**
