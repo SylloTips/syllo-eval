@@ -6,8 +6,8 @@ lists use. Indexing runs in two steps, and both are safe to run again:
 - ``embed`` writes the embeddings to ``<data dir>/<benchmark>/index/``, in shards of consecutive documents. A shard is
   written once all its documents are embedded, so an interrupted run resumes at the first missing shard. The spec
   records what the shards are embedded with, and the report, written last, marks a complete index.
-- ``load`` upserts every document with its embedding into the benchmark's collection. Point ids derive from the
-  document ids, so loading again replaces the same points.
+- ``load`` upserts every document with its embedding and its text, which Qdrant indexes for BM25, into the
+  benchmark's collection. Point ids derive from the document ids, so loading again replaces the same points.
 """
 
 import asyncio
@@ -31,7 +31,7 @@ from benchmarks.common import KnowledgeDocument
 from benchmarks.download import verify_pinned_file
 from config import BenchmarkSource, EmbeddingConfig
 from indexing.embedding import DOCUMENT_INPUT_TYPE, Embedder, request_batches
-from indexing.vector_store import CollectionSpec, IndexPoint, VectorStore
+from indexing.vector_store import CollectionSpec, IndexPoint, VectorStore, bm25_average_length
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,9 +194,23 @@ async def load_knowledge_base(
   report = json.loads((directory / REPORT_FILE).read_text(encoding='utf-8'))
   if report['spec'] != index_spec(name, source, config):
     raise ValueError(f'{name} was embedded with another model, settings or source; delete {directory} and embed again')
+  average_length = bm25_average_length(
+    embedding_text(document) for document in _read_knowledge_base(name, source, data_dir)
+  )
   documents = _read_knowledge_base(name, source, data_dir)
   collection = collection_name(source)
-  await store.ensure_collection(CollectionSpec(name=collection, dimension=config.output_dimension))
+  spec = CollectionSpec(
+    name=collection,
+    dimension=config.output_dimension,
+    bm25_average_length=average_length,
+    metadata={
+      'dataset': source.dataset_name,
+      'model': config.model,
+      'output_dimension': config.output_dimension,
+      'bm25_average_length': average_length,
+    },
+  )
+  await store.ensure_collection(spec)
 
   points = 0
   for shard in range(report['shards']):
@@ -207,11 +221,12 @@ async def load_knowledge_base(
     vectors = table.column('embedding').to_pylist()
     for start in range(0, len(batch), batch_size):
       await store.upsert(
-        collection,
+        spec,
         [
           IndexPoint(
             id=point_id(source.dataset_name, document.document_id),
             vector=vector,
+            text=embedding_text(document),
             payload=point_payload(source.dataset_name, document),
           )
           for document, vector in zip(batch[start : start + batch_size], vectors[start : start + batch_size])

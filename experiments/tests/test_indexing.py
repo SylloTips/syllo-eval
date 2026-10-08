@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pyarrow.parquet as pq
+from pydantic import JsonValue
 
 from benchmarks.common import KnowledgeDocument
 from config import BenchmarkSource, EmbeddingConfig
@@ -86,17 +87,18 @@ class FakeEmbedder:
 
 class FakeVectorStore:
   def __init__(self) -> None:
-    self.dimensions: dict[str, int] = {}
+    self.specs: dict[str, CollectionSpec] = {}
     self.points: dict[str, dict[Any, IndexPoint]] = {}
     self.upserts: list[int] = []
 
   async def ensure_collection(self, spec: CollectionSpec) -> None:
-    assert self.dimensions.setdefault(spec.name, spec.dimension) == spec.dimension
+    assert self.specs.setdefault(spec.name, spec) == spec
     self.points.setdefault(spec.name, {})
 
-  async def upsert(self, collection: str, points: Sequence[IndexPoint]) -> None:
+  async def upsert(self, spec: CollectionSpec, points: Sequence[IndexPoint]) -> None:
+    assert self.specs[spec.name] == spec
     self.upserts.append(len(points))
-    self.points[collection].update({point.id: point for point in points})
+    self.points[spec.name].update({point.id: point for point in points})
 
   async def count(self, collection: str) -> int:
     return len(self.points[collection])
@@ -167,24 +169,31 @@ class FakeClock:
 
 
 class TokenRateLimiterTest(unittest.IsolatedAsyncioTestCase):
+  """A quota of 600 tokens a minute, 10 a second; requests may run 5 seconds, 50 tokens, ahead of that pace."""
+
   def setUp(self) -> None:
     self.clock = FakeClock()
-    self.limiter = TokenRateLimiter(100, clock=lambda: self.clock.now, sleep=self.clock.sleep)
+    self.limiter = TokenRateLimiter(600, burst_seconds=5, clock=lambda: self.clock.now, sleep=self.clock.sleep)
 
-  async def test_a_request_waits_until_the_window_has_room(self) -> None:
-    await self.limiter.reserve(60)
-    self.clock.now = 10.0
+  async def test_after_a_short_burst_requests_are_spaced_at_the_quota_pace(self) -> None:
+    for _ in range(4):
+      await self.limiter.reserve(30)
 
-    second = await self.limiter.reserve(60)
+    # Two requests go at once; then each waits until the 30 tokens before it are paid for at 10 a second.
+    self.assertEqual(self.clock.sleeps, [1.0, 3.0])
 
-    self.assertEqual(self.clock.sleeps, [50.0])
-    self.assertEqual(second.sent_at, 60.0)
+  async def test_over_time_the_tokens_flow_at_the_quota(self) -> None:
+    for _ in range(100):
+      await self.limiter.reserve(30)
 
-  async def test_the_billed_count_replaces_the_estimate(self) -> None:
-    first = await self.limiter.reserve(60)
+    self.assertAlmostEqual(self.clock.now, (100 * 30 - 30 - 50) / 10)
+
+  async def test_settling_at_the_billed_count_returns_the_overestimate(self) -> None:
+    first = await self.limiter.reserve(30)
+    await self.limiter.reserve(30)
     self.limiter.settle(first, 10)
 
-    await self.limiter.reserve(90)
+    await self.limiter.reserve(30)
 
     self.assertEqual(self.clock.sleeps, [])
 
@@ -192,21 +201,21 @@ class TokenRateLimiterTest(unittest.IsolatedAsyncioTestCase):
     async def never(seconds: float) -> None:
       await asyncio.Event().wait()
 
-    limiter = TokenRateLimiter(100, clock=lambda: 0.0, sleep=never)
+    limiter = TokenRateLimiter(600, burst_seconds=0, clock=lambda: 0.0, sleep=never)
     first = await limiter.reserve(60)
     waiting = asyncio.ensure_future(limiter.reserve(60))
     await asyncio.sleep(0)
     self.assertFalse(waiting.done())
 
-    limiter.settle(first, 30)
+    limiter.settle(first, 0)
 
     self.assertEqual((await asyncio.wait_for(waiting, 1)).tokens, 60)
 
-  async def test_a_request_above_the_quota_waits_only_for_an_empty_window(self) -> None:
-    await self.limiter.reserve(150)
+  async def test_a_request_larger_than_the_burst_goes_alone_on_pace(self) -> None:
+    await self.limiter.reserve(100)
     await self.limiter.reserve(1)
 
-    self.assertEqual(self.clock.sleeps, [60.0])
+    self.assertEqual(self.clock.sleeps, [5.0])
 
 
 def _connection_reset(request: httpx.Request) -> httpx.Response:
@@ -463,10 +472,21 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
     outcome = await self._load(store)
 
     self.assertEqual(outcome, pipeline.LoadOutcome(collection='wixqa-test', points=5))
-    self.assertEqual(store.dimensions, {'wixqa-test': DIMENSION})
+    # Every article has the four BM25 tokens 'article', its number, 'body' and its number.
+    metadata: dict[str, JsonValue] = {
+      'dataset': 'wixqa-test',
+      'model': 'embed-test',
+      'output_dimension': DIMENSION,
+      'bm25_average_length': 4.0,
+    }
+    self.assertEqual(
+      store.specs,
+      {'wixqa-test': CollectionSpec('wixqa-test', DIMENSION, bm25_average_length=4.0, metadata=metadata)},
+    )
     self.assertEqual(store.upserts, [2, 2, 1])
     point = store.points['wixqa-test'][pipeline.point_id('wixqa-test', 'k3')]
     self.assertEqual(list(point.vector), [3.0, 2.0, 1.0, 0.0])
+    self.assertEqual(point.text, 'Article 3\nBody 3')
     self.assertEqual(
       point.payload,
       {
@@ -534,9 +554,9 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
   async def test_load_fails_when_the_collection_holds_other_points(self) -> None:
     await self._embed(FakeEmbedder())
     store = FakeVectorStore()
-    await store.ensure_collection(CollectionSpec(name='wixqa-test', dimension=DIMENSION))
-    stale = IndexPoint(id=pipeline.point_id('wixqa-test', 'gone'), vector=[0.0] * DIMENSION, payload={})
-    await store.upsert('wixqa-test', [stale])
+    await self._load(store)
+    stale = IndexPoint(id=pipeline.point_id('wixqa-test', 'gone'), vector=[0.0] * DIMENSION, text='', payload={})
+    await store.upsert(store.specs['wixqa-test'], [stale])
 
     with self.assertRaisesRegex(ValueError, 'holds 6 points, but the index has 5 documents'):
       await self._load(store)
