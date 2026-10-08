@@ -53,3 +53,17 @@ tau2:
       path: data/tau2/domains/retail/split_tasks.json
       size: 3263
       sha256: ed0580ec52575b63fbf76568af42490da6ee7783ecb4aa81af46961291358f20
+    # Read only by the tau2 runtime, which runs on these files (TAU2_DATA_DIR): the retail database, the policy the
+    # agent follows and the guidelines of the customer simulator.
+    database:
+      path: data/tau2/domains/retail/db.json
+      size: 2811616
+      sha256: 413a65160adbdb5fde0ffc0015c49b6d70250b10c18128de169b597af7766765
+    policy:
+      path: data/tau2/domains/retail/policy.md
+      size: 6699
+      sha256: 2c9652afbce57d6e087768d37cda64d31c53d50b3e3225cfdb791bac66466467
+    user_guidelines:
+      path: data/tau2/user_simulator/simulation_guidelines.md
+      size: 1449
+      sha256: 740a29dfa64d7bc08eea3bf7493575b914a63f744acbaf7f199ee07eddaf72d3

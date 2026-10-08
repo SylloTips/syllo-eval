@@ -15,12 +15,14 @@ import psycopg
 
 from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.infrastructure import DatabaseManager
+from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
 from syllo_eval.infrastructure.exceptions import PersistenceError
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import EvaluationStatus, MetricComputationStatus
 from syllo_eval.settings import GeminiJudgeSettings, Settings
 
+import collect
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
 from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, EmbeddingConfig, load_config, load_environment
@@ -29,9 +31,11 @@ from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
 from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
 from manifest import Manifest, StepStatus
+from run_outputs import RunOutputs
 from service import build_service, open_database
 
-DEFAULT_MANIFEST = Path(__file__).resolve().parent / 'outputs' / 'manifest.jsonl'
+DEFAULT_OUTPUTS = Path(__file__).resolve().parent / 'outputs'
+DEFAULT_MANIFEST = DEFAULT_OUTPUTS / 'manifest.jsonl'
 # Failures that are outcomes of the judge: the unit counts as wrong (METHODOLOGY.md, Failures). Any other failed unit,
 # such as one with a provider error, is unscored and must run again, so a judge step that has one is not complete.
 _JUDGE_OUTCOMES = frozenset(
@@ -70,12 +74,55 @@ def build_parser() -> argparse.ArgumentParser:
   for step, description in _BENCHMARK_STEPS.items():
     command = benchmark_commands.add_parser(step, help=description, description=description)
     _add_benchmark_step_arguments(command, benchmark_steps.BUILDERS)
+  pilot = benchmark_commands.add_parser(
+    'pilot',
+    help='Import a few samples of a converted benchmark as its pilot dataset.',
+    description=(
+      'Import the given samples of a converted benchmark as <dataset>-pilot, which `collect --pilot` runs on; the '
+      'dataset is also written to data/<benchmark>/pilot/.'
+    ),
+  )
+  pilot.add_argument('--benchmark', required=True, choices=sorted(benchmark_steps.BUILDERS), help='Benchmark to pilot.')
+  pilot.add_argument(
+    '--samples', nargs='+', required=True, help='Sample keys, as samples.jsonl has them; for tau2, task ids.'
+  )
+  pilot.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  pilot.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Folder for downloads and converted data.')
+  pilot.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
 
   index = commands.add_parser('index', help='Embed the knowledge bases and load them into the vector store.')
   index_commands = index.add_subparsers(dest='step', required=True)
   for step, description in _INDEX_STEPS.items():
     command = index_commands.add_parser(step, help=description, description=description)
     _add_benchmark_step_arguments(command, index_pipeline.KNOWLEDGE_BASES)
+
+  collect = commands.add_parser(
+    'collect',
+    help='Run one agent configuration on its benchmark and store its traces.',
+    description=(
+      'Call the agent of one configuration on every sample of its benchmark, store and archive its traces, and '
+      'compute the metrics that need no judge.'
+    ),
+  )
+  collect.add_argument(
+    '--configuration', required=True, help='Configuration id, such as tau2/llm-agent/sonnet/trial-1.'
+  )
+  collect.add_argument(
+    '--pilot',
+    action='store_true',
+    help='Run on the pilot dataset of the benchmark (`syllo-exp benchmarks pilot`) instead of the full one.',
+  )
+  collect.add_argument(
+    '--max-concurrent-samples',
+    type=_positive_int,
+    help='Samples run at once (default: EVALUATION_MAX_CONCURRENT_SAMPLES, or 1).',
+  )
+  collect.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  collect.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Folder of the fetched benchmark files.')
+  collect.add_argument(
+    '--outputs-dir', type=Path, default=DEFAULT_OUTPUTS, help='Folder for raw traces and agent outputs.'
+  )
+  collect.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
 
   deepeval = commands.add_parser(
     'deepeval',
@@ -162,6 +209,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_run_index_step(args))
   elif args.command == 'search-server':
     return _serve_search(args)
+  elif args.command == 'collect':
+    return asyncio.run(_collect(args))
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
   return 0
@@ -169,6 +218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run_benchmark_step(args: argparse.Namespace) -> int:
   """Run one step for each selected benchmark; a failing benchmark is recorded and the others still run."""
+  if args.step == 'pilot':
+    return asyncio.run(_import_pilot(args))
   config = load_config(args.config_dir)
   unpinned = sorted(set(args.only or ()) - set(config.benchmarks))
   if unpinned:
@@ -244,6 +295,34 @@ async def _import_benchmarks(
       )
       results.append(True)
   return results
+
+
+async def _import_pilot(args: argparse.Namespace) -> int:
+  source = load_config(args.config_dir).benchmarks.get(args.benchmark)
+  if source is None:
+    print(f'Not pinned in {args.config_dir / "benchmarks.yaml"}: {args.benchmark}', file=sys.stderr)
+    return 2
+  step = f'benchmarks:pilot:{args.benchmark}'
+  manifest = Manifest(args.manifest)
+  load_environment()
+  async with open_database(Settings()) as db_manager:
+    manifest.append(step, StepStatus.STARTED)
+    try:
+      outcome = await benchmark_steps.import_pilot(args.benchmark, source, args.data_dir, db_manager, args.samples)
+    except (FileNotFoundError, ValueError, PersistenceError, psycopg.Error) as error:
+      _record_failure(manifest, step, args.benchmark, error)
+      return 1
+  name = benchmark_steps.pilot_dataset_name(source)
+  manifest.append(
+    step,
+    StepStatus.COMPLETED,
+    details={'dataset_id': str(outcome.dataset.id), 'dataset_name': name, 'samples': args.samples},
+  )
+  action = 'imported' if outcome.created else 'already present'
+  print(
+    f'{args.benchmark}: pilot dataset {name} {action} ({outcome.dataset.id}) with samples {", ".join(args.samples)}'
+  )
+  return 0
 
 
 async def _run_index_step(args: argparse.Namespace) -> int:
@@ -361,6 +440,95 @@ def _serve_search(args: argparse.Namespace) -> int:
     print(f'search-server: {error}', file=sys.stderr)
     return 1
   return 0
+
+
+async def _collect(args: argparse.Namespace) -> int:
+  """Run one configuration on its whole benchmark; the manifest records the step and the run it made."""
+  config = load_config(args.config_dir)
+  try:
+    configuration = config.configuration(args.configuration)
+  except KeyError as error:
+    print(f'collect: {error.args[0]}', file=sys.stderr)
+    return 2
+  source = config.benchmarks[configuration.benchmark]
+  dataset_name = benchmark_steps.pilot_dataset_name(source) if args.pilot else source.dataset_name
+  load_environment()
+  logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+  logging.getLogger('httpx').setLevel(logging.WARNING)
+  settings = Settings()
+  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name)
+  outputs = RunOutputs(args.outputs_dir)
+  step = f'collect:{configuration.id}' + (':pilot' if args.pilot else '')
+  manifest = Manifest(args.manifest)
+  details: dict[str, Any] = {
+    'agent': configuration.agent,
+    'version_tag': configuration.version_tag,
+    'dataset_name': dataset_name,
+    'phoenix_project': phoenix.project_id,
+  }
+  try:
+    integration = collect.build_integration(
+      configuration, config, data_dir=args.data_dir, phoenix=phoenix, outputs=outputs
+    )
+  except collect.UnsupportedAgentError as error:
+    print(f'collect: {error}', file=sys.stderr)
+    return 2
+  except (FileNotFoundError, PinnedFileMismatchError, ValueError) as error:
+    _record_failure(manifest, step, 'collect', error, details=details)
+    return 1
+  metrics = collect.deterministic_metrics(configuration.benchmark)
+  details['metrics'] = [metric.name for metric in metrics]
+  run_ids: tuple[UUID, ...] = ()
+  try:
+    async with open_database(settings) as db_manager:
+      if not await db_manager.health_check():
+        raise DatabaseConnectionError('Database health check failed')
+      async with UnitOfWork(db_manager) as uow:
+        dataset = await uow.datasets.get_by_name(dataset_name)
+      if dataset is None:
+        step_to_run = 'pilot --benchmark' if args.pilot else 'import --only'
+        raise ValueError(
+          f'Dataset {dataset_name} is not imported: run `syllo-exp benchmarks {step_to_run} {configuration.benchmark}`'
+        )
+      service = build_service(
+        settings,
+        db_manager,
+        metrics=metrics,
+        callers_by_agent_name={configuration.agent: integration.caller},
+        trace_client=collect.TraceArchive(PhoenixClient(phoenix), outputs),
+        trace_adapters_by_agent_name={configuration.agent: integration.adapter} if integration.adapter else None,
+      )
+      async with service:
+        handle = await service.create_evaluation(
+          agent_name=configuration.agent,
+          agent_version_tag=configuration.version_tag,
+          dataset_id=dataset.id,
+          max_concurrent_samples=args.max_concurrent_samples,
+          selected_metric_names=details['metrics'],
+        )
+        outputs.bind(handle.run.id)
+        run_ids = (handle.run.id,)
+        # A crash past this point leaves the step started, with the run it made.
+        manifest.append(step, StepStatus.STARTED, run_ids=run_ids, details=details)
+        run = await handle.execute()
+        counts = (await service.get_evaluation_status(run.id)).sample_counts
+  except (ValueError, PersistenceError, psycopg.Error) as error:
+    _record_failure(manifest, step, 'collect', error, run_ids=run_ids, details=details)
+    return 1
+  complete = run.status is EvaluationStatus.COMPLETED and counts.completed == counts.total
+  details.update(
+    run_status=run.status.value,
+    samples={'total': counts.total, 'completed': counts.completed, 'failed': counts.failed},
+    outputs=str(outputs.root),
+  )
+  manifest.append(step, StepStatus.COMPLETED if complete else StepStatus.FAILED, run_ids=run_ids, details=details)
+  print(
+    f'collect: run {run.id} {run.status.value}: {counts.completed} of {counts.total} samples completed, '
+    f'{counts.failed} failed; raw traces in {outputs.root / "traces" / str(run.id)}'
+  )
+  if not complete:
+    print('collect: failed: every sample must complete; the failed ones must run again')
+  return 0 if complete else 1
 
 
 async def _score_with_deepeval(args: argparse.Namespace) -> int:

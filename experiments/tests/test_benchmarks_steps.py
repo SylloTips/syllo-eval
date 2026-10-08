@@ -4,9 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
+
+from syllo_eval.datasets.model import DatasetJsonSample
 
 from benchmarks import steps
-from benchmarks.common import REPORT_FILE
+from benchmarks.common import REPORT_FILE, CheckReport, Claim, ConvertedBenchmark, read_benchmark, write_benchmark
 from benchmarks.download import PinnedFileMismatchError
 from config import BenchmarkSource
 
@@ -91,6 +94,52 @@ class StepsTest(unittest.IsolatedAsyncioTestCase):
 
     with self.assertRaisesRegex(ValueError, 'other pins'):
       await self._import(_source(dataset_name='tau2-renamed'))
+
+
+class PilotTest(unittest.IsolatedAsyncioTestCase):
+  """A pilot dataset made from a conversion of three samples, one of them with claims."""
+
+  def setUp(self) -> None:
+    self._directory = tempfile.TemporaryDirectory()
+    self.data_dir = Path(self._directory.name)
+    self.source = _source(dataset_name='kb-test', expected_samples=3)
+    benchmark = ConvertedBenchmark(
+      samples=[
+        DatasetJsonSample(input_prompt=f'Question {key}?', ground_truth_output=f'Answer {key}.') for key in 'abc'
+      ],
+      records=[{'sample_key': key, 'kind': 'basic'} for key in 'abc'],
+      claims={'claims_gold': {'Question c?': [Claim(id='c1', text='C holds.')], 'Question a?': [Claim('a1', 'A.')]}},
+    )
+    write_benchmark(benchmark, CheckReport(), self.data_dir / 'kb', self.source.model_dump(mode='json'))
+    self.import_benchmark = AsyncMock(return_value='outcome')
+
+  def tearDown(self) -> None:
+    self._directory.cleanup()
+
+  async def _pilot(self, sample_keys: list[str], source: BenchmarkSource | None = None) -> Any:
+    with patch('benchmarks.steps.import_benchmark', self.import_benchmark):
+      return await steps.import_pilot('kb', source or self.source, self.data_dir, cast(Any, object()), sample_keys)
+
+  async def test_imports_and_writes_the_chosen_samples_with_their_claims_as_the_pilot_dataset(self) -> None:
+    outcome = await self._pilot(['c', 'b'])
+
+    self.assertEqual(outcome, 'outcome')
+    call = self.import_benchmark.await_args
+    assert call is not None
+    self.assertEqual(call.kwargs['name'], 'kb-test-pilot')
+    self.assertEqual([sample.input_prompt for sample in call.kwargs['payload'].samples], ['Question b?', 'Question c?'])
+    self.assertEqual(call.kwargs['claims'], {'claims_gold': {'Question c?': [Claim(id='c1', text='C holds.')]}})
+    pilot = self.data_dir / 'kb' / 'pilot'
+    self.assertEqual(read_benchmark(pilot), (call.kwargs['payload'], call.kwargs['claims']))
+    records = [json.loads(line) for line in (pilot / 'samples.jsonl').read_text(encoding='utf-8').splitlines()]
+    self.assertEqual([record['sample_key'] for record in records], ['b', 'c'])
+
+  async def test_unknown_samples_and_a_stale_conversion_are_refused(self) -> None:
+    with self.assertRaisesRegex(ValueError, r"kb has no samples with keys \['z'\]"):
+      await self._pilot(['a', 'z'])
+    with self.assertRaisesRegex(ValueError, 'other pins'):
+      await self._pilot(['a'], _source(dataset_name='kb-renamed', expected_samples=3))
+    self.import_benchmark.assert_not_awaited()
 
 
 if __name__ == '__main__':

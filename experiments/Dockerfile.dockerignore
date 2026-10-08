@@ -7,3 +7,4 @@
 .claude
 experiments/data
 experiments/outputs
+experiments/.venv-tau2

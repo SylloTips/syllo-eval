@@ -86,6 +86,40 @@ per call.
 - **Unreachable tool:** a question whose agent could not reach the search tool, as when Open Deep Research drops a
   server it cannot connect to, is an infrastructure failure and runs again. It is not a question with no search.
 
+## τ²-bench runs
+
+Each τ²-bench configuration runs τ²-bench's own agent on all 114 retail tasks once per trial (`agents/tau2.py`,
+`tau2_runtime/`). The code is τ²-bench at the commit its data are pinned to, run unmodified in its text mode: the agent
+and a simulated customer take turns until one of them ends the conversation.
+
+- **Models:** the agent model is the configuration's.
+  - Sonnet runs with a 16,000-token output limit and the API's defaults otherwise: high effort, and adaptive thinking,
+    which it cannot turn off. It accepts no sampling parameters.
+  - DeepSeek-V4.1-Flash runs at temperature 0, from an Azure AI Foundry deployment.
+  - The customer is GPT 6 Luna, from an Azure AI Foundry deployment, at temperature 0 with reasoning turned off, which
+    temperature 0 requires.
+  - τ²-bench grades the natural-language assertions with the agent model and its arguments, as τ²-bench does.
+- **Trials:** four per model. Trial n uses the seed that τ²-bench's own runner gives its n-th trial from its default
+  base seed of 300: 626729, 373753, 361454 and 1567. Models that take no seed, such as Anthropic's, ignore it.
+- **Limits:** τ²-bench's defaults. A simulation ends after 200 steps or 10 failed tool calls, and then it is scored
+  like any other.
+- **Reward:** τ²-bench's evaluator scores every simulation, whatever ended it. The reward is recorded per simulation
+  with its details, and it is the success label of the plan analyses.
+- **Grader replies,** the one change to τ²-bench's run: τ²-bench parses the grader's reply as JSON, and a reply that
+  is not JSON, such as JSON in a Markdown fence, fails the simulation. Here such a reply is replaced by the JSON that
+  τ²-bench's own `extract_json_from_llm_response` finds in it, as τ²-bench's other LLM judges read their replies. A
+  reply that is JSON is read as τ²-bench reads it, so every reward τ²-bench would give stays the same.
+- **Executed steps:** the agent's tool calls in order, failed ones included. Each step's instruction is the sorted-key
+  JSON of its arguments, as in the expected plan, and its output is the tool's result as the agent read it.
+- **Usage:** the agent's own LLM calls only. The customer's and the grader's calls are kept in the trace without usage.
+- **Failures:** a simulation that fails for a transient cause runs again from the start, with a new request id. Its
+  partial trace is never scored. The transient causes:
+  - a provider's rate limit, outage or connection error;
+  - a model cost map that could not be loaded;
+  - spans that did not reach Phoenix.
+
+  Any other failure, such as a grader reply with no JSON in it, leaves the sample without a trace or a reward.
+
 ## Evaluation units
 
 - **Retrieval (CP, CR, R, NDCG@10):**
