@@ -50,7 +50,7 @@ class PhoenixClient:
     '    edges {\n'
     '      node {\n'
     '        spans('
-    'first: $first, rootSpansOnly: true, '
+    'first: $first, '
     'filterCondition: $filterCondition, '
     'timeRange: {start: $start, end: $end}'
     ') {\n'
@@ -231,7 +231,8 @@ class PhoenixClient:
       self._REQUEST_ID_LOOKUP_QUERY,
       {
         'projectName': self.config.project_id,
-        'filterCondition': f'attributes{attribute_path} == {_filter_literal(request_id)}',
+        # Phoenix 20 dropped the rootSpansOnly argument; this filter works on Phoenix 12 and 20.
+        'filterCondition': f'attributes{attribute_path} == {_filter_literal(request_id)} and parent_id is None',
         'first': self._REQUEST_ID_LOOKUP_PAGE_SIZE,
         'start': _format_iso_datetime(start_time),
         'end': _format_iso_datetime(end_time),
