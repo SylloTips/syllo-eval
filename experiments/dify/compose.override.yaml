@@ -1,0 +1,21 @@
+# Applied by scripts/dify.sh on top of Dify's own docker-compose.yaml.
+services:
+  # Dify's tracing runs in the api and the worker, which join the campaign network to reach http://phoenix:6006.
+  api:
+    networks:
+      - experiments
+  worker:
+    networks:
+      - experiments
+  # Ports bind to localhost, as in the campaign environment; plain HTTP only.
+  nginx:
+    ports: !override
+      - '127.0.0.1:${EXPOSE_NGINX_PORT:-80}:${NGINX_PORT:-80}'
+  plugin_daemon:
+    ports: !override
+      - '127.0.0.1:${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}:${PLUGIN_DEBUGGING_PORT:-5003}'
+
+networks:
+  experiments:
+    name: syllo-eval-experiments_default
+    external: true

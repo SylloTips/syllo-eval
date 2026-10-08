@@ -10,14 +10,15 @@ traces that the whole-trace ablation reads (`ablation_metrics.py`) and the failu
 It relies on `datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create`,
 `spans.list_by_trace` and `metric_computations.list_by_evaluation_run`.
 
-The ablations and the DeepEval baseline also rely on a few library internals:
+The ablations, the DeepEval baseline and `try-dify` also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
   render prompts, traces and test cases;
 - the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
-  usage and retries rate limits as the library's judge client does.
+  usage and retries rate limits as the library's judge client does;
+- `PhoenixClient.get_trace_id_by_request_id` and `get_trace_json`, with which `try-dify` finds and fetches a trace.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench adapter
 reads the flattened records that client returns, `attributes.*` keys included, after `PhoenixTraceAdapter` has decoded
@@ -59,9 +60,10 @@ expected output of each step.
 | `tau2_runtime/` | τ²-bench's run of one task with traces, run in its own environment (see τ²-bench agent) |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
+| `dify/` | the Dify agent's DSL, configuration guide, and the Compose override that runs Dify beside Phoenix |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
-| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment |
+| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets |
@@ -265,6 +267,40 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
   - It drops a server it cannot reach, or a URL ending in `/mcp`, without an error, at every researcher step: its
     researchers then answer without searching. Check before each run that `search_knowledge_base` is among its tools,
     and after each question that the trace holds its searches.
+
+## Agents
+
+### Dify
+
+The low-code agent is built in Dify's UI, as a low-code user would, and called through Dify's service API. Dify traces
+it to the campaign's Phoenix with its built-in Arize Phoenix integration; the agent is not instrumented.
+
+```bash
+docker compose up -d        # first: Dify's api and worker join this environment's network to reach Phoenix
+scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. scripts/dify.sh down
+```
+
+- **Stack:** the first run downloads Dify's `docker/` folder at the pinned release into `data/dify/`, checking its
+  SHA-256, and creates Dify's own settings, `data/dify/.env`, from its example. The UI is at `http://localhost`, on
+  the port `EXPOSE_NGINX_PORT` sets there. [`dify/compose.override.yaml`](dify/compose.override.yaml) binds Dify's
+  ports to localhost and connects its api and worker to Phoenix.
+- **App:** [`dify/react-deepseek.yml`](dify/react-deepseek.yml) is the DSL export of the agent, a Chatflow whose
+  Agent node uses the ReAct strategy: a classic Agent app switches to function calling for tool-capable models. The
+  export holds no credentials or workspace settings: [`dify/README.md`](dify/README.md) is the configuration guide for
+  the plugins, model provider, MCP server, tracing and API key that each Dify instance needs from the UI.
+- **Request ID:** the caller sends its own request ID as Dify's `trace_id`. Dify writes it as `dify_trace_id` on the
+  root of the workflow trace, which holds the agent and its searches, so set
+  `PHOENIX_REQUEST_ID_ATTRIBUTE=dify_trace_id` (see the [guide](dify/README.md#7-api-key)). The message ID would find
+  Dify's separate message trace, which holds only the question and the answer.
+- **Try it:** `poetry run syllo-exp try-dify "<question>"` asks the app one question as a new conversation, finds its
+  trace in Phoenix, prints the span tree with the size of each input and output, and saves the spans to
+  `outputs/traces/dify-<request id>.json`. Dify's worker exports a trace a few seconds after the answer; the lookup
+  waits for it.
+- **Caller:** `agents/dify.py` streams the answer, because Dify's agent apps do not answer in blocking mode. Inside
+  the campaign environment it reaches Dify's api directly (`DIFY_BASE_URL`); elsewhere it goes through Dify's nginx,
+  at `http://localhost/v1` by default.
+  `try-dify` is a bring-up probe. Deploying the evaluation wrapper with this caller belongs to the later integration
+  of all the paper's agents, outside this branch.
 
 ## Metrics
 
