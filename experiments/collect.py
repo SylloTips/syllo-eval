@@ -23,7 +23,7 @@ from syllo_eval.evaluation.trace_processor import TraceSourceClient
 from syllo_eval.execution.agent_caller import AgentCaller
 from syllo_eval.settings import PhoenixSettings
 
-from agents import tau2
+from agents import dify, tau2
 from ablation_metrics import SEARCH_SPAN_TYPE
 from config import Benchmark, Configuration, ExperimentConfig
 from run_outputs import RunOutputs
@@ -31,6 +31,8 @@ from run_outputs import RunOutputs
 # A trace is looked up among the root spans that started this long before: a single agent call, such as a tau2
 # simulation, can outlast the library's default of ten minutes.
 REQUEST_ID_LOOKUP_WINDOW_SECONDS = 24 * 3600.0
+# Set per stack, not in the environment that every stack's collection shares.
+_REQUEST_ID_ATTRIBUTES = {'react': dify.REQUEST_ID_ATTRIBUTE}
 
 
 class UnsupportedAgentError(ValueError):
@@ -44,10 +46,16 @@ class AgentIntegration:
   adapter: TraceAdapter | None
 
 
-def phoenix_settings(base: PhoenixSettings, project: str) -> PhoenixSettings:
-  """``base`` for the Phoenix project of one benchmark."""
+def phoenix_settings(base: PhoenixSettings, project: str, agent: str) -> PhoenixSettings:
+  """``base`` for the Phoenix project of one benchmark, looking traces up by the request-ID attribute of ``agent``."""
   window = max(base.request_id_lookup_time_window_seconds, REQUEST_ID_LOOKUP_WINDOW_SECONDS)
-  return base.model_copy(update={'project_id': project, 'request_id_lookup_time_window_seconds': window})
+  return base.model_copy(
+    update={
+      'project_id': project,
+      'request_id_lookup_time_window_seconds': window,
+      'request_id_attribute': _REQUEST_ID_ATTRIBUTES.get(agent, 'request_id'),
+    }
+  )
 
 
 def build_integration(
@@ -61,6 +69,9 @@ def build_integration(
   if configuration.agent == 'tau2-llm-agent':
     caller = tau2.build_caller(configuration, config, data_dir=data_dir, phoenix=phoenix, outputs=outputs)
     return AgentIntegration(caller=caller, adapter=tau2.Tau2TraceAdapter())
+  if configuration.agent == 'react':
+    # No Dify adapter yet: its searches are not retrieval spans.
+    return AgentIntegration(caller=dify.DifyCaller(dify.DifySettings()), adapter=None)
   raise UnsupportedAgentError(f'{configuration.id}: the {configuration.agent} agent stack has no caller yet')
 
 

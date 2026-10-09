@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +20,6 @@ import yaml
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import Dataset, EvaluationStatus, MetricComputationStatus
 
-from agents.dify import DifyReply
 from benchmarks.common import ImportOutcome
 from cli import DEFAULT_MANIFEST, main
 from config import CONFIG_DIR
@@ -654,90 +652,6 @@ class DeepEvalCliTest(unittest.TestCase):
   def test_rejects_scoring_fewer_than_one_sample_at_a_time(self) -> None:
     with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
       self._deepeval('--max-concurrent-samples', '0')
-
-
-class TryDifyCliTest(unittest.TestCase):
-  """Runs `try-dify` with Dify and Phoenix replaced by fakes."""
-
-  def setUp(self) -> None:
-    self._directory = tempfile.TemporaryDirectory()
-    self.output_dir = Path(self._directory.name)
-    self.caller = MagicMock()
-    self.caller.chat = AsyncMock(return_value=DifyReply('r1', 'm1', 'c1', 'It ships tomorrow.'))
-    self.phoenix = MagicMock()
-    self.phoenix.get_trace_id_by_request_id = AsyncMock(return_value='t1')
-    self.phoenix.get_trace_json = AsyncMock(
-      return_value=[
-        _span('tool', 'search', parent='root', start=2, input='{"query": "order"}', output='[...]'),
-        _span('root', 'Dify', start=0),
-        _span('message', 'message', parent='root', start=1, input='Where is my order?', output='It ships.'),
-      ]
-    )
-    self.environment = {'DIFY_API_KEY': 'app-key', 'PHOENIX_PROJECT_ID': 'dify'}
-
-  def tearDown(self) -> None:
-    self._directory.cleanup()
-
-  def _try(self) -> tuple[int, str]:
-    @asynccontextmanager
-    async def fake_client(settings: Any) -> AsyncIterator[object]:
-      yield object()
-
-    with (
-      patch.dict(os.environ, self.environment),
-      patch('cli.load_environment'),
-      patch('cli.open_dify_client', fake_client),
-      patch('cli.DifyCaller', return_value=self.caller),
-      patch('cli.PhoenixClient', return_value=self.phoenix),
-    ):
-      for name in ('DIFY_API_KEY', 'PHOENIX_PROJECT_ID', 'PHOENIX_REQUEST_ID_ATTRIBUTE'):
-        if name not in self.environment:
-          os.environ.pop(name, None)
-      return _run(['try-dify', 'Where is my order?', '--output-dir', str(self.output_dir)])
-
-  def test_prints_the_span_tree_and_saves_the_spans(self) -> None:
-    status, output = self._try()
-    self.assertEqual(status, 0)
-    self.caller.chat.assert_awaited_once_with('Where is my order?')
-    self.phoenix.get_trace_id_by_request_id.assert_awaited_once_with('r1')
-    self.assertIn('It ships tomorrow.', output)
-    tree = [
-      'Dify [CHAIN]',
-      '  message [CHAIN] input 18 chars, output 9 chars',
-      '  search [TOOL] input 18 chars, output 5 chars',
-    ]
-    self.assertIn('\n'.join(tree) + '\n', output)
-    saved = json.loads((self.output_dir / 'dify-r1.json').read_text())
-    self.assertEqual([span['name'] for span in saved], ['search', 'Dify', 'message'])
-
-  def test_reports_a_trace_it_cannot_find(self) -> None:
-    self.phoenix.get_trace_id_by_request_id.return_value = None
-    status, output = self._try()
-    self.assertEqual(status, 1)
-    self.assertIn('No root span in Phoenix project dify has request_id = r1', output)
-    self.assertEqual(list(self.output_dir.iterdir()), [])
-
-  def test_needs_the_app_key_and_project(self) -> None:
-    for name in ('DIFY_API_KEY', 'PHOENIX_PROJECT_ID'):
-      with self.subTest(name):
-        self.environment.pop(name)
-        with redirect_stderr(io.StringIO()):
-          status, _ = self._try()
-        self.assertEqual(status, 2)
-        self.caller.chat.assert_not_awaited()
-        self.environment[name] = 'set'
-
-
-def _span(span_id: str, name: str, *, start: int, parent: str | None = None, **values: str) -> dict[str, Any]:
-  span: dict[str, Any] = {
-    'name': name,
-    'span_kind': 'TOOL' if name == 'search' else 'CHAIN',
-    'parent_id': parent,
-    'start_time': datetime(2026, 10, 7, 12, 0, start, tzinfo=timezone.utc),
-    'context.span_id': span_id,
-  }
-  span.update({f'attributes.{field}.value': value for field, value in values.items()})
-  return span
 
 
 if __name__ == '__main__':

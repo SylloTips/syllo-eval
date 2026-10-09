@@ -35,11 +35,19 @@ class FakeTraceClient:
 
 class CollectTest(unittest.IsolatedAsyncioTestCase):
   def test_each_benchmark_has_its_own_project_and_lookups_reach_a_day_back(self) -> None:
-    phoenix = collect.phoenix_settings(PhoenixSettings(project_id='default'), 'tau2-retail-v1.0.1')
-    longer = collect.phoenix_settings(PhoenixSettings(request_id_lookup_time_window_seconds=200_000), 'erb')
+    phoenix = collect.phoenix_settings(PhoenixSettings(project_id='default'), 'tau2-retail-v1.0.1', 'tau2-llm-agent')
+    longer = collect.phoenix_settings(
+      PhoenixSettings(request_id_lookup_time_window_seconds=200_000), 'erb', 'tau2-llm-agent'
+    )
 
     self.assertEqual((phoenix.project_id, phoenix.request_id_lookup_time_window_seconds), ('tau2-retail-v1.0.1', 86400))
     self.assertEqual(longer.request_id_lookup_time_window_seconds, 200_000)
+
+  def test_each_stack_looks_traces_up_by_its_own_request_id_attribute(self) -> None:
+    base = PhoenixSettings(request_id_attribute='set.elsewhere')
+
+    self.assertEqual(collect.phoenix_settings(base, 'erb', 'react').request_id_attribute, 'dify_trace_id')
+    self.assertEqual(collect.phoenix_settings(base, 'tau2', 'tau2-llm-agent').request_id_attribute, 'request_id')
 
   def test_collection_computes_only_the_metrics_that_need_no_judge(self) -> None:
     tau2 = collect.deterministic_metrics('tau2')
@@ -54,9 +62,9 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
   def test_stacks_without_a_caller_are_reported(self) -> None:
     config = load_config()
 
-    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the react agent stack has no caller yet'):
+    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the smolagents agent stack has no caller yet'):
       collect.build_integration(
-        config.configuration('erb/react/sonnet'),
+        config.configuration('erb/smolagents/sonnet'),
         config,
         data_dir=Path('data'),
         phoenix=PhoenixSettings(),
@@ -205,10 +213,10 @@ class CollectCliTest(unittest.TestCase):
   def test_a_stack_without_a_caller_is_a_usage_error(self) -> None:
     errors = io.StringIO()
     with patch('cli.load_environment'), patch('cli.logging.basicConfig'), redirect_stderr(errors):
-      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/react/sonnet'])
+      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/smolagents/sonnet'])
 
     self.assertEqual(status, 2)
-    self.assertIn('collect: erb/react/sonnet: the react agent stack has no caller yet', errors.getvalue())
+    self.assertIn('collect: erb/smolagents/sonnet: the smolagents agent stack has no caller yet', errors.getvalue())
     self.assertFalse(self.manifest.exists())
 
 

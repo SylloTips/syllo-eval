@@ -94,7 +94,7 @@ Monitoring > Tracing, configure Arize Phoenix:
 | Field | Value |
 |---|---|
 | Endpoint | `http://phoenix:6006` |
-| Project | `experiments`, or another name; `PHOENIX_PROJECT_ID` must match it |
+| Project | the project of the app's benchmark, `erb-69916e3` or `wixqa-d662dc4`: `collect` looks there |
 | API key | empty: the campaign's Phoenix has no authentication |
 
 Then turn tracing on. Dify's api and worker reach `phoenix` because
@@ -102,22 +102,23 @@ Then turn tracing on. Dify's api and worker reach `phoenix` because
 
 ## 7. API key
 
-Under the app's API Access, create an API key, and set in `experiments/.env`:
+Under the app's API Access, create an API key. Each `react` configuration runs on its own app, with its model and its
+benchmark's project, so set `DIFY_API_KEY` to the key of the configuration's app when collecting it:
 
 ```bash
-DIFY_API_KEY=app-...                        # the app's API key
-PHOENIX_PROJECT_ID=experiments              # the project of step 6
-PHOENIX_REQUEST_ID_ATTRIBUTE=dify_trace_id
+DIFY_API_KEY=app-... poetry run syllo-exp collect --configuration wixqa/react/deepseek
 ```
 
 ## 8. Check
 
+Run a pilot of the configuration on a few questions (see [Collection](../README.md#collection)):
+
 ```bash
-poetry run syllo-exp try-dify "<question>"
+poetry run syllo-exp benchmarks pilot --benchmark wixqa --samples <sample keys>
+DIFY_API_KEY=app-... poetry run syllo-exp collect --configuration wixqa/react/deepseek --pilot
 ```
 
-`try-dify` asks one question, finds its trace in Phoenix, prints the span tree and saves the spans to
-`outputs/traces/dify-<request id>.json`. The tree reads:
+Each question's trace is saved to `outputs/traces/<run id>/<trace id>.json`. Its spans read:
 
 ```text
 <workflow run id> [chain]

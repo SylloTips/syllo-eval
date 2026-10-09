@@ -10,15 +10,14 @@ traces that the whole-trace ablation reads (`ablation_metrics.py`) and the failu
 It relies on `datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create`,
 `spans.list_by_trace` and `metric_computations.list_by_evaluation_run`.
 
-The ablations, the DeepEval baseline and `try-dify` also rely on a few library internals:
+The ablations and the DeepEval baseline also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
   render prompts, traces and test cases;
 - the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
-  usage and retries rate limits as the library's judge client does;
-- `PhoenixClient.get_trace_id_by_request_id` and `get_trace_json`, with which `try-dify` finds and fetches a trace.
+  usage and retries rate limits as the library's judge client does.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench adapter
 reads the flattened records that client returns, `attributes.*` keys included, after `PhoenixTraceAdapter` has decoded
@@ -288,19 +287,17 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   Agent node uses the ReAct strategy: a classic Agent app switches to function calling for tool-capable models. The
   export holds no credentials or workspace settings: [`dify/README.md`](dify/README.md) is the configuration guide for
   the plugins, model provider, MCP server, tracing and API key that each Dify instance needs from the UI.
+- **One app per configuration:** a configuration's model and benchmark are fixed by the Dify app it calls, not by
+  `collect`. Each `react` configuration therefore runs on an app that uses its model and traces to its benchmark's
+  Phoenix project (`erb-69916e3` or `wixqa-d662dc4`), with the search server on that benchmark's collection and the
+  configuration's swap fraction. `DIFY_API_KEY` selects the app; set it to that app's key before each collection.
 - **Request ID:** the caller sends its own request ID as Dify's `trace_id`. Dify writes it as `dify_trace_id` on the
-  root of the workflow trace, which holds the agent and its searches, so set
-  `PHOENIX_REQUEST_ID_ATTRIBUTE=dify_trace_id` (see the [guide](dify/README.md#7-api-key)). The message ID would find
-  Dify's separate message trace, which holds only the question and the answer.
-- **Try it:** `poetry run syllo-exp try-dify "<question>"` asks the app one question as a new conversation, finds its
-  trace in Phoenix, prints the span tree with the size of each input and output, and saves the spans to
-  `outputs/traces/dify-<request id>.json`. Dify's worker exports a trace a few seconds after the answer; the lookup
-  waits for it.
-- **Caller:** `agents/dify.py` streams the answer, because Dify's agent apps do not answer in blocking mode. Inside
-  the campaign environment it reaches Dify's api directly (`DIFY_BASE_URL`); elsewhere it goes through Dify's nginx,
-  at `http://localhost/v1` by default.
-  `try-dify` is a bring-up probe. Deploying the evaluation wrapper with this caller belongs to the later integration
-  of all the paper's agents, outside this branch.
+  root of the workflow trace, which holds the agent and its searches; `collect` looks Dify's traces up by that
+  attribute. The message ID would find Dify's separate message trace, which holds only the question and the answer.
+- **Caller:** `agents/dify.py` streams the answer, because Dify's agent apps do not answer in blocking mode, through
+  Dify's nginx at `DIFY_BASE_URL` (`http://localhost/v1` by default).
+- **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces. Dify's searches are
+  not retrieval spans until Dify has its own trace adapter, so the search metrics skip its runs until then.
 
 ## Metrics
 
@@ -370,12 +367,14 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
   τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
   later, on its stored traces.
-- **Agents:** only τ²-bench's agent has a caller so far. The command refuses the other stacks.
+- **Agents:** only τ²-bench's agent and the Dify agent have callers so far. The command refuses the other stacks.
 - **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
   `tau2-retail-v1.0.1`.
   - Every agent of a benchmark sends its spans to that project.
-  - A sample's trace is the one whose root span carries the call's `request_id` attribute. It is looked up among the
-    root spans of the last 24 hours, because one agent call can outlast the library's 10-minute default.
+  - A sample's trace is the one whose root span carries the call's request ID, in the attribute `request_id`, or
+    `dify_trace_id` for Dify. It is looked up among the root spans of the last 24 hours, because one agent call can
+    outlast the library's 10-minute default. The attribute is set per stack, so `PHOENIX_REQUEST_ID_ATTRIBUTE` does
+    not apply to collection.
 - **Raw traces:** every trace the run fetches is also written to `outputs/traces/<run id>/<trace id>.json`. The format
   is the one syllo-eval imports: the `trace_id`, and Phoenix's records as `spans`.
 - **Manifest:** the step is `collect:<configuration id>`, with the run id, the Phoenix project and the sample counts.

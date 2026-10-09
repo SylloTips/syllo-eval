@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 from collections import Counter, defaultdict
@@ -18,13 +17,12 @@ from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
-from syllo_eval.infrastructure.exceptions import InfrastructureError, PersistenceError
+from syllo_eval.infrastructure.exceptions import PersistenceError
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import EvaluationStatus, MetricComputationStatus
-from syllo_eval.settings import GeminiJudgeSettings, PhoenixSettings, Settings
+from syllo_eval.settings import GeminiJudgeSettings, Settings
 
 import collect
-from agents.dify import DifyCaller, DifyError, DifySettings, open_dify_client
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
 from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, EmbeddingConfig, load_config, load_environment
@@ -38,7 +36,6 @@ from service import build_service, open_database
 
 DEFAULT_OUTPUTS = Path(__file__).resolve().parent / 'outputs'
 DEFAULT_MANIFEST = DEFAULT_OUTPUTS / 'manifest.jsonl'
-DEFAULT_TRACES_DIR = DEFAULT_OUTPUTS / 'traces'
 # Failures that are outcomes of the judge: the unit counts as wrong (METHODOLOGY.md, Failures). Any other failed unit,
 # such as one with a provider error, is unscored and must run again, so a judge step that has one is not complete.
 _JUDGE_OUTCOMES = frozenset(
@@ -168,15 +165,6 @@ def build_parser() -> argparse.ArgumentParser:
   search.add_argument('--host', default='127.0.0.1', help='Interface to listen on (default: 127.0.0.1).')
   search.add_argument('--port', type=_positive_int, default=8000, help='Port to listen on (default: 8000).')
   search.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
-  try_dify = commands.add_parser(
-    'try-dify',
-    help='Ask the Dify app one question and show the trace it left in Phoenix.',
-    description='Ask the Dify app one question, find its trace in Phoenix, print the span tree and save the spans.',
-  )
-  try_dify.add_argument('question', help='The question to send, as a new conversation.')
-  try_dify.add_argument(
-    '--output-dir', type=Path, default=DEFAULT_TRACES_DIR, help='Folder for the spans, saved as JSON per request.'
-  )
   return parser
 
 
@@ -225,8 +213,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_collect(args))
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
-  elif args.command == 'try-dify':
-    return asyncio.run(_try_dify(args))
   return 0
 
 
@@ -470,7 +456,7 @@ async def _collect(args: argparse.Namespace) -> int:
   logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
   logging.getLogger('httpx').setLevel(logging.WARNING)
   settings = Settings()
-  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name)
+  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name, configuration.agent)
   outputs = RunOutputs(args.outputs_dir)
   step = f'collect:{configuration.id}' + (':pilot' if args.pilot else '')
   manifest = Manifest(args.manifest)
@@ -591,56 +577,6 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
   if unscored:
     print(f'deepeval: failed: {unscored} units failed without a judge outcome and must run again')
   return 0 if complete else 1
-
-
-async def _try_dify(args: argparse.Namespace) -> int:
-  """Ask the app, then find the trace by the caller's request ID (``PHOENIX_REQUEST_ID_ATTRIBUTE=dify_trace_id``)."""
-  load_environment()
-  dify_settings, phoenix_settings = DifySettings(), PhoenixSettings()
-  if dify_settings.api_key is None or phoenix_settings.project_id is None:
-    print('Set DIFY_API_KEY to the app key and PHOENIX_PROJECT_ID to the project Dify traces to.', file=sys.stderr)
-    return 2
-  phoenix = PhoenixClient(phoenix_settings)
-  try:
-    async with open_dify_client(dify_settings) as client:
-      reply = await DifyCaller(client, dify_settings).chat(args.question)
-    print(f'request {reply.request_id}, message {reply.message_id}, conversation {reply.conversation_id}')
-    print(f'{reply.answer}\n')
-    trace_id = await phoenix.get_trace_id_by_request_id(reply.request_id)
-    if trace_id is None:
-      print(
-        f'No root span in Phoenix project {phoenix_settings.project_id} has '
-        f'{phoenix_settings.request_id_attribute} = {reply.request_id}'
-      )
-      return 1
-    spans = await phoenix.get_trace_json(trace_id)
-  except (DifyError, httpx.HTTPError, InfrastructureError) as error:
-    print(f'try-dify: failed: {type(error).__name__}: {error}', file=sys.stderr)
-    return 1
-  path = args.output_dir / f'dify-{reply.request_id}.json'
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(json.dumps(spans, indent=2, ensure_ascii=False, default=str), encoding='utf-8')
-  print(f'trace {trace_id}: {len(spans)} spans, saved to {path}')
-  children: defaultdict[str | None, list[dict[str, Any]]] = defaultdict(list)
-  for span in sorted(spans, key=lambda span: (span['start_time'] is None, span['start_time'])):
-    children[span['parent_id']].append(span)
-  span_ids = {span['context.span_id'] for span in spans}
-  roots = [span for parent, group in children.items() if parent not in span_ids for span in group]
-  _print_spans(roots, children, depth=0)
-  return 0
-
-
-def _print_spans(
-  spans: Sequence[Mapping[str, Any]], children: Mapping[str | None, Sequence[Mapping[str, Any]]], depth: int
-) -> None:
-  for span in spans:
-    sizes = ', '.join(
-      f'{field} {len(str(span[f"attributes.{field}.value"]))} chars'
-      for field in ('input', 'output')
-      if span.get(f'attributes.{field}.value') is not None
-    )
-    print(f'{"  " * depth}{span["name"]} [{span["span_kind"]}] {sizes}'.rstrip())
-    _print_spans(children.get(span['context.span_id'], ()), children, depth + 1)
 
 
 async def _failed_units(db_manager: DatabaseManager, run_id: UUID) -> dict[str, dict[str, int]]:

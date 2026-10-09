@@ -55,8 +55,6 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       PHOENIX_BASE_URL: http://phoenix:6006
       QDRANT_URL: http://qdrant:6333
-      # Dify's api joins this network when it runs (scripts/dify.sh).
-      DIFY_BASE_URL: http://api:5001/v1
     depends_on:
       db:
         condition: service_healthy
