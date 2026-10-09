@@ -107,6 +107,8 @@ class PhoenixTraceAdapter:
       metadata['phoenix.status_message'] = record['status_message']
     usage = None
     if kind == 'llm':
+      # OpenInference reports the call's total cost in US dollars.
+      cost = record.get('attributes.llm.cost.total')
       usage = LlmUsage(
         call_id=str(record['context.span_id']),
         model=record.get('attributes.llm.model_name'),
@@ -114,8 +116,8 @@ class PhoenixTraceAdapter:
         input_tokens=record.get('attributes.llm.token_count.prompt'),
         output_tokens=record.get('attributes.llm.token_count.completion'),
         total_tokens=record.get('attributes.llm.token_count.total'),
-        cost=record.get('attributes.llm.cost.total_usd'),
-        currency='USD' if record.get('attributes.llm.cost.total_usd') is not None else None,
+        cost=cost,
+        currency='USD' if cost is not None else None,
       )
     return Span(
       external_id=str(record['context.span_id']),

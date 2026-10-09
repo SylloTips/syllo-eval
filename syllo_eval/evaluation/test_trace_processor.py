@@ -187,6 +187,7 @@ class TestTraceProcessorLlmMetadata(unittest.IsolatedAsyncioTestCase):
         'attributes.llm.token_count.prompt': 12,
         'attributes.llm.token_count.completion': 5,
         'attributes.llm.token_count.total': 17,
+        'attributes.llm.cost.total': 0.0021,
       },
       {
         'context.span_id': 'span-llm-without-tokens',
@@ -220,11 +221,14 @@ class TestTraceProcessorLlmMetadata(unittest.IsolatedAsyncioTestCase):
     assert spans_by_id['span-llm-with-tokens'].semantics.usage is not None
     self.assertEqual(
       spans_by_id['span-llm-with-tokens'].semantics.usage.model_dump(
-        include={'input_tokens', 'output_tokens', 'total_tokens'}
+        include={'input_tokens', 'output_tokens', 'total_tokens', 'cost', 'currency'}
       ),
-      {'input_tokens': 12, 'output_tokens': 5, 'total_tokens': 17},
+      {'input_tokens': 12, 'output_tokens': 5, 'total_tokens': 17, 'cost': 0.0021, 'currency': 'USD'},
     )
-    self.assertNotIn('token_usage', spans_by_id['span-llm-without-tokens'].metadata or {})
+    without_tokens = spans_by_id['span-llm-without-tokens']
+    self.assertNotIn('token_usage', without_tokens.metadata or {})
+    assert without_tokens.semantics.usage is not None
+    self.assertEqual((without_tokens.semantics.usage.cost, without_tokens.semantics.usage.currency), (None, None))
 
 
 class TestTraceProcessorIntegration(unittest.IsolatedAsyncioTestCase):
