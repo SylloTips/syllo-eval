@@ -1,4 +1,6 @@
 # Models of Section 5.1. Values marked "paper placeholder" are still red in the draft: confirm them before the pilot.
+# A model is its provider's API id; provider/model is also its litellm route, which tau2 calls. The azure and azure_ai
+# models are deployments of the Azure AI Foundry resource at AZURE_FOUNDRY_BASE_URL, named as the model.
 
 agents:
   sonnet:
@@ -6,14 +8,15 @@ agents:
     model: claude-sonnet-5-5
     label: Claude Sonnet 5.5
   deepseek:
-    provider: deepseek
-    model: deepseek-v4.1-flash # paper placeholder
+    # Served through Foundry's model inference API, which litellm calls azure_ai.
+    provider: azure_ai
+    model: DeepSeek-V4.1-Flash
     label: DeepSeek-V4.1-Flash
 
 # Plays the customer in tau2-bench.
 customer_simulator:
-  provider: openai
-  model: gpt-6-luna # paper placeholder
+  provider: azure
+  model: gpt-6-luna
   label: GPT 6 Luna
 
 # One judge for every framework (Syllo-eval, its ablations, DeepEval). Temperature and thinking level are frozen at

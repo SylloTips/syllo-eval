@@ -229,6 +229,39 @@ class BenchmarksImportCliTest(_ConfigDirTestCase):
     self.assertEqual(self._status('benchmarks:import:wixqa'), StepStatus.COMPLETED)
 
 
+class BenchmarksPilotCliTest(_ConfigDirTestCase):
+  def _pilot(self, import_pilot: AsyncMock) -> tuple[int, str]:
+    @asynccontextmanager
+    async def fake_database(settings: Any) -> AsyncIterator[object]:
+      yield object()
+
+    with patch('cli.open_database', fake_database), patch('cli.benchmark_steps.import_pilot', import_pilot):
+      return self._run_step('pilot', '--benchmark', 'tau2', '--samples', '0', '24', '40')
+
+  def test_imports_the_chosen_samples_as_the_pilot_dataset(self) -> None:
+    outcome = ImportOutcome(dataset=Dataset(id=uuid4(), name='tau2-pilot'), created=True, claims_created={})
+    import_pilot = AsyncMock(return_value=outcome)
+
+    status, output = self._pilot(import_pilot)
+
+    self.assertEqual(status, 0, output)
+    call = import_pilot.await_args
+    assert call is not None
+    self.assertEqual((call.args[0], call.args[4]), ('tau2', ['0', '24', '40']))
+    record = Manifest(self.manifest).latest()['benchmarks:pilot:tau2']
+    self.assertEqual(record.status, StepStatus.COMPLETED)
+    self.assertTrue(str(record.details['dataset_name']).endswith('-pilot'))
+    self.assertEqual(record.details['samples'], ['0', '24', '40'])
+    self.assertIn(f'imported ({outcome.dataset.id}) with samples 0, 24, 40', output)
+
+  def test_a_refused_selection_is_recorded(self) -> None:
+    status, output = self._pilot(AsyncMock(side_effect=ValueError('tau2 has no samples with keys')))
+
+    self.assertEqual(status, 1)
+    self.assertIn('tau2: failed: ValueError', output)
+    self.assertEqual(self._status('benchmarks:pilot:tau2'), StepStatus.FAILED)
+
+
 class BenchmarksSelectionCliTest(_ConfigDirTestCase):
   def test_selecting_a_benchmark_the_config_does_not_pin_is_an_error(self) -> None:
     (self.config_dir / 'benchmarks.yaml').write_text(

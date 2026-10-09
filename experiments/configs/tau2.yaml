@@ -1,0 +1,28 @@
+# How tau2-bench runs its agent: tau2's own LLM agent and customer simulator, with tau2's defaults for everything set
+# neither here nor in models.yaml. The assertion grader is the configuration's agent model with the agent's arguments,
+# as tau2 grades with the agent model.
+
+# litellm arguments per agent model (keys of models.yaml), passed as tau2's llm_args.
+# Sonnet 5.5 accepts no sampling parameters; DeepSeek keeps tau2's default temperature.
+agent_llm_args:
+  sonnet: { max_tokens: 16000 }
+  deepseek: { temperature: 0.0 }
+# GPT models accept temperature 0 only with reasoning turned off. litellm 1.82.6 (needed by tau2-bench) knows only that
+# GPT-5 models take a reasoning effort, so it drops it for GPT 6 Luna, which then rejects temperature 0.
+# `allowed_openai_params` makes litellm send it.
+customer_llm_args:
+  {
+    temperature: 0.0,
+    reasoning_effort: none,
+    allowed_openai_params: [reasoning_effort],
+  }
+
+# tau2's defaults: a simulation ends after 200 steps or 10 failed tool calls.
+# Trials draw their seeds from the base seed as tau2's runner does, so trial n has the seed tau2 gives its n-th trial.
+max_steps: 200
+max_errors: 10
+base_seed: 300
+
+# litellm's model cost map at a fixed commit. litellm reads from it which parameters each model accepts, and drops the
+# others without an error; the bundled copy predates the models of the paper.
+cost_map_url: https://raw.githubusercontent.com/BerriAI/litellm/d8c0e2c7153d82234ec46f0231bf9b9714e7d52a/model_prices_and_context_window.json

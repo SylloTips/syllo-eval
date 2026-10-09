@@ -1,11 +1,12 @@
 """Validated experiment configuration: the models and agent configurations of Section 5.1."""
 
+import random
 from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from syllo_eval.settings import load_settings_env
 
@@ -67,6 +68,23 @@ class ModelsConfig(_ConfigModel):
   embedding: EmbeddingConfig
 
 
+class Tau2Config(_ConfigModel):
+  """How tau2-bench runs its agent; see ``configs/tau2.yaml``."""
+
+  # litellm arguments, per agent model key and for the customer simulator.
+  agent_llm_args: dict[str, dict[str, JsonValue]]
+  customer_llm_args: dict[str, JsonValue]
+  max_steps: int = Field(gt=0)
+  max_errors: int = Field(gt=0)
+  base_seed: int
+  cost_map_url: str = Field(pattern=r'^https://\S+/[0-9a-f]{40}/\S+\.json$')
+
+  def trial_seed(self, trial: int) -> int:
+    """The seed of 1-based ``trial``: tau2's runner draws one seed per trial from the base seed."""
+    draws = random.Random(self.base_seed)
+    return [draws.randint(0, 1_000_000) for _ in range(trial)][-1]
+
+
 class Configuration(_ConfigModel):
   id: str = Field(min_length=1)
   benchmark: Benchmark
@@ -115,6 +133,7 @@ class ExperimentConfig(_ConfigModel):
   models: ModelsConfig
   configurations: tuple[Configuration, ...] = Field(min_length=1)
   benchmarks: dict[Benchmark, BenchmarkSource]
+  tau2: Tau2Config
 
   @model_validator(mode='after')
   def _check_references(self) -> 'ExperimentConfig':
@@ -127,6 +146,10 @@ class ExperimentConfig(_ConfigModel):
     unknown_models = sorted({c.model for c in self.configurations} - set(self.models.agents))
     if unknown_models:
       raise ValueError(f'Configurations use undefined agent models: {unknown_models}')
+    tau2_models = {c.model for c in self.configurations if c.benchmark == 'tau2'}
+    missing_args = sorted(tau2_models - set(self.tau2.agent_llm_args))
+    if missing_args:
+      raise ValueError(f'tau2 configurations use agent models without llm args in tau2.yaml: {missing_args}')
     # Agent rows are unique per (name, version tag), and each run evaluates one agent on one dataset.
     runs = Counter((c.benchmark, c.agent, c.version_tag) for c in self.configurations)
     clashing = [run for run, count in runs.items() if count > 1]
@@ -146,6 +169,7 @@ def load_config(config_dir: Path = CONFIG_DIR) -> ExperimentConfig:
     models=_read_yaml(config_dir / 'models.yaml'),
     configurations=_read_yaml(config_dir / 'configurations.yaml')['configurations'],
     benchmarks=_read_yaml(config_dir / 'benchmarks.yaml'),
+    tau2=_read_yaml(config_dir / 'tau2.yaml'),
   )
 
 

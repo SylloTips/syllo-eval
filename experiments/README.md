@@ -19,6 +19,10 @@ The ablations and the DeepEval baseline also rely on a few library internals:
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
   usage and retries rate limits as the library's judge client does.
 
+Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench adapter
+reads the flattened records that client returns, `attributes.*` keys included, after `PhoenixTraceAdapter` has decoded
+them (`agents/tau2.py`).
+
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
 ## What the experiments measure
@@ -43,8 +47,6 @@ of the trace it assesses. The paper asks three questions:
 [`METHODOLOGY.md`](METHODOLOGY.md) fixes the protocol: evaluation units, aggregation and statistics.
 [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
 expected output of each step.
-[`REPRODUCIBILITY.md`](REPRODUCIBILITY.md) lists the commands a reviewer runs to reproduce the results, with the
-expected output of each step.
 
 ## Layout
 
@@ -53,14 +55,16 @@ expected output of each step.
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
+| `collect.py`, `run_outputs.py`, `agents/` | collection runs, the files they write, and each agent stack's caller and trace adapter |
+| `tau2_runtime/` | τ²-bench's run of one task with traces, run in its own environment (see τ²-bench agent) |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
-| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base |
+| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
-| `outputs/` | gitignored: manifest, raw trace exports, computations, annotation packets |
+| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup
@@ -113,7 +117,9 @@ poetry run syllo-exp benchmarks convert   # dataset.json, samples.jsonl, claims.
 poetry run syllo-exp benchmarks import    # the datasets and their claim ground truths, into the configured database
 ```
 
-- **Pins:** [`configs/benchmarks.yaml`](configs/benchmarks.yaml) fixes every file by commit, size and SHA-256.
+- **Pins:** [`configs/benchmarks.yaml`](configs/benchmarks.yaml) fixes every file by commit, size and SHA-256. For
+  τ²-bench, it also fixes the files that its agent runs on: the retail database, the agent's policy and the customer
+  simulator's guidelines.
 - **Scope:** each step takes `--only erb wixqa tau2`, records its outcome in the manifest, and is safe to re-run.
   Fetching resumes interrupted downloads.
 - **Checks:** a conversion fails on a wrong sample count, a duplicate or unstripped prompt, a gold document missing
@@ -318,6 +324,117 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
   `deepeval_baseline` first, which imports the switches before DeepEval. `pyproject.toml` disables DeepEval's pytest
   plugin, which pytest would import first.
 
+## Collection
+
+```bash
+poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max-concurrent-samples 4
+```
+
+- **What it does:** a fresh syllo-eval run of one configuration on every sample of its benchmark. The run calls the
+  agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
+  τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
+  later, on its stored traces.
+- **Agents:** only τ²-bench's agent has a caller so far. The command refuses the other stacks.
+- **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
+  `tau2-retail-v1.0.1`.
+  - Every agent of a benchmark sends its spans to that project.
+  - A sample's trace is the one whose root span carries the call's `request_id` attribute. It is looked up among the
+    root spans of the last 24 hours, because one agent call can outlast the library's 10-minute default.
+- **Raw traces:** every trace the run fetches is also written to `outputs/traces/<run id>/<trace id>.json`. The format
+  is the one syllo-eval imports: the `trace_id`, and Phoenix's records as `spans`.
+- **Manifest:** the step is `collect:<configuration id>`, with the run id, the Phoenix project and the sample counts.
+  It completes only when every sample completed; a run with failed samples is recorded as failed, and those samples
+  must run again.
+- **Requirements:** the configured database with the benchmark imported, Phoenix at `PHOENIX_BASE_URL` (by default the
+  Compose service on `localhost:6006`), and the agent's own requirements.
+- **Pilot:** a pilot runs a configuration on a few samples of its benchmark first:
+
+  ```bash
+  poetry run syllo-exp benchmarks pilot --benchmark tau2 --samples 0 24 40
+  poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --pilot
+  ```
+
+  - `benchmarks pilot` takes the given samples of the checked conversion, with their ground truths and claims. It
+    imports them as the dataset `<dataset>-pilot`, and writes them to `data/<benchmark>/pilot/`, gitignored like
+    the rest of `data/`. The keys are `samples.jsonl`'s `sample_key`: τ²-bench task ids, for example.
+  - `collect --pilot` runs on that dataset, as the step `collect:<configuration id>:pilot`, so a pilot never
+    completes the real step. Its spans go to the benchmark's Phoenix project, like the full run's.
+  - A pilot dataset holds one selection: importing other samples under its name is refused.
+  - On τ²-bench, tasks 0, 24 and 40 cover a five-call plan rewarded on the database alone, a task without an expected
+    plan, and a task whose assertions the grader checks.
+- **Where:** run it on the host with `poetry run`, like the search servers, where the agents can reach the services.
+  `--max-concurrent-samples` sets how many samples run at once; the default is `EVALUATION_MAX_CONCURRENT_SAMPLES`,
+  or 1.
+
+## τ²-bench agent
+
+τ²-bench runs its own tool-calling agent against a simulated customer in its retail environment, and rewards each
+conversation by checking the final database and the task's assertions. One sample is one simulation of its task.
+
+```bash
+scripts/setup-tau2.sh                                   # once: the τ²-bench environment, in .venv-tau2
+poetry run syllo-exp benchmarks fetch --only tau2       # the tasks, and the environment's database, policy and guidelines
+poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max-concurrent-samples 4
+```
+
+- **Environment:** τ²-bench's dependencies conflict with syllo-eval's, so it runs in an environment of its own,
+  `.venv-tau2`. `scripts/setup-tau2.sh` creates it from `tau2_runtime/requirements.txt`, which fixes every package:
+  - τ²-bench at the commit the benchmark is pinned to;
+  - litellm, which τ²-bench calls the models with;
+  - OpenTelemetry and OpenInference's litellm instrumentation.
+
+  `TAU2_PYTHON` points the caller at another interpreter.
+- **One process per simulation:** the caller (`agents/tau2.py`) maps the sample's prompt to its task. It then runs
+  `tau2_runtime/run_simulation.py` with that environment's interpreter.
+  - The process runs τ²-bench's own orchestrator, agent, customer simulator and evaluator, unmodified but for how
+    the grader's replies are read.
+  - It reads the pinned files under `data/tau2/raw/data`, the caller's `TAU2_DATA_DIR`.
+- **Models and credentials** ([`configs/tau2.yaml`](configs/tau2.yaml)):
+  - The agent is the configuration's model, with the arguments of `agent_llm_args`.
+  - The customer is `customer_simulator` in [`configs/models.yaml`](configs/models.yaml).
+  - τ²-bench's assertion grader is the agent model.
+  - litellm reads `ANTHROPIC_API_KEY` for Sonnet. The `azure/` and `azure_ai/` models, GPT 6 Luna and
+    DeepSeek-V4.1-Flash, are deployments of the Foundry resource at `AZURE_FOUNDRY_BASE_URL`, called with
+    `AZURE_FOUNDRY_API_KEY`. The `azure/` ones also use the API version `TAU2_AZURE_API_VERSION`.
+- **Grader replies:** τ²-bench fails a simulation whose grader reply is not JSON, such as JSON in a Markdown fence.
+  The process reads such a reply as the JSON inside it, with τ²-bench's own helper; a JSON reply is read unchanged
+  ([`METHODOLOGY.md`](METHODOLOGY.md), τ²-bench runs).
+- **Cost map:** litellm's model cost map tells it which parameters each model accepts, and it drops the others without
+  an error. The process loads the map at the commit `cost_map_url` pins, and refuses to run on litellm's bundled copy,
+  which predates the paper's models.
+- **Traces:** each simulation is one trace in Phoenix:
+
+  ```
+  tau2.simulation          root: request_id, the user scenario in, the reward out
+  ├─ tau2-llm-agent        the agent: its turns, each with its LLM call and the tool calls it requested
+  ├─ user_turn             the customer simulator's turns, with their LLM calls
+  └─ evaluate_simulation   τ²-bench's reward, with the grader's LLM calls
+  ```
+
+  Every LLM call is traced by OpenInference's instrumentation, which the process installs before it imports τ²-bench.
+  Each tool call is a span with its arguments and result, marked as an error when the environment rejected it.
+- **Adapter:** the agent's span is the agent root. Its request is the task's user scenario, which is the sample's
+  prompt, and its executed steps are its tool calls, failed ones included, in order.
+  - Each step's instruction renders the call's arguments as the dataset renders the expected plan.
+  - The customer's and the grader's LLM spans become `customer_llm` and `grader_llm`. They, and litellm's nested
+    retries (`llm_internal`), carry no usage, so a run's report counts only the agent's own calls.
+  - Agent token usage and cost come from `PhoenixTraceAdapter`. A zero cost from litellm means the model could not
+    be priced, so the adapter leaves cost and currency unset while retaining token counts.
+- **Rewards:** the reward is the success label of RQ1. Each simulation adds one line to
+  `outputs/tau2/<run id>/rewards.jsonl`, with the sample, request id, task, trial, seed, termination reason, reward
+  and τ²-bench's reward details.
+  - Next to it, `simulations/<request id>.json` is τ²-bench's own record of the simulation: messages, reward and
+    costs.
+  - `.spec.json` and `.log` hold what the process was asked to run and what it printed.
+- **Failures:** some failures are transient:
+  - a provider's rate limit, outage or connection error;
+  - an unreachable cost map;
+  - spans that Phoenix did not receive, which would leave an incomplete trace.
+
+  These start a new simulation, with a new request id, up to `TAU2_MAX_ATTEMPTS` attempts (3), `TAU2_RETRY_DELAY_SECONDS`
+  apart (60). Any other failure fails the sample at once. A cancelled call stops its process, which still exports the
+  spans it has.
+
 ## Verification
 
 ```bash
@@ -334,11 +451,19 @@ service: it creates and deletes `test-search-*` collections, and it is skipped w
 
 Check which database and Qdrant are configured before running the suite.
 
+The τ²-bench runtime has its own tests, which run in its environment on the fetched files. They check the spans of a
+simulation offline, with litellm's mock responses:
+
+```bash
+.venv-tau2/bin/python -m unittest discover -s tau2_runtime
+```
+
 The parent project's `poetry run ruff check .` and `poetry run ruff format .` also cover this folder.
 
 ## How the campaign runs
 
-1. **Collect.** Fresh runs call each agent and archive its raw traces. They compute only deterministic metrics.
+1. **Collect.** Fresh runs call each agent and archive its raw traces (`syllo-exp collect`). They compute only
+   deterministic metrics.
 2. **Judge.** Every judge evaluation repeats a collection run on its stored traces:
    - the main pass and two retests;
    - the gold-claim pass;
@@ -348,4 +473,5 @@ The parent project's `poetry run ruff check .` and `poetry run ruff format .` al
 4. **Annotate.** Humans grade 180 answers and verify ERB facts.
 5. **Analyze.** Tables 2–4 and every red placeholder are regenerated from the exports.
 
-A pilot on a small slice gates the full campaign. It fixes the judge's temperature and thinking level and checks cost.
+A pilot on a small slice gates the full campaign (`benchmarks pilot`, then `collect --pilot`). It fixes the judge's
+temperature and thinking level and checks cost.

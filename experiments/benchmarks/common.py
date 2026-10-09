@@ -136,14 +136,8 @@ def write_benchmark(
   """
   directory.mkdir(parents=True, exist_ok=True)
   (directory / DATASET_FILE).write_text(benchmark.payload.model_dump_json(indent=2), encoding='utf-8')
-  with (directory / RECORDS_FILE).open('w', encoding='utf-8') as file:
-    for record in benchmark.records:
-      file.write(json.dumps(record, ensure_ascii=False) + '\n')
-  claims = {
-    key: {prompt: [{'id': claim.id, 'text': claim.text} for claim in claims] for prompt, claims in by_prompt.items()}
-    for key, by_prompt in benchmark.claims.items()
-  }
-  (directory / CLAIMS_FILE).write_text(json.dumps(claims, ensure_ascii=False, indent=2), encoding='utf-8')
+  write_records(directory, benchmark.records)
+  write_claims(directory, benchmark.claims)
   summary = {
     'source': source,
     'errors': report.errors,
@@ -152,6 +146,25 @@ def write_benchmark(
     **benchmark.stats,
   }
   (directory / REPORT_FILE).write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def write_records(directory: Path, records: Sequence[Mapping[str, JsonValue]]) -> None:
+  with (directory / RECORDS_FILE).open('w', encoding='utf-8') as file:
+    for record in records:
+      file.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+
+def write_claims(directory: Path, claims: ClaimsByKey) -> None:
+  document = {
+    key: {prompt: [{'id': claim.id, 'text': claim.text} for claim in claims] for prompt, claims in by_prompt.items()}
+    for key, by_prompt in claims.items()
+  }
+  (directory / CLAIMS_FILE).write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def read_records(directory: Path) -> list[dict[str, JsonValue]]:
+  with (directory / RECORDS_FILE).open(encoding='utf-8') as file:
+    return [json.loads(line) for line in file if line.strip()]
 
 
 def read_benchmark(directory: Path) -> tuple[DatasetJsonPayload, ClaimsByKey]:

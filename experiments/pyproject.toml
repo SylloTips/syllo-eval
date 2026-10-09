@@ -8,8 +8,10 @@ readme = "README.md"
 # The modules live directly in this folder, which is the import root.
 packages = [
   {include = "ablation_metrics.py"},
+  {include = "agents"},
   {include = "benchmarks"},
   {include = "cli.py"},
+  {include = "collect.py"},
   {include = "config.py"},
   {include = "deepeval_baseline.py"},
   {include = "deepeval_env.py"},
@@ -17,10 +19,15 @@ packages = [
   {include = "search_tool"},
   {include = "judge.py"},
   {include = "manifest.py"},
+  {include = "run_outputs.py"},
   {include = "service.py"},
 ]
-# Read at run time from beside config.py, so they must ship in the wheel as well.
-include = [{path = "prompts/*.md", format = ["sdist", "wheel"]}]
+# Read or run at run time from beside config.py, so they must ship in the wheel as well. The tau2 runtime runs in its own
+# environment (scripts/setup-tau2.sh).
+include = [
+  {path = "prompts/*.md", format = ["sdist", "wheel"]},
+  {path = "tau2_runtime/*", format = ["sdist", "wheel"]},
+]
 
 [tool.poetry.scripts]
 syllo-exp = "cli:main"

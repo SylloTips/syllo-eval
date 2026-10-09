@@ -45,7 +45,7 @@ The paper uses three public benchmarks:
 |---|---|---|
 | EnterpriseRAG-Bench (ERB) | Hugging Face `onyx-dot-app/EnterpriseRAG-Bench` @ `69916e3` | 480 answerable questions over 511,962 company documents |
 | WixQA | Hugging Face `Wix/WixQA` @ `d662dc4` | 400 customer-support queries over 6,221 help-center articles |
-| τ²-bench retail | GitHub `sierra-research/tau2-bench` @ `fc0055d` (v1.0.1) | 114 customer-service tasks with reference tool calls |
+| τ²-bench retail | GitHub `sierra-research/tau2-bench` @ `fc0055d` (v1.0.1) | 114 customer-service tasks with reference tool calls, and the retail environment its agent runs in |
 
 [`configs/benchmarks.yaml`](configs/benchmarks.yaml) pins every file by full commit, size and SHA-256. Each step
 records its outcome in `outputs/manifest.jsonl` and is safe to run again.
@@ -56,7 +56,7 @@ records its outcome in `outputs/manifest.jsonl` and is safe to run again.
 poetry run syllo-exp benchmarks fetch
 ```
 
-- **What it does:** downloads seven files, about 1.5 GB, into `data/<benchmark>/raw/`. A file is kept only once its
+- **What it does:** downloads ten files, about 1.5 GB, into `data/<benchmark>/raw/`. A file is kept only once its
   size and SHA-256 match its pin.
 - **Interruptions:** an interrupted download resumes where it stopped when you run the command again.
 - **Files already present** are verified again rather than downloaded.
@@ -66,7 +66,7 @@ Expected output (paths shortened):
 ```
 erb: 2 files verified under .../experiments/data/erb/raw
 wixqa: 3 files verified under .../experiments/data/wixqa/raw
-tau2: 2 files verified under .../experiments/data/tau2/raw
+tau2: 5 files verified under .../experiments/data/tau2/raw
 ```
 
 To check the bytes independently of our code, hash the files and compare each hash with the `sha256` values in

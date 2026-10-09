@@ -220,3 +220,4 @@ __marimo__/
 # Paper experiments: downloads, indexes, raw exports and annotation packets stay local
 experiments/data/
 experiments/outputs/
+experiments/.venv-tau2/

@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, load_config
+from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, Tau2Config, load_config
 
 
 def _models() -> dict[str, Any]:
@@ -53,6 +53,27 @@ def _benchmarks() -> dict[str, Any]:
   return {'erb': _source(), 'wixqa': _source(dataset_name='kb-other'), 'tau2': _source(dataset_name='tasks-test')}
 
 
+def _tau2(**overrides: Any) -> dict[str, Any]:
+  fields: dict[str, Any] = {
+    'agent_llm_args': {'model-a': {'max_tokens': 100}},
+    'customer_llm_args': {'temperature': 0.0},
+    'max_steps': 200,
+    'max_errors': 10,
+    'base_seed': 300,
+    'cost_map_url': f'https://example.org/litellm/{"c" * 40}/model_prices.json',
+  }
+  return {**fields, **overrides}
+
+
+def _config(configurations: list[dict[str, Any]], **overrides: Any) -> dict[str, Any]:
+  return {
+    'models': _models(),
+    'configurations': configurations,
+    'benchmarks': _benchmarks(),
+    'tau2': _tau2(),
+  } | overrides
+
+
 class ConfigurationShapeTest(unittest.TestCase):
   def test_version_tag_combines_model_with_degradation_or_trial(self) -> None:
     plain = Configuration(id='kb/plain', benchmark='erb', agent='react', model='model-a')
@@ -98,16 +119,23 @@ class ExperimentConfigTest(unittest.TestCase):
     }
     for case, configurations in invalid.items():
       with self.subTest(case=case), self.assertRaises(ValidationError):
-        ExperimentConfig.model_validate(
-          {'models': _models(), 'configurations': configurations, 'benchmarks': _benchmarks()}
-        )
+        ExperimentConfig.model_validate(_config(configurations))
 
   def test_configurations_need_a_pinned_source_for_their_benchmark(self) -> None:
     configurations = [{'id': 'a', 'benchmark': 'erb', 'agent': 'react', 'model': 'model-a'}]
     with self.assertRaisesRegex(ValidationError, 'without a pinned source'):
-      ExperimentConfig.model_validate(
-        {'models': _models(), 'configurations': configurations, 'benchmarks': {'wixqa': _source()}}
-      )
+      ExperimentConfig.model_validate(_config(configurations, benchmarks={'wixqa': _source()}))
+
+  def test_tau2_models_need_llm_args(self) -> None:
+    configurations = [{'id': 't', 'benchmark': 'tau2', 'agent': 'tau2-llm-agent', 'model': 'model-a', 'trial': 1}]
+    ExperimentConfig.model_validate(_config(configurations))
+    with self.assertRaisesRegex(ValidationError, "without llm args in tau2.yaml: \\['model-a'\\]"):
+      ExperimentConfig.model_validate(_config(configurations, tau2=_tau2(agent_llm_args={})))
+
+  def test_trial_seeds_are_the_ones_tau2_draws_for_its_trials(self) -> None:
+    tau2 = Tau2Config.model_validate(_tau2())
+    # tau2's runner: random.seed(300), then one randint(0, 1_000_000) per trial.
+    self.assertEqual([tau2.trial_seed(trial) for trial in range(1, 5)], [626729, 373753, 361454, 1567])
 
   def test_sources_must_pin_a_full_commit_and_file_hashes(self) -> None:
     invalid: dict[str, dict[str, Any]] = {
@@ -144,9 +172,10 @@ class ExperimentConfigTest(unittest.TestCase):
       {
         'erb': {'questions', 'documents'},
         'wixqa': {'expertwritten', 'simulated', 'knowledge_base'},
-        'tau2': {'tasks', 'splits'},
+        'tau2': {'tasks', 'splits', 'database', 'policy', 'user_guidelines'},
       },
     )
+    self.assertEqual(set(config.tau2.agent_llm_args), {'sonnet', 'deepseek'})
     with self.assertRaises(KeyError):
       config.configuration('missing')
 

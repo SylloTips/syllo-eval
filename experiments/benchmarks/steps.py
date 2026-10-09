@@ -1,11 +1,12 @@
 """The steps every benchmark goes through: fetch its pinned files, convert them, then import the result.
 
 Files live under ``<data dir>/<benchmark>/``: the pinned downloads in ``raw/`` (at their repository paths), the
-converted dataset, side records, claims and check report next to it.
+converted dataset, side records, claims and check report next to it. A pilot dataset, a few samples of the conversion
+that a pilot runs on, goes to ``pilot/``.
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import httpx
@@ -13,15 +14,22 @@ import httpx
 from syllo_eval.infrastructure import DatabaseManager
 
 from benchmarks import erb, tau2, wixqa
+from syllo_eval.datasets.model import DatasetJsonPayload
+
 from benchmarks.common import (
+  DATASET_FILE,
   REPORT_FILE,
   CheckReport,
+  ClaimsByKey,
   ConvertedBenchmark,
   ImportOutcome,
   check_benchmark,
   import_benchmark,
   read_benchmark,
+  read_records,
   write_benchmark,
+  write_claims,
+  write_records,
 )
 from benchmarks.download import fetch_pinned_files, verify_pinned_files
 from config import BenchmarkSource
@@ -53,6 +61,46 @@ async def import_converted(
   name: str, source: BenchmarkSource, data_dir: Path, db_manager: DatabaseManager
 ) -> ImportOutcome:
   """Import a conversion only if it passed its checks and was made from ``source``'s current pins."""
+  payload, claims = _read_checked(name, source, data_dir)
+  return await import_benchmark(db_manager, name=source.dataset_name, payload=payload, claims=claims)
+
+
+def pilot_dataset_name(source: BenchmarkSource) -> str:
+  return f'{source.dataset_name}-pilot'
+
+
+async def import_pilot(
+  name: str, source: BenchmarkSource, data_dir: Path, db_manager: DatabaseManager, sample_keys: Sequence[str]
+) -> ImportOutcome:
+  """Import the samples of a checked conversion with the given ``sample_key``s as the benchmark's pilot dataset.
+
+  Once imported, the pilot dataset is also written to ``pilot/``, in the conversion's format, so the files always
+  match the stored dataset. Its samples and ground truths are the conversion's, so a pilot run scores them as the full
+  run will. A pilot dataset holds one selection: importing other samples under its name is refused, as for any dataset.
+  """
+  payload, claims = _read_checked(name, source, data_dir)
+  records = read_records(data_dir / name)
+  unknown = sorted(set(sample_keys) - {str(record['sample_key']) for record in records})
+  if unknown:
+    raise ValueError(f'{name} has no samples with keys {unknown}')
+  chosen = [index for index, record in enumerate(records) if str(record['sample_key']) in set(sample_keys)]
+  pilot = DatasetJsonPayload(samples=[payload.samples[index] for index in chosen])
+  prompts = {sample.input_prompt for sample in pilot.samples}
+  pilot_claims: ClaimsByKey = {
+    key: {prompt: claims for prompt, claims in by_prompt.items() if prompt in prompts}
+    for key, by_prompt in claims.items()
+  }
+  outcome = await import_benchmark(db_manager, name=pilot_dataset_name(source), payload=pilot, claims=pilot_claims)
+  directory = data_dir / name / 'pilot'
+  directory.mkdir(exist_ok=True)
+  (directory / DATASET_FILE).write_text(pilot.model_dump_json(indent=2), encoding='utf-8')
+  write_records(directory, [records[index] for index in chosen])
+  write_claims(directory, pilot_claims)
+  return outcome
+
+
+def _read_checked(name: str, source: BenchmarkSource, data_dir: Path) -> tuple[DatasetJsonPayload, ClaimsByKey]:
+  """A conversion that passed its checks and was made from ``source``'s current pins."""
   directory = data_dir / name
   if not (directory / REPORT_FILE).exists():
     raise FileNotFoundError(f'{name} has no completed conversion; run `syllo-exp benchmarks convert --only {name}`')
@@ -61,5 +109,4 @@ async def import_converted(
     raise ValueError(f'{name} failed its checks, so it cannot be imported: {report["errors"]}')
   if report.get('source') != source.model_dump(mode='json'):
     raise ValueError(f'{name} was converted from other pins; run `syllo-exp benchmarks convert --only {name}` again')
-  payload, claims = read_benchmark(directory)
-  return await import_benchmark(db_manager, name=source.dataset_name, payload=payload, claims=claims)
+  return read_benchmark(directory)
