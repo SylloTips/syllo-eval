@@ -1,14 +1,15 @@
-# How tau2-bench runs its agent: tau2's own LLM agent and customer simulator, with tau2's defaults for everything set neither here nor in models.yaml.
-# The assertion grader is the configuration's agent model with the agent's arguments, as tau2 grades with the agent model.
+# How tau2-bench runs its agent: tau2's own LLM agent and customer simulator, with tau2's defaults for everything set
+# neither here nor in models.yaml. The assertion grader is the configuration's agent model with the agent's arguments,
+# as tau2 grades with the agent model.
 
 # litellm arguments per agent model (keys of models.yaml), passed as tau2's llm_args.
 # Sonnet 5.5 accepts no sampling parameters; DeepSeek keeps tau2's default temperature.
 agent_llm_args:
   sonnet: { max_tokens: 16000 }
   deepseek: { temperature: 0.0 }
-# GPT models accept temperature 0 only with reasoning turned off.
-# litellm 1.82.6 (needed by tau2-bench) knows only GPT-5 models take a reasoning effort and drops it for GPT 6 Luna, which then rejects temperature 0,
-# This is fixed adding ´allowed_openai_params`, that makes litellm send it.
+# GPT models accept temperature 0 only with reasoning turned off. litellm 1.82.6 (needed by tau2-bench) knows only that
+# GPT-5 models take a reasoning effort, so it drops it for GPT 6 Luna, which then rejects temperature 0.
+# `allowed_openai_params` makes litellm send it.
 customer_llm_args:
   {
     temperature: 0.0,

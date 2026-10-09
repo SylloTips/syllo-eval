@@ -74,9 +74,9 @@ async def import_pilot(
 ) -> ImportOutcome:
   """Import the samples of a checked conversion with the given ``sample_key``s as the benchmark's pilot dataset.
 
-  The pilot dataset is also written to ``pilot/``, in the conversion's format. Its samples and ground truths are the
-  conversion's, so a pilot run scores them as the full run will. A pilot dataset holds one selection: importing other
-  samples under its name is refused, as for any dataset.
+  Once imported, the pilot dataset is also written to ``pilot/``, in the conversion's format, so the files always
+  match the stored dataset. Its samples and ground truths are the conversion's, so a pilot run scores them as the full
+  run will. A pilot dataset holds one selection: importing other samples under its name is refused, as for any dataset.
   """
   payload, claims = _read_checked(name, source, data_dir)
   records = read_records(data_dir / name)
@@ -90,12 +90,13 @@ async def import_pilot(
     key: {prompt: claims for prompt, claims in by_prompt.items() if prompt in prompts}
     for key, by_prompt in claims.items()
   }
+  outcome = await import_benchmark(db_manager, name=pilot_dataset_name(source), payload=pilot, claims=pilot_claims)
   directory = data_dir / name / 'pilot'
   directory.mkdir(exist_ok=True)
   (directory / DATASET_FILE).write_text(pilot.model_dump_json(indent=2), encoding='utf-8')
   write_records(directory, [records[index] for index in chosen])
   write_claims(directory, pilot_claims)
-  return await import_benchmark(db_manager, name=pilot_dataset_name(source), payload=pilot, claims=pilot_claims)
+  return outcome
 
 
 def _read_checked(name: str, source: BenchmarkSource, data_dir: Path) -> tuple[DatasetJsonPayload, ClaimsByKey]:

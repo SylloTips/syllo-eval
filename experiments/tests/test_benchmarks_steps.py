@@ -141,6 +141,16 @@ class PilotTest(unittest.IsolatedAsyncioTestCase):
       await self._pilot(['a'], _source(dataset_name='kb-renamed', expected_samples=3))
     self.import_benchmark.assert_not_awaited()
 
+  async def test_a_refused_import_leaves_the_files_of_the_stored_selection(self) -> None:
+    await self._pilot(['a'])
+    self.import_benchmark.side_effect = ValueError("Dataset 'kb-test-pilot' exists with different samples")
+
+    with self.assertRaisesRegex(ValueError, 'different samples'):
+      await self._pilot(['b', 'c'])
+
+    payload, _ = read_benchmark(self.data_dir / 'kb' / 'pilot')
+    self.assertEqual([sample.input_prompt for sample in payload.samples], ['Question a?'])
+
 
 if __name__ == '__main__':
   unittest.main()
