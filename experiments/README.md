@@ -418,6 +418,8 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   - Each step's instruction renders the call's arguments as the dataset renders the expected plan.
   - The customer's and the grader's LLM spans become `customer_llm` and `grader_llm`. They, and litellm's nested
     retries (`llm_internal`), carry no usage, so a run's report counts only the agent's own calls.
+  - Agent token usage and cost come from `PhoenixTraceAdapter`. A zero cost from litellm means the model could not
+    be priced, so the adapter leaves cost and currency unset while retaining token counts.
 - **Rewards:** the reward is the success label of RQ1. Each simulation adds one line to
   `outputs/tau2/<run id>/rewards.jsonl`, with the sample, request id, task, trial, seed, termination reason, reward
   and τ²-bench's reward details.

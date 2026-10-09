@@ -281,7 +281,7 @@ class Tau2TraceAdapter:
         )
         span = span.model_copy(update={'span_type': 'agent_root', 'semantics': semantics})
       elif span.span_type == 'llm':
-        span = _llm_span(span, records_by_id[span.external_id], spans, outside=_outside_agent(top(span), agent))
+        span = _llm_span(span, spans, outside=_outside_agent(top(span), agent))
       normalized.append(span)
     return TraceProcessingResult(trace=base.trace.model_copy(update={'adapter': 'tau2:1'}), spans=normalized)
 
@@ -293,16 +293,15 @@ def _outside_agent(top: Span, agent: Span) -> str | None:
   return {'user_turn': 'customer_llm', 'evaluate_simulation': 'grader_llm'}.get(top.name, 'external_llm')
 
 
-def _llm_span(span: Span, record: Mapping[str, Any], spans: Mapping[str, Span], *, outside: str | None) -> Span:
+def _llm_span(span: Span, spans: Mapping[str, Span], *, outside: str | None) -> Span:
   parent = spans.get(str(span.parent_span_id))
   span_type: str | None = 'llm_internal' if parent is not None and parent.span_type == 'llm' else outside
   if span_type is not None:
     return span.model_copy(update={'span_type': span_type, 'semantics': SpanSemantics()})
   usage = span.semantics.usage
-  # OpenInference reports cost as llm.cost.total, in US dollars; litellm reports 0 for a model it cannot price.
-  cost = record.get('attributes.llm.cost.total')
-  if usage is not None and isinstance(cost, (int, float)) and cost > 0:
-    semantics = span.semantics.model_copy(update={'usage': usage.model_copy(update={'cost': cost, 'currency': 'USD'})})
+  # litellm reports 0 for a model it cannot price.
+  if usage is not None and usage.cost == 0:
+    semantics = span.semantics.model_copy(update={'usage': usage.model_copy(update={'cost': None, 'currency': None})})
     span = span.model_copy(update={'semantics': semantics})
   return span
 

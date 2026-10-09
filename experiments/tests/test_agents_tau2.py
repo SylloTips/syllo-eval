@@ -192,7 +192,17 @@ class Tau2TraceAdapterTest(unittest.TestCase):
     usages = {span_id: span.semantics.usage for span_id, span in self.spans.items() if span.semantics.usage}
     self.assertEqual(set(usages), {'llm1', 'llm2'})
     self.assertEqual((usages['llm1'].input_tokens, usages['llm1'].cost, usages['llm1'].currency), (100, 0.0004, 'USD'))
-    self.assertEqual((usages['llm2'].input_tokens, usages['llm2'].cost), (200, None))
+    self.assertEqual((usages['llm2'].input_tokens, usages['llm2'].cost, usages['llm2'].currency), (200, None, None))
+
+  def test_an_agent_call_without_cost_keeps_its_token_usage(self) -> None:
+    records = _simulation()
+    for record in records:
+      if record['context.span_id'] == 'llm2':
+        del record['attributes.llm.cost.total']
+    result = Tau2TraceAdapter().normalize(TRACE_ID, records)
+    usage = next(span.semantics.usage for span in result.spans if span.external_id == 'llm2')
+    assert usage is not None
+    self.assertEqual((usage.input_tokens, usage.cost, usage.currency), (200, None, None))
 
   def test_imports_bind_the_trace_to_the_sample_of_its_task(self) -> None:
     trace = ImportedTrace.model_validate_json(ImportedTrace(trace_id=TRACE_ID, spans=_simulation()).model_dump_json())
