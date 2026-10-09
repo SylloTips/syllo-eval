@@ -40,26 +40,37 @@ Install from Plugins > Marketplace:
 | Plugin | Version | Provides |
 |---|---|---|
 | `langgenius/agent` | 0.0.50 | the ReAct strategy of the Agent node |
-| `langgenius/deepseek` | 0.0.24 | the model provider |
+| `langgenius/azure_ai_studio` | 0.0.20 | Azure AI Foundry models (listed as Azure AI Studio in Dify) |
 
 The export pins the agent plugin, but its `dependencies` list is empty, so the import does not offer to install either
 plugin.
 
 ## 3. Model provider
 
-Under Settings > Model Provider > DeepSeek, enter the API key and leave the base URL empty
-(`https://api.deepseek.com`).
+Under Integrations > Model Provider > Azure AI Studio, choose Add Model. This is Dify's
+[Azure AI Foundry provider](https://marketplace.dify.ai/plugin/langgenius/azure_ai_studio). Configure:
 
-The Agent node selects `deepseek-flash`, which plugin 0.0.24 labels DeepSeek V4.1 Flash and sends to DeepSeek under
-that name. DeepSeek can move this alias to a later Flash release, so check the label in the model picker before each
-campaign. The export sets no model parameters, so the plugin's defaults apply: thinking mode is on, which drops
-`temperature`.
+| Field | Value |
+|---|---|
+| Model Name | `DeepSeek-V4.1-Flash`, the deployment in `configs/models.yaml` |
+| Model Type | LLM |
+| Azure AI Studio Endpoint | `https://<resource>.services.ai.azure.com/models`: append `/models` to `AZURE_FOUNDRY_BASE_URL` |
+| API Key | the value of `AZURE_FOUNDRY_API_KEY` |
+| API Version | `2024-05-01-preview` |
+| Select completion mode | Chat |
+| Model context size | the context limit of the deployed model |
+| Vision support | No |
+| Function call support / Stream tool call support | No: this app uses the ReAct strategy |
 
-**Changing provider** (DeepSeek is to move to Azure): the provider and the model are the `model` block of the Agent
-node (`provider: langgenius/deepseek/deepseek`, `model: deepseek-flash`). Install the new provider's plugin, select the
-same model in the Agent node, check that the instruction, tool and iterations are unchanged, then export again and
-replace this file and the plugin table above. Update the agent's model in
-[`configs/models.yaml`](../configs/models.yaml) if its name changes.
+Save the model before importing the DSL. Dify stores these credentials in its workspace; it does not read the
+experiment's environment variables. The endpoint is the
+[Foundry model inference endpoint](https://learn.microsoft.com/en-us/azure/ai-foundry/model-inference/how-to/quickstart-ai-project),
+without `/chat/completions` or `/openai/v1`.
+
+The Agent node selects `langgenius/azure_ai_studio/azure_ai_studio` and `DeepSeek-V4.1-Flash`, matching the deployment
+the tau2 agent calls. The export sets no model parameters, so the provider's defaults apply; check them in the pilot.
+For an existing app, select this model in its Agent node and publish again. Switching the provider does not change
+the instruction, tool or iteration limit.
 
 ## 4. MCP server
 

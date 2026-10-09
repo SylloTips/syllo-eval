@@ -285,8 +285,9 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   ports to localhost and connects its api and worker to Phoenix.
 - **App:** [`dify/react-deepseek.yml`](dify/react-deepseek.yml) is the DSL export of the agent, a Chatflow whose
   Agent node uses the ReAct strategy: a classic Agent app switches to function calling for tool-capable models. The
-  export holds no credentials or workspace settings: [`dify/README.md`](dify/README.md) is the configuration guide for
-  the plugins, model provider, MCP server, tracing and API key that each Dify instance needs from the UI.
+  model is `DeepSeek-V4.1-Flash` on Azure AI Foundry, through Dify's Azure AI Studio provider. The export holds no
+  credentials or workspace settings: [`dify/README.md`](dify/README.md) is the configuration guide for the plugins,
+  model provider, MCP server, tracing and API key that each Dify instance needs from the UI.
 - **One app per configuration:** a configuration's model and benchmark are fixed by the Dify app it calls, not by
   `collect`. Each `react` configuration therefore runs on an app that uses its model and traces to its benchmark's
   Phoenix project (`erb-69916e3` or `wixqa-d662dc4`), with the search server on that benchmark's collection and the

@@ -104,9 +104,9 @@ workflow:
             value:
               completion_params: {}
               mode: chat
-              model: deepseek-flash
+              model: DeepSeek-V4.1-Flash
               model_type: llm
-              provider: langgenius/deepseek/deepseek
+              provider: langgenius/azure_ai_studio/azure_ai_studio
               type: model-selector
           query:
             type: constant
