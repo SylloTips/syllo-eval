@@ -18,7 +18,7 @@ change to tau2's run is how its assertion grader reads a reply that is not JSON 
 import json
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, Literal
 
 import litellm
 import tau2.evaluator.evaluator_nl_assertions as nl_assertions
@@ -284,7 +284,7 @@ def _message_payload(message: Message) -> Any:
   return payload
 
 
-def _mime_type(content: str | None) -> str:
+def _mime_type(content: str | None) -> Literal['application/json', 'text/plain']:
   try:
     json.loads(content or '')
   except ValueError:
