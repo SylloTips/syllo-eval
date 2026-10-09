@@ -57,7 +57,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.mypy]
 ignore_missing_imports = true
-exclude = ["\\.venv"]
+exclude = ["\\.venv", "^data/"]
 
 # DeepEval's pytest plugin would import DeepEval before deepeval_env sets its switches. The suite runs with unittest.
 [tool.pytest.ini_options]
