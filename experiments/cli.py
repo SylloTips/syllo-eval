@@ -456,7 +456,7 @@ async def _collect(args: argparse.Namespace) -> int:
   logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
   logging.getLogger('httpx').setLevel(logging.WARNING)
   settings = Settings()
-  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name)
+  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name, configuration.agent)
   outputs = RunOutputs(args.outputs_dir)
   step = f'collect:{configuration.id}' + (':pilot' if args.pilot else '')
   manifest = Manifest(args.manifest)

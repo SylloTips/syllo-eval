@@ -59,9 +59,10 @@ expected output of each step.
 | `tau2_runtime/` | τ²-bench's run of one task with traces, run in its own environment (see τ²-bench agent) |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
+| `dify/` | the Dify agent's DSL, configuration guide, and the Compose override that runs Dify beside Phoenix |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
-| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment |
+| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets |
@@ -266,6 +267,39 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
     researchers then answer without searching. Check before each run that `search_knowledge_base` is among its tools,
     and after each question that the trace holds its searches.
 
+## Agents
+
+### Dify
+
+The low-code agent is built in Dify's UI, as a low-code user would, and called through Dify's service API. Dify traces
+it to the campaign's Phoenix with its built-in Arize Phoenix integration; the agent is not instrumented.
+
+```bash
+docker compose up -d        # first: Dify's api and worker join this environment's network to reach Phoenix
+scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. scripts/dify.sh down
+```
+
+- **Stack:** the first run downloads Dify's `docker/` folder at the pinned release into `data/dify/`, checking its
+  SHA-256, and creates Dify's own settings, `data/dify/.env`, from its example. The UI is at `http://localhost`, on
+  the port `EXPOSE_NGINX_PORT` sets there. [`dify/compose.override.yaml`](dify/compose.override.yaml) binds Dify's
+  ports to localhost and connects its api and worker to Phoenix.
+- **App:** [`dify/react-deepseek.yml`](dify/react-deepseek.yml) is the DSL export of the agent, a Chatflow whose
+  Agent node uses the ReAct strategy: a classic Agent app switches to function calling for tool-capable models. The
+  model is `DeepSeek-V4.1-Flash` on Azure AI Foundry, through Dify's Azure AI Studio provider. The export holds no
+  credentials or workspace settings: [`dify/README.md`](dify/README.md) is the configuration guide for the plugins,
+  model provider, MCP server, tracing and API key that each Dify instance needs from the UI.
+- **One app per configuration:** a configuration's model and benchmark are fixed by the Dify app it calls, not by
+  `collect`. Each `react` configuration therefore runs on an app that uses its model and traces to its benchmark's
+  Phoenix project (`erb-69916e3` or `wixqa-d662dc4`), with the search server on that benchmark's collection and the
+  configuration's swap fraction. `DIFY_API_KEY` selects the app; set it to that app's key before each collection.
+- **Request ID:** the caller sends its own request ID as Dify's `trace_id`. Dify writes it as `dify_trace_id` on the
+  root of the workflow trace, which holds the agent and its searches; `collect` looks Dify's traces up by that
+  attribute. The message ID would find Dify's separate message trace, which holds only the question and the answer.
+- **Caller:** `agents/dify.py` streams the answer, because Dify's agent apps do not answer in blocking mode, through
+  Dify's nginx at `DIFY_BASE_URL` (`http://localhost/v1` by default).
+- **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces. Dify's searches are
+  not retrieval spans until Dify has its own trace adapter, so the search metrics skip its runs until then.
+
 ## Metrics
 
 The main pass runs the built-in metrics. `ablation_metrics.py` adds recall over the ERB gold claims and the two
@@ -334,12 +368,14 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
   τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
   later, on its stored traces.
-- **Agents:** only τ²-bench's agent has a caller so far. The command refuses the other stacks.
+- **Agents:** only τ²-bench's agent and the Dify agent have callers so far. The command refuses the other stacks.
 - **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
   `tau2-retail-v1.0.1`.
   - Every agent of a benchmark sends its spans to that project.
-  - A sample's trace is the one whose root span carries the call's `request_id` attribute. It is looked up among the
-    root spans of the last 24 hours, because one agent call can outlast the library's 10-minute default.
+  - A sample's trace is the one whose root span carries the call's request ID, in the attribute `request_id`, or
+    `dify_trace_id` for Dify. It is looked up among the root spans of the last 24 hours, because one agent call can
+    outlast the library's 10-minute default. The attribute is set per stack, so `PHOENIX_REQUEST_ID_ATTRIBUTE` does
+    not apply to collection.
 - **Raw traces:** every trace the run fetches is also written to `outputs/traces/<run id>/<trace id>.json`. The format
   is the one syllo-eval imports: the `trace_id`, and Phoenix's records as `spans`.
 - **Manifest:** the step is `collect:<configuration id>`, with the run id, the Phoenix project and the sample counts.

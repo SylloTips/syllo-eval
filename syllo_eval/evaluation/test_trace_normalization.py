@@ -150,8 +150,8 @@ class IngestionTest(unittest.IsolatedAsyncioTestCase):
       'data': {'projects': {'edges': [{'node': {'spans': {'edges': [{'node': {'context': {'traceId': 't'}}}]}}}]}}
     }
     for attribute, expected in [
-      ('request_id', "attributes['request_id'] == 'r1'"),
-      ('metadata.message_id', "attributes['metadata']['message_id'] == 'r1'"),
+      ('request_id', "attributes['request_id'] == 'r1' and parent_id is None"),
+      ('metadata.message_id', "attributes['metadata']['message_id'] == 'r1' and parent_id is None"),
     ]:
       with self.subTest(attribute=attribute):
         client = PhoenixClient(PhoenixSettings(project_id='p', request_id_attribute=attribute))
