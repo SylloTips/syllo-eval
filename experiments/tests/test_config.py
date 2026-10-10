@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, Tau2Config, load_config
+from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, OdrConfig, Tau2Config, load_config
 
 
 def _models() -> dict[str, Any]:
@@ -65,12 +65,29 @@ def _tau2(**overrides: Any) -> dict[str, Any]:
   return {**fields, **overrides}
 
 
+def _odr(**overrides: Any) -> dict[str, Any]:
+  fields: dict[str, Any] = {
+    'search_api': 'none',
+    'allow_clarification': False,
+    'max_concurrent_research_units': 5,
+    'max_researcher_iterations': 6,
+    'max_react_tool_calls': 10,
+    'max_structured_output_retries': 3,
+    'research_model_max_tokens': 10000,
+    'compression_model_max_tokens': 8192,
+    'final_report_model_max_tokens': 10000,
+    'mcp_prompt': 'Search with search_knowledge_base.',
+  }
+  return {**fields, **overrides}
+
+
 def _config(configurations: list[dict[str, Any]], **overrides: Any) -> dict[str, Any]:
   return {
     'models': _models(),
     'configurations': configurations,
     'benchmarks': _benchmarks(),
     'tau2': _tau2(),
+    'odr': _odr(),
   } | overrides
 
 
@@ -137,6 +154,12 @@ class ExperimentConfigTest(unittest.TestCase):
     # tau2's runner: random.seed(300), then one randint(0, 1_000_000) per trial.
     self.assertEqual([tau2.trial_seed(trial) for trial in range(1, 5)], [626729, 373753, 361454, 1567])
 
+  def test_odr_never_searches_the_web(self) -> None:
+    self.assertEqual(OdrConfig.model_validate(_odr()).search_api, 'none')
+    for search_api in ('tavily', 'anthropic', 'openai'):
+      with self.subTest(search_api=search_api), self.assertRaises(ValidationError):
+        OdrConfig.model_validate(_odr(search_api=search_api))
+
   def test_sources_must_pin_a_full_commit_and_file_hashes(self) -> None:
     invalid: dict[str, dict[str, Any]] = {
       'branch url': {'base_url': 'https://example.org/datasets/kb/resolve/main'},
@@ -176,6 +199,7 @@ class ExperimentConfigTest(unittest.TestCase):
       },
     )
     self.assertEqual(set(config.tau2.agent_llm_args), {'sonnet', 'deepseek'})
+    self.assertEqual((config.odr.search_api, config.odr.allow_clarification), ('none', False))
     with self.assertRaises(KeyError):
       config.configuration('missing')
 

@@ -42,6 +42,17 @@ pyyaml = "^6.0"
 deepeval = "4.2.6"
 qdrant-client = "^1.19.1"
 fastmcp = ">=2.12.5,<3"
+# Open Deep Research
+open-deep-research = {git = "https://github.com/langchain-ai/open_deep_research.git", rev = "1b7d2e80db9faa586165c60e09096dbbfd483a64"}
+# ODR's MCP client: 0.3.0 needs mcp>=1.24 but declares mcp>=1.9.2, while fastmcp 2.12.5 holds mcp below 1.17.
+langchain-mcp-adapters = "<0.3.0"
+openinference-instrumentation-langchain = "^0.1.78"
+# smolagents' CodeAgent
+smolagents = {extras = ["litellm", "mcp"], version = "^1.26.0"}
+openinference-instrumentation-smolagents = "^0.1.42"
+# Tracing of the agents that run in syllo-exp's process
+opentelemetry-sdk = "^1.45.1"
+opentelemetry-exporter-otlp-proto-http = "^1.45.1"
 
 [tool.poetry.group.migrations.dependencies]
 alembic = "^1.18.5"

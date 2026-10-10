@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from collections.abc import AsyncIterator
@@ -59,17 +60,77 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
     )
     self.assertEqual({metric.target_span_types for metric in search}, {('retrieval',)})
 
-  def test_stacks_without_a_caller_are_reported(self) -> None:
+  def test_each_stack_names_the_search_server_it_calls(self) -> None:
+    config = load_config()
+    environment = {
+      'DIFY_API_KEY': 'key',
+      'DIFY_SEARCH_URL': 'http://127.0.0.1:8102/mcp',
+      'SMOLAGENTS_SEARCH_URL': 'http://127.0.0.1:8103/mcp',
+      'ODR_SEARCH_URL': 'http://127.0.0.1:8104',
+    }
+    configurations = {
+      'react': 'erb/react/sonnet',
+      'smolagents': 'erb/smolagents/sonnet',
+      'odr': 'erb/odr/sonnet',
+      'tau2-llm-agent': 'tau2/llm-agent/sonnet/trial-1',
+    }
+    with (
+      patch.dict(os.environ, environment),
+      patch('collect.tau2.build_caller'),
+      patch('agents.code_agent.build_caller'),
+      patch('agents.odr.build_caller'),
+    ):
+      urls = {
+        agent: collect.build_integration(
+          config.configuration(configuration_id),
+          config,
+          data_dir=Path('data'),
+          phoenix=PhoenixSettings(project_id='p'),
+          outputs=RunOutputs(Path('outputs')),
+        ).search_url
+        for agent, configuration_id in configurations.items()
+      }
+
+    # ODR appends /mcp to its URL itself.
+    self.assertEqual(
+      urls,
+      {
+        'react': 'http://127.0.0.1:8102/mcp',
+        'smolagents': 'http://127.0.0.1:8103/mcp',
+        'odr': 'http://127.0.0.1:8104/mcp',
+        'tau2-llm-agent': None,
+      },
+    )
+
+  async def test_the_search_server_must_serve_the_configurations_collection_and_swap_fraction(self) -> None:
+    config = load_config()
+    url = 'http://127.0.0.1:8101/mcp'
+    served = {'collection': 'erb-69916e3', 'swap_fraction': 0.0, 'seed': 0, 'max_document_chars': None}
+
+    with patch('collect._search_server_settings', AsyncMock(return_value=served)):
+      await collect.check_search_server(config.configuration('erb/odr/sonnet'), config, url)
+      with self.assertRaisesRegex(
+        collect.SearchServerError,
+        'serves erb-69916e3 with swap fraction 0.0, but the configuration needs wixqa-d662dc4 with swap fraction 0.0; '
+        'relaunch it with `syllo-exp search-server --collection wixqa-d662dc4 --port 8101`',
+      ):
+        await collect.check_search_server(config.configuration('wixqa/odr/sonnet'), config, url)
+      with self.assertRaisesRegex(
+        collect.SearchServerError, 'with swap fraction 0.25; .* --port 8101 --swap-fraction 0.25`'
+      ):
+        await collect.check_search_server(config.configuration('erb/react/sonnet/f0.25'), config, url)
+
+  async def test_a_search_server_that_does_not_answer_stops_the_collection(self) -> None:
     config = load_config()
 
-    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the smolagents agent stack has no caller yet'):
-      collect.build_integration(
-        config.configuration('erb/smolagents/sonnet'),
-        config,
-        data_dir=Path('data'),
-        phoenix=PhoenixSettings(),
-        outputs=RunOutputs(Path('outputs')),
-      )
+    with (
+      patch('collect._search_server_settings', AsyncMock(side_effect=ConnectionError('refused'))),
+      self.assertRaisesRegex(
+        collect.SearchServerError,
+        'did not report its settings \\(refused\\); start it with `syllo-exp search-server --collection wixqa-d662dc4',
+      ),
+    ):
+      await collect.check_search_server(config.configuration('wixqa/odr/sonnet'), config, 'http://127.0.0.1:8101/mcp')
 
   async def test_the_archive_keeps_each_fetched_trace_in_the_import_format(self) -> None:
     record = {'context.span_id': 's1', 'name': 'root', 'start_time': datetime(2026, 10, 1, tzinfo=timezone.utc)}
@@ -105,7 +166,9 @@ class CollectCliTest(unittest.TestCase):
     self.db_manager = MagicMock()
     self.db_manager.health_check = AsyncMock(return_value=True)
     self.dataset: SimpleNamespace | None = SimpleNamespace(id=self.dataset_id)
-    self.integration = collect.AgentIntegration(caller=MagicMock(), adapter=MagicMock())
+    self.integration = collect.AgentIntegration(caller=MagicMock(), adapter=MagicMock(), search_url=None)
+    self.integration_error: Exception | None = None
+    self.search_settings = AsyncMock()
 
   def tearDown(self) -> None:
     self._directory.cleanup()
@@ -132,7 +195,10 @@ class CollectCliTest(unittest.TestCase):
       patch('cli.open_database', fake_database),
       patch('cli.build_service', self.build_service),
       patch('cli.UnitOfWork', return_value=uow),
-      patch('cli.collect.build_integration', return_value=self.integration) as build_integration,
+      patch(
+        'cli.collect.build_integration', return_value=self.integration, side_effect=self.integration_error
+      ) as build_integration,
+      patch('cli.collect._search_server_settings', self.search_settings),
       redirect_stdout(output),
       redirect_stderr(errors),
     ):
@@ -210,14 +276,32 @@ class CollectCliTest(unittest.TestCase):
     self.assertEqual(status, 2)
     self.assertIn("Unknown configuration 'tau2/missing'", errors)
 
-  def test_a_stack_without_a_caller_is_a_usage_error(self) -> None:
-    errors = io.StringIO()
-    with patch('cli.load_environment'), patch('cli.logging.basicConfig'), redirect_stderr(errors):
-      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/smolagents/sonnet'])
+  def test_an_agent_that_cannot_be_set_up_fails_the_step_before_any_run(self) -> None:
+    self.integration_error = ValueError('DIFY_API_KEY must be set to the API key of the app under test')
 
-    self.assertEqual(status, 2)
-    self.assertIn('collect: erb/smolagents/sonnet: the smolagents agent stack has no caller yet', errors.getvalue())
-    self.assertFalse(self.manifest.exists())
+    status, output, _ = self._collect('--configuration', 'erb/react/sonnet')
+
+    self.assertEqual(status, 1)
+    self.service.create_evaluation.assert_not_awaited()
+    self.assertEqual(Manifest(self.manifest).records()[-1].status, StepStatus.FAILED)
+    self.assertIn('collect: failed: ValueError: DIFY_API_KEY must be set', output)
+
+  def test_a_search_server_set_up_for_another_configuration_stops_the_step_before_any_run(self) -> None:
+    self.integration = collect.AgentIntegration(
+      caller=MagicMock(), adapter=MagicMock(), search_url='http://127.0.0.1:8101/mcp'
+    )
+    self.search_settings.return_value = {'collection': 'erb-69916e3', 'swap_fraction': 0.0}
+
+    status, output, _ = self._collect('--configuration', 'wixqa/odr/sonnet')
+
+    self.assertEqual(status, 1)
+    self.search_settings.assert_awaited_once_with('http://127.0.0.1:8101/mcp')
+    self.service.create_evaluation.assert_not_awaited()
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual(record.status, StepStatus.FAILED)
+    command = '`syllo-exp search-server --collection wixqa-d662dc4 --port 8101`'
+    self.assertIn(f'relaunch it with {command}', str(record.details['error']))
+    self.assertIn('collect: failed: SearchServerError: wixqa/odr/sonnet: the search server', output)
 
 
 if __name__ == '__main__':

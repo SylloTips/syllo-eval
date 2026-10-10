@@ -85,6 +85,22 @@ class Tau2Config(_ConfigModel):
     return [draws.randint(0, 1_000_000) for _ in range(trial)][-1]
 
 
+class OdrConfig(_ConfigModel):
+  """How Open Deep Research runs; see ``configs/odr.yaml``. The names are ODR's own settings."""
+
+  # Web search stays off: the search tool is the only source.
+  search_api: Literal['none']
+  allow_clarification: bool
+  max_concurrent_research_units: int = Field(gt=0)
+  max_researcher_iterations: int = Field(gt=0)
+  max_react_tool_calls: int = Field(gt=0)
+  max_structured_output_retries: int = Field(gt=0)
+  research_model_max_tokens: int = Field(gt=0)
+  compression_model_max_tokens: int = Field(gt=0)
+  final_report_model_max_tokens: int = Field(gt=0)
+  mcp_prompt: str = Field(min_length=1)
+
+
 class Configuration(_ConfigModel):
   id: str = Field(min_length=1)
   benchmark: Benchmark
@@ -134,6 +150,7 @@ class ExperimentConfig(_ConfigModel):
   configurations: tuple[Configuration, ...] = Field(min_length=1)
   benchmarks: dict[Benchmark, BenchmarkSource]
   tau2: Tau2Config
+  odr: OdrConfig
 
   @model_validator(mode='after')
   def _check_references(self) -> 'ExperimentConfig':
@@ -170,6 +187,7 @@ def load_config(config_dir: Path = CONFIG_DIR) -> ExperimentConfig:
     configurations=_read_yaml(config_dir / 'configurations.yaml')['configurations'],
     benchmarks=_read_yaml(config_dir / 'benchmarks.yaml'),
     tau2=_read_yaml(config_dir / 'tau2.yaml'),
+    odr=_read_yaml(config_dir / 'odr.yaml'),
   )
 
 

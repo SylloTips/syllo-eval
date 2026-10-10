@@ -6,11 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from fastmcp import Client
+from pydantic import JsonValue
 
 from indexing.embedding import EmbeddingError, Embeddings, InputType
 from indexing.vector_store import StoredPoint
 from search_tool.search import RESULTS, TRUNCATION_MARK, CallLog, KnowledgeBaseSearch, RandomSwap, SearchError
-from search_tool.server import TOOL_NAME, build_server
+from search_tool.server import SETTINGS_URI, TOOL_NAME, build_server
 
 POINTS = [
   StoredPoint(
@@ -171,9 +172,20 @@ class KnowledgeBaseSearchTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(found.results[0].text, 'Text of' + TRUNCATION_MARK)
 
 
+SETTINGS: dict[str, JsonValue] = {'collection': 'kb-test', 'swap_fraction': 0.25, 'seed': 7, 'max_document_chars': None}
+
+
 class ServerTest(unittest.IsolatedAsyncioTestCase):
   def _client(self, embedder: FakeEmbedder | None = None) -> Client:
-    return Client(build_server(KnowledgeBaseSearch(FakeIndex(), embedder or FakeEmbedder())))
+    return Client(build_server(KnowledgeBaseSearch(FakeIndex(), embedder or FakeEmbedder()), SETTINGS))
+
+  async def test_publishes_its_settings_as_a_resource_beside_the_one_tool(self) -> None:
+    async with self._client() as client:
+      [content] = await client.read_resource(SETTINGS_URI)
+      tools = await client.list_tools()
+
+    self.assertEqual(json.loads(getattr(content, 'text')), SETTINGS)
+    self.assertEqual([tool.name for tool in tools], [TOOL_NAME])
 
   async def test_offers_one_read_only_tool_that_takes_a_query(self) -> None:
     async with self._client() as client:
