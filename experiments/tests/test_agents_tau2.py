@@ -417,6 +417,18 @@ class BuildCallerTest(unittest.TestCase):
           'base_seed': 300,
           'cost_map_url': f'https://example.org/litellm/{"c" * 40}/model_prices.json',
         },
+        'odr': {
+          'search_api': 'none',
+          'allow_clarification': False,
+          'max_concurrent_research_units': 5,
+          'max_researcher_iterations': 6,
+          'max_react_tool_calls': 10,
+          'max_structured_output_retries': 3,
+          'research_model_max_tokens': 10000,
+          'compression_model_max_tokens': 8192,
+          'final_report_model_max_tokens': 10000,
+          'mcp_prompt': 'Search with search_knowledge_base.',
+        },
       }
     )
     self.configuration = self.config.configurations[0]
