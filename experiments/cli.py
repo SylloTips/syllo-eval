@@ -470,9 +470,8 @@ async def _collect(args: argparse.Namespace) -> int:
     integration = collect.build_integration(
       configuration, config, data_dir=args.data_dir, phoenix=phoenix, outputs=outputs
     )
-  except collect.UnsupportedAgentError as error:
-    print(f'collect: {error}', file=sys.stderr)
-    return 2
+    if integration.search_url is not None:
+      await collect.check_search_server(configuration, config, integration.search_url)
   except (FileNotFoundError, PinnedFileMismatchError, ValueError) as error:
     _record_failure(manifest, step, 'collect', error, details=details)
     return 1

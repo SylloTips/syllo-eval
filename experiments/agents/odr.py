@@ -50,7 +50,7 @@ from ablation_metrics import SEARCH_SPAN_TYPE
 from config import Configuration, ExperimentConfig, ModelRef
 from indexing.embedding import AzureFoundrySettings
 from search_tool.search import SearchResults
-from search_tool.server import TOOL_NAME
+from search_tool.server import PATH, TOOL_NAME
 
 ROOT_SPAN_NAME = 'odr.request'
 # What ODR writes in place of its report, and in place of a researcher's findings, when it could not produce them.
@@ -88,6 +88,11 @@ class OdrSettings(EnvSettings):
     if url.rstrip('/').endswith('/mcp'):
       raise ValueError('give the search server without /mcp, which ODR appends')
     return url
+
+  @property
+  def mcp_url(self) -> str:
+    """The search server's MCP endpoint, as ODR builds it."""
+    return self.search_url.rstrip('/') + PATH
 
 
 class OdrRunError(RuntimeError):

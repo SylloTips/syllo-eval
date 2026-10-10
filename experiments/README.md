@@ -19,9 +19,9 @@ The ablations and the DeepEval baseline also rely on a few library internals:
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
   usage and retries rate limits as the library's judge client does.
 
-Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench and Open
-Deep Research adapters read the flattened records that client returns, `attributes.*` keys included, after
-`PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/odr.py`).
+Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench,
+smolagents and Open Deep Research adapters read the flattened records that client returns, `attributes.*` keys
+included, after `PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/code_agent.py`, `agents/odr.py`).
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
@@ -218,6 +218,9 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
 - **Switching configurations:** the agents keep one URL. To switch them to another configuration, stop the server and
   relaunch it on the same port with that configuration's collection and swap fraction, as above. Every call-log record
   carries the server's settings and its time, so a search can be traced to the configuration that ran then.
+- **Settings:** the server also publishes its settings (collection, swap fraction, seed and document cap) as the MCP
+  resource `search://settings`. The agents list only tools, so they never see it; `collect` reads it to refuse a
+  server left on another configuration (see Collection).
 - **Endpoint:** streamable HTTP at `http://<host>:<port>/mcp`, stateless, so concurrent agents share one server. It
   listens on 127.0.0.1 unless `--host` says otherwise. The tool's name, description and schema are the same on every
   server.
@@ -257,9 +260,7 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
     Linux, also give `ssrf_proxy` `extra_hosts: ['host.docker.internal:host-gateway']`, and serve on `--host 0.0.0.0`.
   - Dify's classic Agent app switches to function calling whenever the model supports it. A ReAct agent needs a
     Chatflow or Workflow Agent node with the ReAct strategy.
-- **smolagents:** `MCPClient({'url': 'http://127.0.0.1:<port>/mcp', 'transport': 'streamable-http'},
-  structured_output=False)`, so that the CodeAgent reads the same JSON text as the other agents. Its environment needs
-  `mcp<2`, and the CodeAgent needs `json` among its authorized imports to parse the results.
+- **smolagents:** the caller connects at `SMOLAGENTS_SEARCH_URL` (see smolagents CodeAgent).
 - **Open Deep Research:** the caller connects at `ODR_SEARCH_URL` (see Open Deep Research).
 
 ## Agents
@@ -287,6 +288,8 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   `collect`. Each `react` configuration therefore runs on an app that uses its model and traces to its benchmark's
   Phoenix project (`erb-69916e3` or `wixqa-d662dc4`), with the search server on that benchmark's collection and the
   configuration's swap fraction. `DIFY_API_KEY` selects the app; set it to that app's key before each collection.
+  `DIFY_SEARCH_URL` is the search server that the app calls, as this host reaches it (`http://127.0.0.1:8101/mcp` by
+  default), which `collect` checks.
 - **Request ID:** the caller sends its own request ID as Dify's `trace_id`. Dify writes it as `dify_trace_id` on the
   root of the workflow trace, which holds the agent and its searches; `collect` looks Dify's traces up by that
   attribute. The message ID would find Dify's separate message trace, which holds only the question and the answer.
@@ -294,6 +297,24 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   Dify's nginx at `DIFY_BASE_URL` (`http://localhost/v1` by default).
 - **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces. Dify's searches are
   not retrieval spans until Dify has its own trace adapter, so the search metrics skip its runs until then.
+
+### smolagents CodeAgent
+
+The pro-code agent is smolagents' `CodeAgent` (`agents/code_agent.py`), which writes Python that calls the search tool
+and revises its plan every 3 steps. It runs in `syllo-exp`'s own process, one new agent per sample, and is traced to
+Phoenix with OpenInference's smolagents instrumentation.
+
+- **Model:** the configuration's model through litellm, with the provider's defaults, as in the Dify agent.
+  `ANTHROPIC_API_KEY` for Sonnet; DeepSeek on the Foundry resource of `AZURE_FOUNDRY_BASE_URL` and
+  `AZURE_FOUNDRY_API_KEY`.
+- **Search:** `SMOLAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
+  collection. MCP results come as text, so the agent reads the same JSON as the other agents, and `json` is among its
+  authorized imports to parse them.
+- **Trace:** the caller's root span `smolagents.request` holds the `request_id`, the question and the answer. Every
+  search whose output is the search tool's JSON is a retrieval span; a failed search stays a tool span. Planning calls
+  are LLM spans directly under `CodeAgent.run`.
+- **What the agent reads:** the retrieval spans hold all ten documents, but the agent reads only what its code prints
+  (cut by smolagents at 50,000 characters per step) and the value of its last line (at 20,000).
 
 ### Open Deep Research
 
@@ -410,8 +431,11 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
   τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
   later, on its stored traces.
-- **Agents:** τ²-bench's agent, the Dify agent and Open Deep Research have callers so far. The command refuses the other
-  stacks.
+- **Agents:** every stack has a caller: τ²-bench's agent, the Dify agent, the smolagents CodeAgent and Open Deep
+  Research. A stack without one fails type checking in `collect.build_integration`.
+- **Search server:** before any sample, the collection of an agent that searches reads the settings of the server that
+  the agent calls, at `DIFY_SEARCH_URL`, `SMOLAGENTS_SEARCH_URL` or `ODR_SEARCH_URL`. Unless the server serves the
+  configuration's collection and swap fraction, the step fails with the `search-server` command that (re)starts it.
 - **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
   `tau2-retail-v1.0.1`.
   - Every agent of a benchmark sends its spans to that project.

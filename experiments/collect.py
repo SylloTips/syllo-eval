@@ -5,12 +5,16 @@ It stores each sample's trace, keeps a raw copy of it in ``<outputs>/traces/<run
 of the run on its stored traces.
 
 Each benchmark has one Phoenix project, named after its dataset, to which every agent of the benchmark sends its spans.
+The collection of an agent that searches starts only once the search server that the agent calls serves the
+configuration's collection and swap fraction.
 """
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
+from urllib.parse import urlsplit
 
 from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.evaluation.metrics.implementations.plan.efficiency import PlanEfficiencyMetric
@@ -35,8 +39,8 @@ REQUEST_ID_LOOKUP_WINDOW_SECONDS = 24 * 3600.0
 _REQUEST_ID_ATTRIBUTES = {'react': dify.REQUEST_ID_ATTRIBUTE}
 
 
-class UnsupportedAgentError(ValueError):
-  """An agent stack without a caller yet."""
+class SearchServerError(ValueError):
+  """A search server that did not report its settings, or that serves another collection or swap fraction."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +48,8 @@ class AgentIntegration:
   caller: AgentCaller
   # None for the library's Phoenix adapter.
   adapter: TraceAdapter | None
+  # The MCP endpoint of the search server that the agent calls; None for an agent that does not search.
+  search_url: str | None
 
 
 def phoenix_settings(base: PhoenixSettings, project: str, agent: str) -> PhoenixSettings:
@@ -66,21 +72,71 @@ def build_integration(
   phoenix: PhoenixSettings,
   outputs: RunOutputs,
 ) -> AgentIntegration:
-  if configuration.agent == 'tau2-llm-agent':
+  agent = configuration.agent
+  if agent == 'tau2-llm-agent':
     caller = tau2.build_caller(configuration, config, data_dir=data_dir, phoenix=phoenix, outputs=outputs)
-    return AgentIntegration(caller=caller, adapter=tau2.Tau2TraceAdapter())
-  if configuration.agent == 'odr':
+    return AgentIntegration(caller=caller, adapter=tau2.Tau2TraceAdapter(), search_url=None)
+  if agent == 'odr':
     # ODR's graph and MCP client are slow to import, and only its collections need them.
     from agents import odr
 
+    odr_settings = odr.OdrSettings()
     return AgentIntegration(
-      caller=odr.build_caller(configuration, config, phoenix=phoenix),
+      caller=odr.build_caller(configuration, config, phoenix=phoenix, settings=odr_settings),
       adapter=odr.OdrTraceAdapter(config.models.agents[configuration.model].model),
+      search_url=odr_settings.mcp_url,
     )
-  if configuration.agent == 'react':
+  if agent == 'react':
+    dify_settings = dify.DifySettings()
     # No Dify adapter yet: its searches are not retrieval spans.
-    return AgentIntegration(caller=dify.DifyCaller(dify.DifySettings()), adapter=None)
-  raise UnsupportedAgentError(f'{configuration.id}: the {configuration.agent} agent stack has no caller yet')
+    return AgentIntegration(caller=dify.DifyCaller(dify_settings), adapter=None, search_url=dify_settings.search_url)
+  if agent == 'smolagents':
+    # smolagents and the MCP framework are slow to import, and only the CodeAgent's collections need them.
+    from agents import code_agent
+
+    return AgentIntegration(
+      caller=code_agent.build_caller(configuration, config, phoenix=phoenix),
+      adapter=code_agent.CodeAgentTraceAdapter(),
+      search_url=code_agent.CodeAgentSettings().search_url,
+    )
+  # Type checking fails here for a stack without a caller.
+  assert_never(agent)
+
+
+async def check_search_server(configuration: Configuration, config: ExperimentConfig, url: str) -> None:
+  """Refuse to collect unless the search server at ``url`` serves the configuration's collection and swap fraction.
+
+  The agents keep one URL, and the server is relaunched for each configuration: a server left on another one would
+  answer every search from the wrong knowledge base, or with the wrong share of random documents.
+  """
+  collection = config.benchmarks[configuration.benchmark].dataset_name
+  port = urlsplit(url).port
+  command = f'syllo-exp search-server --collection {collection}' + (f' --port {port}' if port else '')
+  if configuration.degradation:
+    command += f' --swap-fraction {configuration.degradation:g}'
+  try:
+    served = await _search_server_settings(url)
+  except Exception as error:
+    raise SearchServerError(
+      f'{configuration.id}: the search server at {url} did not report its settings ({error}); start it with `{command}`'
+    ) from error
+  if (served.get('collection'), served.get('swap_fraction')) != (collection, configuration.degradation):
+    raise SearchServerError(
+      f'{configuration.id}: the search server at {url} serves {served.get("collection")} with swap fraction '
+      f'{served.get("swap_fraction")}, but the configuration needs {collection} with swap fraction '
+      f'{configuration.degradation}; relaunch it with `{command}`'
+    )
+
+
+async def _search_server_settings(url: str) -> dict[str, Any]:
+  # Imported here: the MCP framework is slow to import, and only the collections of agents that search need it.
+  from fastmcp import Client
+
+  from search_tool.server import SETTINGS_URI
+
+  async with Client(url, timeout=30) as client:
+    [content] = await client.read_resource(SETTINGS_URI)
+  return json.loads(getattr(content, 'text'))
 
 
 def deterministic_metrics(benchmark: Benchmark) -> Sequence[EvaluationMetric]:

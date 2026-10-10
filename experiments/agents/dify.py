@@ -28,6 +28,8 @@ class DifySettings(EnvSettings):
   # The end-user identifier Dify records for every message.
   user: str = Field(default='syllo-eval', min_length=1)
   timeout_seconds: float = Field(default=600.0, gt=0)
+  # The search server that the app calls, as this host reaches it: collect checks what it serves.
+  search_url: str = Field(default='http://127.0.0.1:8101/mcp', min_length=1)
 
 
 class DifyError(RuntimeError):

@@ -590,7 +590,8 @@ class OdrGraphTest(unittest.IsolatedAsyncioTestCase):
       probe.bind(('127.0.0.1', 0))
       port = probe.getsockname()[1]
     release = asyncio.Event()
-    app = build_server(KnowledgeBaseSearch(LongIndex(release), FakeEmbedder())).http_app(path=PATH, stateless_http=True)
+    search = KnowledgeBaseSearch(LongIndex(release), FakeEmbedder())
+    app = build_server(search, {'collection': 'kb-test'}).http_app(path=PATH, stateless_http=True)
     config = uvicorn.Config(app, host='127.0.0.1', port=port, ws='none', log_level='warning', access_log=False)
     server = uvicorn.Server(config)
     serving = asyncio.create_task(server.serve())

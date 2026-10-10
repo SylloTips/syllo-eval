@@ -87,7 +87,8 @@ Leave authentication and headers empty. Once saved, the server lists `search_kno
 
 The Agent node refers to the tool by the server identifier (`provider_name: knowledge-base`). With any other
 identifier, the import leaves the node without its tool. The URL stays the same for every configuration: switch
-configurations by relaunching the server on the same port.
+configurations by relaunching the server on the same port. `collect` checks that server from the host, at
+`DIFY_SEARCH_URL` (`http://127.0.0.1:8101/mcp` by default): set it too if you serve on another port.
 
 ## 5. Import and publish
 

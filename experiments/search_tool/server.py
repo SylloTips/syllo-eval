@@ -1,10 +1,12 @@
 """The search tool as an MCP server: one tool, served over streamable HTTP at ``/mcp``.
 
 One server searches one collection. Its clients and the random swaps are set up before it starts serving, in the event
-loop that serves, and closed when it stops; the HTTP transport is stateless, so concurrent agents share them.
+loop that serves, and closed when it stops; the HTTP transport is stateless, so concurrent agents share them. The
+server also publishes its settings as a resource, which the agents never list, so that a collection can check them.
 """
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 
@@ -20,12 +22,19 @@ from search_tool.search import RESULTS, CallLog, KnowledgeBaseSearch, RandomSwap
 
 TOOL_NAME = 'search_knowledge_base'
 PATH = '/mcp'
+# The server's settings: collection, swap fraction, seed and document cap.
+SETTINGS_URI = 'search://settings'
 
 logger = logging.getLogger(__name__)
 
 
-def build_server(search: KnowledgeBaseSearch) -> FastMCP:
+def build_server(search: KnowledgeBaseSearch, settings: Mapping[str, JsonValue]) -> FastMCP:
   server = FastMCP('Knowledge base search')
+
+  @server.resource(SETTINGS_URI, name='settings', mime_type='application/json')
+  def search_settings() -> dict[str, JsonValue]:
+    """What this server searches: its collection, the share of random results, their seed and the document cap."""
+    return dict(settings)
 
   @server.tool(
     name=TOOL_NAME,
@@ -97,6 +106,6 @@ async def serve(
       swap_fraction,
       f'; documents are cut at {max_document_chars} characters' if max_document_chars else '',
     )
-    await build_server(search).run_http_async(
+    await build_server(search, settings).run_http_async(
       host=host, port=port, path=PATH, stateless_http=True, uvicorn_config={'access_log': False}
     )
