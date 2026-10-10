@@ -86,6 +86,42 @@ per call.
 - **Unreachable tool:** a question whose agent could not reach the search tool, as when Open Deep Research drops a
   server it cannot connect to, is an infrastructure failure and runs again. It is not a question with no search.
 
+## Open Deep Research runs
+
+Open Deep Research runs unmodified, at commit `1b7d2e8` of `langchain-ai/open_deep_research`, with the settings of
+`configs/odr.yaml` (`agents/odr.py`).
+
+- **Search:** web search is off, so `search_knowledge_base` is its only source. The researchers' system prompt adds
+  the `mcp_prompt` of `configs/odr.yaml`, which says that there is no web search, describes the tool, and asks to cite
+  documents by title and id, since they have no URLs.
+- **Models:** the configuration's model in every phase: the research brief, the supervisor, the researchers, the
+  compression of their findings and the report.
+  - ODR sets each phase's output limit: 10,000 tokens for the brief, the supervisor and the researchers, 8,192 for
+    the compression, 10,000 for the report. Every other parameter is the provider's default.
+  - Sonnet thus runs with adaptive thinking, which counts toward the limit, and DeepSeek-V4.1-Flash, from an Azure AI
+    Foundry deployment, at its default temperature.
+- **Limits:** ODR's defaults: at most 5 researchers at once, 6 supervisor rounds, and 10 model calls per researcher,
+  each of which can call several tools at once. Each model call of the brief, the supervisor and the researchers gets 3
+  attempts.
+- **No clarification:** the question is researched as asked, as in ODR's own evaluations.
+- **Answer:** the report, without the model's thinking.
+- **Failures:** a run that fails for a transient cause runs again from the start, with a new request id, for at most
+  three runs of the question in all. Its partial trace is never scored. The transient causes:
+  - the search tool unreachable before the run, for a researcher's model call or tool step, or for a search that got
+    no answer from the server;
+  - a provider's rate limit, outage or connection error, a researcher's included, after which ODR would end its
+    research;
+  - an error that ODR wrote in place of its report;
+  - spans that did not reach Phoenix;
+  - a run longer than an hour.
+
+  The agent's own failures count as they happen. A search that the server rejected, such as one with an empty query,
+  is a failed call. A researcher's other failures, such as a tool the model made up, end ODR's research as they would
+  anyway, and the run is scored. A researcher whose findings ODR could not compress is not a failure either: ODR
+  reports what the others found. Any other failure leaves the sample without a trace.
+- **Leftover researchers:** when a researcher fails, ODR leaves the others running; they are stopped when the call
+  returns, so the trace holds only what the run used.
+
 ## τ²-bench runs
 
 Each τ²-bench configuration runs τ²-bench's own agent on all 114 retail tasks once per trial (`agents/tau2.py`,

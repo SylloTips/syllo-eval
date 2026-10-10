@@ -61,10 +61,11 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
 
   def test_stacks_without_a_caller_are_reported(self) -> None:
     config = load_config()
+    unwired = config.configuration('erb/react/sonnet').model_copy(update={'agent': 'unwired'})
 
-    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the smolagents agent stack has no caller yet'):
+    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the unwired agent stack has no caller yet'):
       collect.build_integration(
-        config.configuration('erb/smolagents/sonnet'),
+        unwired,
         config,
         data_dir=Path('data'),
         phoenix=PhoenixSettings(),
@@ -106,6 +107,7 @@ class CollectCliTest(unittest.TestCase):
     self.db_manager.health_check = AsyncMock(return_value=True)
     self.dataset: SimpleNamespace | None = SimpleNamespace(id=self.dataset_id)
     self.integration = collect.AgentIntegration(caller=MagicMock(), adapter=MagicMock())
+    self.integration_error: Exception | None = None
 
   def tearDown(self) -> None:
     self._directory.cleanup()
@@ -132,7 +134,9 @@ class CollectCliTest(unittest.TestCase):
       patch('cli.open_database', fake_database),
       patch('cli.build_service', self.build_service),
       patch('cli.UnitOfWork', return_value=uow),
-      patch('cli.collect.build_integration', return_value=self.integration) as build_integration,
+      patch(
+        'cli.collect.build_integration', return_value=self.integration, side_effect=self.integration_error
+      ) as build_integration,
       redirect_stdout(output),
       redirect_stderr(errors),
     ):
@@ -211,12 +215,12 @@ class CollectCliTest(unittest.TestCase):
     self.assertIn("Unknown configuration 'tau2/missing'", errors)
 
   def test_a_stack_without_a_caller_is_a_usage_error(self) -> None:
-    errors = io.StringIO()
-    with patch('cli.load_environment'), patch('cli.logging.basicConfig'), redirect_stderr(errors):
-      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/smolagents/sonnet'])
+    self.integration_error = collect.UnsupportedAgentError('erb/react/sonnet: the react agent stack has no caller yet')
+
+    status, _, errors = self._collect('--configuration', 'erb/react/sonnet')
 
     self.assertEqual(status, 2)
-    self.assertIn('collect: erb/smolagents/sonnet: the smolagents agent stack has no caller yet', errors.getvalue())
+    self.assertIn('collect: erb/react/sonnet: the react agent stack has no caller yet', errors)
     self.assertFalse(self.manifest.exists())
 
 

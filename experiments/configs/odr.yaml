@@ -1,0 +1,26 @@
+# How Open Deep Research runs (agents/odr.py): its graph at the commit pyproject.toml pins, with ODR's own setting names
+# and defaults, except where the benchmarks need otherwise. Every phase uses the configuration's model.
+
+# No web search: the knowledge-base search tool is the only source.
+search_api: none
+# A benchmark question is researched as asked, not answered with a question, as in ODR's own evaluations.
+allow_clarification: false
+
+# ODR's defaults: researchers run at once, supervisor rounds, model calls per researcher (each may call several tools
+# at once), and attempts at each model call of the brief, the supervisor and the researchers.
+max_concurrent_research_units: 5
+max_researcher_iterations: 6
+max_react_tool_calls: 10
+max_structured_output_retries: 3
+# ODR's defaults: output tokens of the research phases (brief, supervisor, researchers), compression and report.
+research_model_max_tokens: 10000
+compression_model_max_tokens: 8192
+final_report_model_max_tokens: 10000
+
+# Added to the researchers' system prompt, the only one that tells them about the search tool. ODR's prompts name its
+# web search tool and ask for URLs, which the knowledge base's documents do not have.
+mcp_prompt: >-
+  There is no web search and no tavily_search tool here. To search, call search_knowledge_base: it searches the
+  knowledge base and returns the 10 most relevant documents, best first, each with its id, title and text. Use it
+  wherever these instructions mention web search or tavily_search. The documents have no URLs: cite each one by its
+  title and id.

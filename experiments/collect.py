@@ -69,6 +69,14 @@ def build_integration(
   if configuration.agent == 'tau2-llm-agent':
     caller = tau2.build_caller(configuration, config, data_dir=data_dir, phoenix=phoenix, outputs=outputs)
     return AgentIntegration(caller=caller, adapter=tau2.Tau2TraceAdapter())
+  if configuration.agent == 'odr':
+    # ODR's graph and MCP client are slow to import, and only its collections need them.
+    from agents import odr
+
+    return AgentIntegration(
+      caller=odr.build_caller(configuration, config, phoenix=phoenix),
+      adapter=odr.OdrTraceAdapter(config.models.agents[configuration.model].model),
+    )
   if configuration.agent == 'react':
     # No Dify adapter yet: its searches are not retrieval spans.
     return AgentIntegration(caller=dify.DifyCaller(dify.DifySettings()), adapter=None)
