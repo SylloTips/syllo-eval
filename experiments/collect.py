@@ -23,7 +23,7 @@ from syllo_eval.evaluation.trace_processor import TraceSourceClient
 from syllo_eval.execution.agent_caller import AgentCaller
 from syllo_eval.settings import PhoenixSettings
 
-from agents import dify, tau2
+from agents import code_agent, dify, tau2
 from ablation_metrics import SEARCH_SPAN_TYPE
 from config import Benchmark, Configuration, ExperimentConfig
 from run_outputs import RunOutputs
@@ -72,6 +72,11 @@ def build_integration(
   if configuration.agent == 'react':
     # No Dify adapter yet: its searches are not retrieval spans.
     return AgentIntegration(caller=dify.DifyCaller(dify.DifySettings()), adapter=None)
+  if configuration.agent == 'smolagents':
+    return AgentIntegration(
+      caller=code_agent.build_caller(configuration, config, phoenix=phoenix),
+      adapter=code_agent.CodeAgentTraceAdapter(),
+    )
   raise UnsupportedAgentError(f'{configuration.id}: the {configuration.agent} agent stack has no caller yet')
 
 

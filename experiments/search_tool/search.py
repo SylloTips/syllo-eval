@@ -25,6 +25,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, JsonValue
 
+from syllo_eval.trace_semantics import RetrievalItem, RetrievalResult
+
 from indexing.embedding import QUERY_INPUT_TYPE, Embedder, EmbeddingError
 from indexing.vector_store import StoredPoint, VectorStoreError
 
@@ -57,6 +59,10 @@ class SearchResults(BaseModel):
   call_id: str
   query: str
   results: list[SearchResult]
+
+  def retrieval(self) -> RetrievalResult:
+    items = [RetrievalItem(id=result.id, title=result.title, content=result.text) for result in self.results]
+    return RetrievalResult(kind='document', stage='selected', query=self.query, items=items)
 
 
 class CallLog:

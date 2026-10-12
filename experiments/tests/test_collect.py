@@ -62,9 +62,9 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
   def test_stacks_without_a_caller_are_reported(self) -> None:
     config = load_config()
 
-    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the smolagents agent stack has no caller yet'):
+    with self.assertRaisesRegex(collect.UnsupportedAgentError, 'the odr agent stack has no caller yet'):
       collect.build_integration(
-        config.configuration('erb/smolagents/sonnet'),
+        config.configuration('erb/odr/sonnet'),
         config,
         data_dir=Path('data'),
         phoenix=PhoenixSettings(),
@@ -213,10 +213,10 @@ class CollectCliTest(unittest.TestCase):
   def test_a_stack_without_a_caller_is_a_usage_error(self) -> None:
     errors = io.StringIO()
     with patch('cli.load_environment'), patch('cli.logging.basicConfig'), redirect_stderr(errors):
-      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/smolagents/sonnet'])
+      status = main(['collect', '--manifest', str(self.manifest), '--configuration', 'erb/odr/sonnet'])
 
     self.assertEqual(status, 2)
-    self.assertIn('collect: erb/smolagents/sonnet: the smolagents agent stack has no caller yet', errors.getvalue())
+    self.assertIn('collect: erb/odr/sonnet: the odr agent stack has no caller yet', errors.getvalue())
     self.assertFalse(self.manifest.exists())
 
 

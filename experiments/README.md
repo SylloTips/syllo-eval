@@ -257,9 +257,7 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
     Linux, also give `ssrf_proxy` `extra_hosts: ['host.docker.internal:host-gateway']`, and serve on `--host 0.0.0.0`.
   - Dify's classic Agent app switches to function calling whenever the model supports it. A ReAct agent needs a
     Chatflow or Workflow Agent node with the ReAct strategy.
-- **smolagents:** `MCPClient({'url': 'http://127.0.0.1:<port>/mcp', 'transport': 'streamable-http'},
-  structured_output=False)`, so that the CodeAgent reads the same JSON text as the other agents. Its environment needs
-  `mcp<2`, and the CodeAgent needs `json` among its authorized imports to parse the results.
+- **smolagents:** the caller connects at `SMOLAGENTS_SEARCH_URL` (see smolagents CodeAgent).
 - **Open Deep Research:** `search_api: 'none'` and `mcp_config: {'url': 'http://127.0.0.1:<port>', 'tools':
   ['search_knowledge_base'], 'auth_required': False}`. It appends `/mcp` to the URL itself. Its researcher prompt still
   names web search, so set `mcp_prompt` to point it at the knowledge base.
@@ -299,6 +297,24 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   Dify's nginx at `DIFY_BASE_URL` (`http://localhost/v1` by default).
 - **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces. Dify's searches are
   not retrieval spans until Dify has its own trace adapter, so the search metrics skip its runs until then.
+
+### smolagents CodeAgent
+
+The pro-code agent is smolagents' `CodeAgent` (`agents/code_agent.py`), which writes Python that calls the search tool
+and revises its plan every 3 steps. It runs in `syllo-exp`'s own process, one new agent per sample, and is traced to
+Phoenix with OpenInference's smolagents instrumentation.
+
+- **Model:** the configuration's model through litellm, with the provider's defaults, as in the Dify agent.
+  `ANTHROPIC_API_KEY` for Sonnet; DeepSeek on the Foundry resource of `AZURE_FOUNDRY_BASE_URL` and
+  `AZURE_FOUNDRY_API_KEY`.
+- **Search:** `SMOLAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
+  collection. MCP results come as text, so the agent reads the same JSON as the other agents, and `json` is among its
+  authorized imports to parse them.
+- **Trace:** the caller's root span `smolagents.request` holds the `request_id`, the question and the answer. Every
+  search whose output is the search tool's JSON is a retrieval span; a failed search stays a tool span. Planning calls
+  are LLM spans directly under `CodeAgent.run`.
+- **What the agent reads:** the retrieval spans hold all ten documents, but the agent reads only what its code prints
+  (cut by smolagents at 50,000 characters per step) and the value of its last line (at 20,000).
 
 ## Metrics
 
@@ -368,7 +384,7 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
   τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
   later, on its stored traces.
-- **Agents:** only τ²-bench's agent and the Dify agent have callers so far. The command refuses the other stacks.
+- **Agents:** τ²-bench's agent, the Dify agent and the smolagents CodeAgent have callers so far. The command refuses the other stacks.
 - **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
   `tau2-retail-v1.0.1`.
   - Every agent of a benchmark sends its spans to that project.
