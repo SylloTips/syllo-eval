@@ -1,9 +1,14 @@
 import unittest
 from typing import Any, cast
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 from syllo_eval.evaluation.metrics.available import build_available_metrics
+from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.prompts import render_prompt
+from syllo_eval.evaluation.metrics.test_support import span
+from syllo_eval.model import GroundTruth
+from syllo_eval.trace_semantics import ExecutionStep, PlanningData
 
 
 class RenderPromptTest(unittest.TestCase):
@@ -27,6 +32,38 @@ class RenderPromptTest(unittest.TestCase):
     )
     with self.assertRaises(KeyError):
       render_prompt('answer_correctness/v1/user.md', request='Q')
+
+  def test_plan_judge_sees_step_inputs_status_outputs_and_expected_parameters(self) -> None:
+    target = span(
+      planning=PlanningData(
+        executed_steps=[
+          ExecutionStep(
+            id='a', operation='return_items', status='error', input={'order_id': '#W1'}, output='Order not found'
+          ),
+          ExecutionStep(id='b', operation='respond'),
+        ]
+      ),
+    )
+    expected = GroundTruth(
+      id=uuid4(),
+      sample_id=uuid4(),
+      key='expected_plan',
+      ground_truth_value={
+        'expected_plan': [{'operation': 'return_items', 'instruction': '', 'parameters': {'order_id': '#W2'}}]
+      },
+    )
+
+    prompt = PlanCorrectnessJudgeMetric(judge_client=MagicMock()).build_user_prompt(target, {'expected_plan': expected})
+
+    self.assertIn(
+      'Step 1: operation=return_items\n'
+      '  status: error\n'
+      '  input: {"order_id": "#W1"}\n'
+      '  output: Order not found\n'
+      'Step 2: operation=respond\n\n',
+      prompt,
+    )
+    self.assertTrue(prompt.endswith('Step 1: operation=return_items\n  parameters: {"order_id": "#W2"}'))
 
   def test_rubric_addition_closes_every_judge_system_prompt_without_replacing_it(self) -> None:
     plain = build_available_metrics(judge_client=MagicMock(), claim_extractor_client=MagicMock())

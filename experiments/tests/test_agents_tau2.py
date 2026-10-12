@@ -146,7 +146,7 @@ class Tau2TraceAdapterTest(unittest.TestCase):
     assert semantics.answer is not None
     self.assertEqual(semantics.answer.text, 'It ships today.')
 
-  def test_executed_steps_are_the_agent_tool_calls_with_arguments_rendered_as_the_expected_plan(self) -> None:
+  def test_executed_steps_are_the_agent_tool_calls_with_arguments_as_input(self) -> None:
     planning = self.spans['agent'].semantics.planning
     assert planning is not None and planning.executed_steps is not None
     steps = [step.model_dump(exclude={'start_time', 'end_time'}) for step in planning.executed_steps]
@@ -156,7 +156,7 @@ class Tau2TraceAdapterTest(unittest.TestCase):
         {
           'id': 'tool1',
           'operation': 'find_user_id_by_name_zip',
-          'instruction': '{"first_name": "Yusuf", "last_name": "Rossi", "zip": "19122"}',
+          'instruction': '',
           'plan_id': None,
           'planned_step_id': None,
           'status': 'completed',
@@ -168,7 +168,7 @@ class Tau2TraceAdapterTest(unittest.TestCase):
         {
           'id': 'tool2',
           'operation': 'get_order_details',
-          'instruction': '{"order_id": "#W0000000"}',
+          'instruction': '',
           'plan_id': None,
           'planned_step_id': None,
           'status': 'error',

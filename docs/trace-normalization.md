@@ -38,7 +38,9 @@ EvaluationService(
   aggregate several searches.
 - `PlanningData.plans` holds versioned plan snapshots; `executed_steps` holds actual attempts, including errors. Do not infer
   dependencies or plan membership from equal instruction text. Dataset expected plans use `operation`, `instruction`,
-  and optional JSON `parameters`; unknown fields are rejected.
+  and optional JSON `parameters`; unknown fields are rejected. The plan judge sees each executed step's `status`,
+  `instruction`, `input` and `output`, and each expected step's `instruction` and `parameters`; it omits unobserved
+  fields, including an `unknown` status, so put tool arguments in `input` rather than in the instruction text.
 - LLM usage is optional (missing is not zero) and is counted once per trace/call identity, separately from judge usage.
 
 ## Request-ID lookup

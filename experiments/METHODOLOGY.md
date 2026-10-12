@@ -24,9 +24,9 @@ The three benchmarks are pinned by commit and converted as follows (`benchmarks/
 - **τ²-bench retail, 114 samples:**
   - **Prompt:** the user scenario, rendered exactly as tau2 renders it for its user simulator. This was verified
     byte-identical with tau2 on all 114 tasks.
-  - **Expected plan:** the reference tool calls in order. Each step's instruction is the sorted-key JSON of the
-    arguments, and its parameters are the arguments themselves.
-  - Tasks 24 and 57 have no reference calls. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
+  - **Expected plan:** the reference tool calls in order. Each step's parameters are the call's arguments, and its
+    instruction is empty.
+  - Tasks 24 and 57 have no reference calls, so Plan Correctness skips them. For 45 tasks (36 and 70 to 113), the reference lists only the write calls.
   - **Reward at the pin:** 112 tasks multiply the database check by the natural-language assertions, and tasks 33
     and 34 use the database check alone.
   - Only 40 of those 112 tasks have assertions (61 in total), graded by tau2's LLM judge. tau2 scores a task without
@@ -145,8 +145,8 @@ and a simulated customer take turns until one of them ends the conversation.
   is not JSON, such as JSON in a Markdown fence, fails the simulation. Here such a reply is replaced by the JSON that
   τ²-bench's own `extract_json_from_llm_response` finds in it, as τ²-bench's other LLM judges read their replies. A
   reply that is JSON is read as τ²-bench reads it, so every reward τ²-bench would give stays the same.
-- **Executed steps:** the agent's tool calls in order, failed ones included. Each step's instruction is the sorted-key
-  JSON of its arguments, as in the expected plan, and its output is the tool's result as the agent read it.
+- **Executed steps:** the agent's tool calls in order, failed ones included. Each step's input is the call's arguments,
+  and its output is the tool's result as the agent read it.
 - **Usage:** the agent's own LLM calls only. The customer's and the grader's calls are kept in the trace without usage.
 - **Failures:** a simulation that fails for a transient cause runs again from the start, with a new request id. Its
   partial trace is never scored. The transient causes:
@@ -163,8 +163,8 @@ and a simulated customer take turns until one of them ends the conversation.
     same units with the same document text.
   - The search span carries the user question, so the judge sees the same request as in a single-search agent.
 - **Answers (AC):** one unit per question.
-- **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, and each call's arguments
-  appear in its instruction text, because the plan judge renders operation, instruction and output only.
+- **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, with each call's arguments
+  as the step input and its result as the step output. The plan judge also sees each step's status.
 
 ## Claims
 

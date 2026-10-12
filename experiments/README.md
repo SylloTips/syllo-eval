@@ -15,7 +15,8 @@ The ablations and the DeepEval baseline also rely on a few library internals:
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
   render prompts, traces and test cases;
-- the built-in v1 prompt templates that `prompts/` edits: a new built-in prompt version needs new ablation prompts;
+- the built-in v1 prompt templates that `prompts/` edits (v2 for Plan Correctness): a new built-in
+  prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
   usage and retries rate limits as the library's judge client does.
 
@@ -518,7 +519,7 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   Each tool call is a span with its arguments and result, marked as an error when the environment rejected it.
 - **Adapter:** the agent's span is the agent root. Its request is the task's user scenario, which is the sample's
   prompt, and its executed steps are its tool calls, failed ones included, in order.
-  - Each step's instruction renders the call's arguments as the dataset renders the expected plan.
+  - Each step's input is the call's arguments, and its output is the call's result.
   - The customer's and the grader's LLM spans become `customer_llm` and `grader_llm`. They, and litellm's nested
     retries (`llm_internal`), carry no usage, so a run's report counts only the agent's own calls.
   - Agent token usage and cost come from `PhoenixTraceAdapter`. A zero cost from litellm means the model could not

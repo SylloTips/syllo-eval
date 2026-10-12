@@ -15,10 +15,9 @@ class PlanCorrectnessJudgeMetric(BaseLlmJudgeMetric):
 
   metric_name = 'plan_correctness_judge'
   metric_description = (
-    'Uses an LLM judge to score whether the agent plan correctly solves the user request, '
-    'optionally informed by an expected plan.'
+    'Uses an LLM judge to score whether the agent plan reaches the same outcome as the expected plan.'
   )
-  prompt_version = 'v1'
+  prompt_version = 'v2'
 
   def input_skip_reason(self, span: Span) -> str | None:
     return (
@@ -34,9 +33,6 @@ class PlanCorrectnessJudgeMetric(BaseLlmJudgeMetric):
   @property
   def ground_truth_keys(self) -> tuple[str, ...]:
     return (GroundTruthKey.EXPECTED_PLAN.value,)
-
-  def ground_truth_skip_reason(self, ground_truths: Mapping[str, GroundTruth]) -> str | None:
-    return None
 
   def build_system_prompt(self) -> str:
     return render_prompt(f'plan_correctness/{self.prompt_version}/system.md', rubric_addition=self._rubric_addition)
