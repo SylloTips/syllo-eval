@@ -115,10 +115,15 @@ class OdrTraceAdapterTest(unittest.TestCase):
     self.assertEqual(retrieval.query, 'refund time')
     self.assertEqual([item.id for item in retrieval.items], [document['id'] for document in DOCUMENTS])
     self.assertEqual([item.content for item in retrieval.items], [document['text'] for document in DOCUMENTS])
+    [evidence] = root.semantics.retrieval
+    self.assertEqual((evidence.stage, evidence.availability), ('retrieved', 'unavailable'))
+    self.assertIn('down', evidence.reason or '')
 
-    self.assertEqual([spans[span_id].span_type for span_id in ('fail', 'down', 'think')], ['tool'] * 3)
+    self.assertEqual([spans[span_id].span_type for span_id in ('fail', 'think')], ['tool'] * 2)
+    [unreadable] = spans['down'].semantics.retrieval
+    self.assertEqual((spans['down'].span_type, unreadable.availability), ('retrieval', 'unavailable'))
     self.assertEqual(spans['llm'].semantics.usage.input_tokens, 100)  # type: ignore[union-attr]
-    self.assertEqual(result.trace.adapter, 'odr:1')
+    self.assertEqual(result.trace.adapter, 'odr:2')
 
   def test_a_call_to_another_model_is_refused(self) -> None:
     with self.assertRaisesRegex(ValueError, f'LLM call to gpt-4.1, not {MODEL}'):

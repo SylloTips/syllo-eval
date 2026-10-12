@@ -21,7 +21,8 @@ from syllo_eval.settings import EnvSettings
 from syllo_eval.trace_semantics import Answer, SpanSemantics
 
 from ablation_metrics import SEARCH_SPAN_TYPE
-from search_tool.search import SearchResults
+from search_tool.search import search_retrieval, with_retrieved_evidence
+from search_tool.server import TOOL_NAME
 
 REQUEST_ID_ATTRIBUTE = 'dify_trace_id'
 # Dify writes a tool's output in its agent log after this prefix, and a period after the search tool's JSON.
@@ -105,20 +106,29 @@ class DifyTraceAdapter:
     if not isinstance(question, str) or not question.strip():
       raise ValueError(f'Trace {trace_id} has no question on its root span')
     spans = []
+    unreadable = []
     for span in base.spans:
       if span is root:
         semantics = SpanSemantics(
           request=question, answer=Answer(text=answer) if isinstance(answer, str) and answer.strip() else None
         )
         span = span.model_copy(update={'semantics': semantics})
-      elif (span.metadata or {}).get('attributes.metadata.node_type') == 'agent' and isinstance(span.output_data, dict):
-        log_spans, untimed = _log_spans(span, span.output_data.get('json'), question)
+      elif (span.metadata or {}).get('attributes.metadata.node_type') == 'agent':
+        log = span.output_data.get('json') if isinstance(span.output_data, dict) else None
+        log_spans, untimed = _log_spans(span, log, question)
         spans += log_spans
-        output = {k: v for k, v in span.output_data.items() if k != 'json'}
-        metadata = {**(span.metadata or {}), 'dify.agent_log.untimed': untimed}
-        span = span.model_copy(update={'output_data': output, 'metadata': metadata})
+        if not isinstance(log, list) or any(
+          (entry.get('data') or {}).get('tool_name') == TOOL_NAME for entry in untimed
+        ):
+          unreadable.append(span.external_id)
+        if isinstance(span.output_data, dict):
+          output = {k: v for k, v in span.output_data.items() if k != 'json'}
+          metadata = {**(span.metadata or {}), 'dify.agent_log.untimed': untimed}
+          span = span.model_copy(update={'output_data': output, 'metadata': metadata})
       spans.append(span)
-    return TraceProcessingResult(trace=base.trace.model_copy(update={'adapter': 'dify:1'}), spans=spans)
+    return TraceProcessingResult(
+      trace=base.trace.model_copy(update={'adapter': 'dify:2'}), spans=with_retrieved_evidence(spans, unreadable)
+    )
 
 
 def _log_spans(agent: Span, log: Any, question: str) -> tuple[list[Span], list[dict[str, Any]]]:
@@ -148,18 +158,20 @@ def _log_spans(agent: Span, log: Any, question: str) -> tuple[list[Span], list[d
       status='success' if entry.get('status') == 'success' else 'error' if entry.get('status') == 'error' else 'unset',
       metadata={'dify.agent_log.metadata': clock, 'dify.agent_log.error': entry.get('error')},
     )
-    if is_tool and (search := _search(data.get('output'))) is not None:
-      semantics = SpanSemantics(request=question, retrieval=[search.retrieval()])
+    if (
+      data.get('tool_name') == TOOL_NAME
+      and (retrieval := search_retrieval(_tool_output(data.get('output')))) is not None
+    ):
+      semantics = SpanSemantics(request=question, retrieval=[retrieval])
       span = span.model_copy(update={'span_type': SEARCH_SPAN_TYPE, 'semantics': semantics})
     spans.append(span)
   return spans, untimed
 
 
-def _search(output: Any) -> SearchResults | None:
+def _tool_output(output: Any) -> Any:
   if not isinstance(output, str) or not output.startswith(TOOL_OUTPUT_PREFIX):
-    return None
+    return output
   try:
-    found, _ = json.JSONDecoder().raw_decode(output, len(TOOL_OUTPUT_PREFIX))
-    return SearchResults.model_validate(found)
+    return json.JSONDecoder().raw_decode(output, len(TOOL_OUTPUT_PREFIX))[0]
   except ValueError:
-    return None
+    return output.removeprefix(TOOL_OUTPUT_PREFIX)

@@ -19,8 +19,6 @@ from urllib.parse import urlsplit
 from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.evaluation.metrics.implementations.plan.efficiency import PlanEfficiencyMetric
 from syllo_eval.evaluation.metrics.implementations.rag.ndcg_at_10 import NdcgAt10DocumentMetric
-from syllo_eval.evaluation.metrics.implementations.rag.set_precision import SetPrecisionDocumentMetric
-from syllo_eval.evaluation.metrics.implementations.rag.set_recall import SetRecallDocumentMetric
 from syllo_eval.evaluation.trace_adapter import TraceAdapter
 from syllo_eval.evaluation.trace_import import ImportedTrace
 from syllo_eval.evaluation.trace_processor import TraceSourceClient
@@ -28,7 +26,7 @@ from syllo_eval.execution.agent_caller import AgentCaller
 from syllo_eval.settings import PhoenixSettings
 
 from agents import dify, tau2
-from ablation_metrics import SEARCH_SPAN_TYPE
+from ablation_metrics import SEARCH_SPAN_TYPE, RetrievedSetPrecision, RetrievedSetRecall
 from config import Benchmark, Configuration, ExperimentConfig
 from run_outputs import RunOutputs
 
@@ -143,12 +141,7 @@ def deterministic_metrics(benchmark: Benchmark) -> Sequence[EvaluationMetric]:
   """The metrics a collection run computes: those that need no judge."""
   if benchmark == 'tau2':
     return [PlanEfficiencyMetric()]
-  targets = (SEARCH_SPAN_TYPE,)
-  return [
-    SetPrecisionDocumentMetric(target_span_types=targets),
-    SetRecallDocumentMetric(target_span_types=targets),
-    NdcgAt10DocumentMetric(target_span_types=targets),
-  ]
+  return [RetrievedSetPrecision(), RetrievedSetRecall(), NdcgAt10DocumentMetric(target_span_types=(SEARCH_SPAN_TYPE,))]
 
 
 class TraceArchive:

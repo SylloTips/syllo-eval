@@ -34,8 +34,10 @@ EvaluationService(
 - Built-in RAG metrics score `agent_root` at stage `selected`, separately for documents and snippets; their
   `target_span_types` argument, or `EVALUATION_RETRIEVAL_SPAN_TYPES`, makes them score other spans, such as one span per
   search call. Several ranked result sets on one span are separate rankings: rank metrics score each one and average
-  them, and never concatenate them. Custom subclasses can override `retrieval_stage`; GROUP metrics choose how to
-  aggregate several searches.
+  them, and never concatenate them. Set metrics and contextual recall score their union. Put on `agent_root` at
+  `selected` only a final context the trace shows, such as a reranked list. Record an agent's accumulated search
+  results at an earlier stage, unranked, and score them with metrics configured for that stage. Custom subclasses can
+  override `retrieval_stage`; GROUP metrics choose how to aggregate several searches.
 - `PlanningData.plans` holds versioned plan snapshots; `executed_steps` holds actual attempts, including errors. Do not infer
   dependencies or plan membership from equal instruction text. Dataset expected plans use `operation`, `instruction`,
   and optional JSON `parameters`; unknown fields are rejected. The plan judge sees each executed step's `status`,

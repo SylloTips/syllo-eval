@@ -23,8 +23,9 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
+from syllo_eval.model import Span
 from syllo_eval.trace_semantics import RetrievalItem, RetrievalResult
 
 from indexing.embedding import QUERY_INPUT_TYPE, Embedder, EmbeddingError
@@ -32,6 +33,7 @@ from indexing.vector_store import StoredPoint, VectorStoreError
 
 RESULTS = 10
 TRUNCATION_MARK = ' [truncated]'
+FAILURE_PREFIX = 'The search failed: '
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,53 @@ class SearchResults(BaseModel):
   def retrieval(self) -> RetrievalResult:
     items = [RetrievalItem(id=result.id, title=result.title, content=result.text) for result in self.results]
     return RetrievalResult(kind='document', stage='selected', query=self.query, items=items)
+
+
+def search_retrieval(output: JsonValue) -> RetrievalResult | None:
+  if isinstance(output, str) and output.startswith(FAILURE_PREFIX):
+    return None
+  try:
+    if isinstance(output, str):
+      return SearchResults.model_validate_json(output).retrieval()
+    return SearchResults.model_validate(output).retrieval()
+  except ValidationError:
+    return RetrievalResult(
+      kind='document', stage='selected', availability='unavailable', reason='the output is not the search results'
+    )
+
+
+def with_retrieved_evidence(spans: Sequence[Span], unreadable: Sequence[str] = ()) -> list[Span]:
+  searches = sorted(
+    (span for span in spans if span.semantics.retrieval), key=lambda span: (span.start_time, span.external_id)
+  )
+  unreadable = [
+    *unreadable,
+    *(
+      span.external_id
+      for span in searches
+      if any(result.availability != 'available' for result in span.semantics.retrieval)
+    ),
+  ]
+  items: dict[tuple[str, str | None], RetrievalItem] = {}
+  for span in searches:
+    for result in span.semantics.retrieval:
+      for item in result.items:
+        items.setdefault((item.id, item.content), item)
+  evidence = RetrievalResult(kind='document', stage='retrieved', ranked=False, items=list(items.values()))
+  if unreadable:
+    evidence = RetrievalResult(
+      kind='document',
+      stage='retrieved',
+      ranked=False,
+      availability='unavailable',
+      reason=f'unreadable search outputs: {", ".join(unreadable)}',
+    )
+  return [
+    span.model_copy(update={'semantics': span.semantics.model_copy(update={'retrieval': [evidence]})})
+    if span.parent_span_id is None
+    else span
+    for span in spans
+  ]
 
 
 class CallLog:

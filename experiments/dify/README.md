@@ -171,6 +171,8 @@ The trace adapter reads Dify's traces as follows:
   - a `CALL` is a tool span, or a retrieval span with the question as its request when its output is the search
     tool's JSON, after the `tool response: ` prefix and before a trailing period.
 
+  The root also holds the retrieved evidence: the documents of every search, each once (see the main README).
+
   The log times its entries on a monotonic clock, so each is placed at the node's start plus its offset from the
   log's first entry, which starts about 0.2 s after the node. An entry without timing cannot be placed: the ReAct
   strategy logs a failed parse of the model's output as `Action parse failed`, with no timing, and goes on. Such

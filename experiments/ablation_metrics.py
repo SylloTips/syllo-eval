@@ -1,12 +1,14 @@
-"""The experiments' metrics that the library does not provide as they are: the two ablations of Section 5.1, and
-recall over the ERB gold claims.
+"""The experiments' metrics that the library does not provide as they are: the two ablations of Section 5.1, recall
+over the ERB gold claims, and set precision and recall over the retrieved evidence.
 
 The main pass runs the built-in metrics: contextual precision on search spans (``SEARCH_SPAN_TYPE``), and Answer and
 Plan Correctness. ``GoldClaimsContextualRecall`` is the built-in stored-claims recall, reading the claims key of the
-benchmark import. Each ablation subclasses the metric it is compared with and overrides one library hook:
+benchmark import, and ``RetrievedSetPrecision`` and ``RetrievedSetRecall`` are the built-in set metrics: all three
+score the agent root's retrieved evidence, at the ``retrieved`` stage. Each ablation subclasses the metric it is
+compared with and overrides one library hook:
 
-- Syllo-eval-SC (single call) replaces ``judge_items`` or ``judge_claims``: all the documents, or all the claims, of a
-  search unit are judged in one call instead of one call each.
+- Syllo-eval-SC (single call) replaces ``judge_items`` or ``judge_claims``: all the documents of a ranking, or all the
+  claims of a unit, are judged in one call instead of one call each.
 - Syllo-eval-WT (whole trace) replaces ``judge_input``: the user prompt holds the agent's whole canonical trace in
   place of the paragraph with the answer or plan, and adds one sentence saying where in the trace that is.
 
@@ -53,6 +55,8 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge i
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_stored_claims import (
   ContextualRecallDocumentStoredClaimsMetric,
 )
+from syllo_eval.evaluation.metrics.implementations.rag.set_precision import SetPrecisionDocumentMetric
+from syllo_eval.evaluation.metrics.implementations.rag.set_recall import SetRecallDocumentMetric
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
@@ -62,7 +66,7 @@ from benchmarks.erb import CLAIMS_KEY as ERB_GOLD_CLAIMS_KEY
 from config import EXPERIMENTS_DIR
 
 # Span type the agent adapters give each search call: its semantics carry the user question as the request, and the
-# documents the call returned as one ranked document result at the `selected` stage. Retrieval metrics target it.
+# documents the call returned as one ranked document result at the `selected` stage.
 SEARCH_SPAN_TYPE = 'retrieval'
 # Failure class of a whole-trace unit whose stored trace could not be loaded or rendered: an infrastructure failure.
 TRACE_LOAD_FAILURE = 'trace_load'
@@ -90,11 +94,26 @@ def _rendered_items(items: Sequence[RetrievedItem]) -> str:
 
 
 class GoldClaimsContextualRecall(ContextualRecallDocumentStoredClaimsMetric):
-  """The built-in stored-claims recall over the ERB gold claims (RQ1 attribution)."""
+  """The built-in stored-claims recall over the ERB gold claims (RQ1 attribution), on the retrieved evidence."""
 
   claims_key = ERB_GOLD_CLAIMS_KEY
   metric_name = 'contextual_recall_gold_claims'
-  metric_description = 'Contextual recall over the ERB gold claims; one judge call per claim.'
+  metric_description = (
+    'Contextual recall over the ERB gold claims, on the retrieved evidence; one judge call per claim.'
+  )
+  retrieval_stage = 'retrieved'
+
+
+class RetrievedSetPrecision(SetPrecisionDocumentMetric):
+  metric_name = 'set_precision_retrieved_document'
+  metric_description = 'Set precision over the documents all the searches of a question retrieved.'
+  retrieval_stage = 'retrieved'
+
+
+class RetrievedSetRecall(SetRecallDocumentMetric):
+  metric_name = 'set_recall_retrieved_document'
+  metric_description = 'Set recall over the documents all the searches of a question retrieved.'
+  retrieval_stage = 'retrieved'
 
 
 class ContextualPrecisionSC(ContextualPrecisionDocumentJudgeMetric):
@@ -307,7 +326,8 @@ def render_whole_trace(spans: Sequence[Span], target_span_id: str) -> tuple[str,
   type and name, so a re-identified copy renders the same unless two siblings agree on all four. Typed observations
   are rendered with the helpers the target metrics use, so the target's request, answer and executed steps appear
   verbatim. A span's request comes before its children; its retrieval results, plans, executed steps and answer come
-  after them. A span without typed content shows its raw input and output instead.
+  after them. A span without typed content shows its raw input and output instead. The target's own retrieval results,
+  a copy of its searches', are left out.
   """
   spans_by_id = {span.external_id: span for span in spans}
   if target_span_id not in spans_by_id:
@@ -335,7 +355,8 @@ def render_whole_trace(spans: Sequence[Span], target_span_id: str) -> tuple[str,
     lines.extend(after_children)
     lines.append('</span>')
 
-  visit(spans_by_id[target_span_id], None)
+  target = spans_by_id[target_span_id]
+  visit(target.model_copy(update={'semantics': target.semantics.model_copy(update={'retrieval': []})}), None)
   return '\n'.join(lines), span_count
 
 

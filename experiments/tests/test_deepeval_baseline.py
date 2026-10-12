@@ -364,7 +364,7 @@ class DeepEvalGoldClaimsContextualRecallTest(unittest.IsolatedAsyncioTestCase):
 
   async def test_judges_every_claim_in_one_call_one_claim_per_line(self) -> None:
     chat = FakeChatModel(verdicts((True, 'why'), (False, 'why')))
-    target = search_span('s1', ['d1', 'd2'])
+    target = search_span('s1', ['d1', 'd2'], stage='retrieved')
 
     result = await self.metric(chat).compute(target, ground_truths(claims_truth(*CLAIMS)))
 
@@ -391,7 +391,9 @@ class DeepEvalGoldClaimsContextualRecallTest(unittest.IsolatedAsyncioTestCase):
       with self.subTest(count=count):
         chat = FakeChatModel(verdicts(*[(True, 'why')] * count))
 
-        result = await self.metric(chat).compute(search_span('s1', ['d1']), ground_truths(claims_truth(*CLAIMS)))
+        result = await self.metric(chat).compute(
+          search_span('s1', ['d1'], stage='retrieved'), ground_truths(claims_truth(*CLAIMS))
+        )
 
         self.assertEqual(result.status, MetricComputationStatus.FAILED)
         self.assertIn(f'{count} contextual recall verdicts for 2 statements', result.error_message or '')
@@ -403,7 +405,8 @@ class DeepEvalGoldClaimsContextualRecallTest(unittest.IsolatedAsyncioTestCase):
 
     with self.assertRaises(ValueError):
       await self.metric(chat).compute(
-        search_span('s1', ['d1']), ground_truths(claims_truth(Claim('c1', 'Dana approved it.\nIn May.')))
+        search_span('s1', ['d1'], stage='retrieved'),
+        ground_truths(claims_truth(Claim('c1', 'Dana approved it.\nIn May.'))),
       )
 
     self.assertEqual(chat.calls, [])
@@ -445,7 +448,7 @@ class DeepEvalFailureTest(unittest.IsolatedAsyncioTestCase):
   async def test_every_metric_records_the_library_failure_classes(self) -> None:
     units: dict[str, tuple[Span, dict[str, GroundTruth]]] = {
       'precision': (search_span('s1', ['d1']), ground_truths(truth())),
-      'recall': (search_span('s1', ['d1']), ground_truths(claims_truth(*CLAIMS))),
+      'recall': (search_span('s1', ['d1'], stage='retrieved'), ground_truths(claims_truth(*CLAIMS))),
       'answer': (answer_span(), ground_truths(truth())),
     }
     cases = [
@@ -481,9 +484,10 @@ class DeepEvalSetupTest(unittest.IsolatedAsyncioTestCase):
       ['deepeval_contextual_precision', 'deepeval_contextual_recall_gold_claims', 'deepeval_answer_correctness'],
     )
     self.assertEqual(metrics['precision'].target_span_types, (SEARCH_SPAN_TYPE,))
-    self.assertEqual(metrics['recall'].target_span_types, (SEARCH_SPAN_TYPE,))
-    self.assertEqual(metrics['recall'].ground_truth_keys, (CLAIMS_KEY,))
+    self.assertEqual(metrics['recall'].target_span_types, ('agent_root',))
+    self.assertEqual(DeepEvalGoldClaimsContextualRecall.retrieval_stage, 'retrieved')
     self.assertEqual(metrics['answer'].target_span_types, ('agent_root',))
+    self.assertEqual(metrics['recall'].ground_truth_keys, (CLAIMS_KEY,))
     self.assertEqual(metrics['answer'].ground_truth_keys, ('expected_output',))
 
   def test_runs_the_pinned_version_offline(self) -> None:
