@@ -6,11 +6,16 @@ from syllo_eval.evaluation.metrics.implementations.rag._set_base import BaseSetR
 class _BaseSetPrecisionMetric(BaseSetRagMetric):
   metric_kind = 'precision'
 
+  def _score_skip_reason(self, predicted_ids: set[str], relevant_ids: set[str]) -> str | None:
+    if not predicted_ids and relevant_ids:
+      return 'Nothing selected, so precision is undefined.'
+    return None
+
   def _compute_score(self, predicted_ids: set[str], relevant_ids: set[str], matched_ids: set[str]) -> float:
-    # - predicted == 0 and relevant == 0 -> 1.0
-    # - predicted == 0 and relevant > 0 -> 0.0
+    del relevant_ids
+    # Nothing selected and nothing relevant scores 1.0 by convention.
     if not predicted_ids:
-      return 1.0 if not relevant_ids else 0.0
+      return 1.0
     return len(matched_ids) / len(predicted_ids)
 
 

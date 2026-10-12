@@ -21,8 +21,9 @@ class DatasetJsonSample(BaseModel):
 
   input_prompt: str
   ground_truth_output: str | None = None
-  snippet_ids: list[str] = Field(default_factory=list)
-  document_ids: list[str] = Field(default_factory=list)
+  # None means unlabeled; an empty list means labeled with no relevant IDs.
+  snippet_ids: list[str] | None = None
+  document_ids: list[str] | None = None
   plan: list[DatasetJsonPlanStep] | None = None
   claims: list[ExpectedClaim] | None = None
 

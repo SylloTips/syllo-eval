@@ -99,7 +99,7 @@ have no gold documents by design.
 
 ```
 erb: completed, written to .../experiments/data/erb
-  warning: 10 samples have no gold documents; set recall scores 1.0 on empty labels, so label-based analyses must exclude them: 'qst_0471', 'qst_0472', 'qst_0473', 'qst_0474', 'qst_0475' and 5 more
+  warning: 10 samples have no gold documents, so label-based metrics skip them: 'qst_0471', 'qst_0472', 'qst_0473', 'qst_0474', 'qst_0475' and 5 more
 wixqa: completed, written to .../experiments/data/wixqa
 tau2: completed, written to .../experiments/data/tau2
 ```

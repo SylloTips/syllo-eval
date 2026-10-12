@@ -73,7 +73,8 @@ def convert(questions: Sequence[Mapping[str, Any]], raw_document_ids: Sequence[s
       DatasetJsonSample(
         input_prompt=row['question'],
         ground_truth_output=row['gold_answer'],
-        document_ids=list(dict.fromkeys(gold_ids)),
+        # High-level questions have no gold documents by design: they are unlabeled, not without relevant documents.
+        document_ids=list(dict.fromkeys(gold_ids)) or None,
       )
     )
     records.append(
@@ -90,7 +91,7 @@ def convert(questions: Sequence[Mapping[str, Any]], raw_document_ids: Sequence[s
         Claim(id=f'{row["question_id"]}-f{index:02d}', text=fact) for index, fact in enumerate(row['answer_facts'], 1)
       ]
 
-  gold_ids_used = [doc for sample in samples for doc in sample.document_ids]
+  gold_ids_used = [doc for sample in samples for doc in sample.document_ids or ()]
   stats: dict[str, JsonValue] = {
     'question_types': dict(Counter(str(record['question_type']) for record in records)),
     'samples_with_gold_documents': sum(1 for sample in samples if sample.document_ids),
@@ -125,9 +126,9 @@ def build(paths: Mapping[str, Path]) -> ConvertedBenchmark:
   lengths = pc.utf8_length(content).to_pylist()
   length_by_id = dict(zip(unique_document_ids(raw_ids), lengths))
   claim_prompts = set(benchmark.claims[CLAIMS_KEY])
-  gold_ids = {doc for sample in benchmark.samples for doc in sample.document_ids}
+  gold_ids = {doc for sample in benchmark.samples for doc in sample.document_ids or ()}
   claim_gold_ids = {
-    doc for sample in benchmark.samples if sample.input_prompt in claim_prompts for doc in sample.document_ids
+    doc for sample in benchmark.samples if sample.input_prompt in claim_prompts for doc in sample.document_ids or ()
   }
   benchmark.stats['knowledge_base_content'] = {
     'chars': percentiles(lengths),

@@ -61,3 +61,11 @@ class NdcgTest(unittest.IsolatedAsyncioTestCase):
     self.assertAlmostEqual(result.score, (1 / math.log2(3) + 1) / 2)
     self.assertEqual([ranking['ranked_ids'] for ranking in result.metadata['rankings']], [['x', 'right'], ['right']])
     self.assertEqual(result.metadata['counts']['rankings'], 2)
+
+  def test_empty_relevant_ids_skip_and_malformed_ones_are_left_to_compute(self):
+    metric = NdcgAt10DocumentMetric()
+    self.assertEqual(
+      metric.ground_truth_skip_reason(truth(relevant_ids=[])), 'No relevant IDs, so NDCG@10 is undefined.'
+    )
+    self.assertIsNone(metric.ground_truth_skip_reason(truth(relevant_ids='invalid')))
+    self.assertIsNone(metric.ground_truth_skip_reason(truth(relevant_ids=['d1'])))

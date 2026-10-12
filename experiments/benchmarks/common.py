@@ -99,16 +99,16 @@ def check_benchmark(benchmark: ConvertedBenchmark, *, expected_samples: int) -> 
     report.errors.append(f'{len(duplicated)} input prompts are shared by several samples: {_preview(duplicated)}')
 
   if benchmark.knowledge_base_ids is not None:
-    missing = sorted({doc for sample in samples for doc in sample.document_ids} - benchmark.knowledge_base_ids)
+    missing = sorted({doc for sample in samples for doc in sample.document_ids or ()} - benchmark.knowledge_base_ids)
     if missing:
       report.errors.append(f'{len(missing)} gold documents are not in the knowledge base: {_preview(missing)}')
     without_gold = [
-      str(record['sample_key']) for sample, record in zip(samples, benchmark.records) if not sample.document_ids
+      str(record['sample_key']) for sample, record in zip(samples, benchmark.records) if sample.document_ids is None
     ]
     if without_gold:
       report.warnings.append(
-        f'{len(without_gold)} samples have no gold documents; set recall scores 1.0 on empty labels, so label-based '
-        f'analyses must exclude them: {_preview(without_gold)}'
+        f'{len(without_gold)} samples have no gold documents, so label-based metrics skip them: '
+        f'{_preview(without_gold)}'
       )
 
   prompts = {sample.input_prompt for sample in samples}

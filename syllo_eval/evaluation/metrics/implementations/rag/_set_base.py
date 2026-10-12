@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
+from syllo_eval.evaluation.metric_support.agent_outputs import skipped_retrieval_result
 from syllo_eval.evaluation.metric_support.retrieved_context import (
   extract_retrieved_ids,
   retrieval_skip_reason,
@@ -58,6 +59,10 @@ class BaseSetRagMetric(SpanEvaluationMetric, ABC):
     if relevant_error is not None:
       return self._error_result(relevant_error)
 
+    skip_reason = self._score_skip_reason(predicted_ids, relevant_ids)
+    if skip_reason is not None:
+      return skipped_retrieval_result(self.name, skip_reason, variant=self.variant)
+
     matched_ids = predicted_ids.intersection(relevant_ids)
     false_positive_ids = predicted_ids - relevant_ids
     false_negative_ids = relevant_ids - predicted_ids
@@ -96,6 +101,11 @@ class BaseSetRagMetric(SpanEvaluationMetric, ABC):
         },
       },
     )
+
+  def _score_skip_reason(self, predicted_ids: set[str], relevant_ids: set[str]) -> str | None:
+    """Return why the score is undefined for these ID sets, or None to compute it."""
+    del predicted_ids, relevant_ids
+    return None
 
   @abstractmethod
   def _compute_score(self, predicted_ids: set[str], relevant_ids: set[str], matched_ids: set[str]) -> float:
