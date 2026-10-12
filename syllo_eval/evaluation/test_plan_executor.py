@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from syllo_eval.evaluation.metrics.contracts import (
   MetricComputationResult,
   SpanGroupEvaluationMetric,
 )
-from syllo_eval.evaluation.plan_executor import PlanExecutor
+from syllo_eval.evaluation.plan_executor import PlanExecutor, sample_cache
 from syllo_eval.infrastructure import UnitOfWork
 from syllo_eval.model import (
   Agent,
@@ -115,6 +116,32 @@ async def _latency_plan_items():
     yield item
     yield MetricPlanItem(metric=_RaisingStubMetric(), target=item.target, ground_truths={})
     yield MetricPlanItem(metric=_PlanItemStubMetric(), target=item.target, ground_truths={}, skip_reason='missing')
+
+
+class TestPlanExecutorSampleCache(unittest.IsolatedAsyncioTestCase):
+  async def test_each_sample_shares_one_cache_and_its_unfinished_futures_are_cancelled(self) -> None:
+    executor = PlanExecutor(cast(Any, None))
+    caches: list[dict[Any, Any]] = []
+
+    async def execute_item(item: MetricPlanItem, evaluation_run_sample_id: UUID) -> Any:
+      cache = sample_cache.get()
+      caches.append(cache)
+      cache.setdefault('call', asyncio.get_running_loop().create_future())
+      return item
+
+    async def two_items():
+      async for item in _single_plan_item():
+        yield item
+        yield item
+
+    with patch.object(executor, '_execute_item', new=execute_item):
+      for _ in range(2):
+        await executor.execute(two_items(), uuid4())
+
+    self.assertIs(caches[0], caches[1])
+    self.assertIsNot(caches[1], caches[2])
+    self.assertTrue(caches[0]['call'].cancelled() and caches[2]['call'].cancelled())
+    self.assertIsNone(sample_cache.get(None))
 
 
 class TestPlanExecutorLatency(unittest.IsolatedAsyncioTestCase):
