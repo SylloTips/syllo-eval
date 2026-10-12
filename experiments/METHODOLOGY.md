@@ -145,8 +145,8 @@ and a simulated customer take turns until one of them ends the conversation.
   is not JSON, such as JSON in a Markdown fence, fails the simulation. Here such a reply is replaced by the JSON that
   τ²-bench's own `extract_json_from_llm_response` finds in it, as τ²-bench's other LLM judges read their replies. A
   reply that is JSON is read as τ²-bench reads it, so every reward τ²-bench would give stays the same.
-- **Executed steps:** the agent's tool calls in order, failed ones included. Each step's instruction is the sorted-key
-  JSON of its arguments, as in the expected plan, and its output is the tool's result as the agent read it.
+- **Executed steps:** the agent's tool calls in order, failed ones included. Each step's input is the call's arguments,
+  and its output is the tool's result as the agent read it.
 - **Usage:** the agent's own LLM calls only. The customer's and the grader's calls are kept in the trace without usage.
 - **Failures:** a simulation that fails for a transient cause runs again from the start, with a new request id. Its
   partial trace is never scored. The transient causes:

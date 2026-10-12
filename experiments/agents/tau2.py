@@ -6,7 +6,7 @@ and writes the simulation, with its reward, to ``<outputs>/tau2/<run id>/simulat
 simulation to ``rewards.jsonl`` next to it, keyed by run, sample and request id.
 
 The adapter makes tau2's agent span the agent root. Its request is the task's user scenario, the sample's prompt; its
-executed steps are the agent's tool calls, with their arguments rendered as the dataset renders the expected plan.
+executed steps are the agent's tool calls, with their arguments as the step input.
 """
 
 import asyncio
@@ -27,7 +27,7 @@ from syllo_eval.settings import EnvSettings, PhoenixSettings
 from syllo_eval.trace_semantics import Answer, ExecutionStep, PlanningData, SpanSemantics
 
 from benchmarks.download import verify_pinned_files
-from benchmarks.tau2 import render_arguments, render_user_scenario
+from benchmarks.tau2 import render_user_scenario
 from config import EXPERIMENTS_DIR, Configuration, ExperimentConfig, ModelRef
 from indexing.embedding import AzureFoundrySettings
 from run_outputs import RunOutputs
@@ -312,7 +312,6 @@ def _executed_step(span: Span, record: Mapping[str, Any]) -> ExecutionStep:
   return ExecutionStep(
     id=span.external_id,
     operation=str(record.get('attributes.tool.name') or span.name),
-    instruction=render_arguments(arguments) if isinstance(arguments, dict) else str(arguments),
     status=status,
     input=arguments,
     # The tool's result as the agent read it.
