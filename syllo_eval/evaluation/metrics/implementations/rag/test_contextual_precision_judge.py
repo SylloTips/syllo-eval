@@ -12,7 +12,7 @@ from syllo_eval.model import MetricComputationStatus
 
 
 class _RelevanceJudge:
-  """Judges each prompt's document relevant when its id is listed, echoing the rank and id it was shown."""
+  """Judges each prompt's document relevant when its id is listed, echoing the id it was shown."""
 
   def __init__(self, relevant: set[str]):
     self.relevant = relevant
@@ -20,10 +20,10 @@ class _RelevanceJudge:
 
   async def judge(self, request: LlmJudgeRequest) -> LlmJudgeResponse:
     self.requests.append(request)
-    shown = re.search(r'Rank (\d+)\nretrieved_id: (\S+)', request.user_prompt)
+    shown = re.search(r'retrieved_id: (\S+)', request.user_prompt)
     assert shown is not None
-    rank, document = int(shown.group(1)), shown.group(2)
-    judgment = {'rank': rank, 'retrieved_id': document, 'relevant': document in self.relevant, 'reasoning': 'r'}
+    document = shown.group(1)
+    judgment = {'retrieved_id': document, 'relevant': document in self.relevant, 'reasoning': 'r'}
     return LlmJudgeResponse(
       provider='fake', model='test', output=request.response_model.model_validate({'judgments': [judgment]})
     )
@@ -107,7 +107,22 @@ class ContextualPrecisionTest(unittest.IsolatedAsyncioTestCase):
     self.assertAlmostEqual(result.score, (1 / 2 + 1) / 2)
     self.assertEqual([ranking['query'] for ranking in result.metadata['rankings']], ['first', 'second'])
     self.assertEqual(result.metadata['counts'], {'retrieved': 4, 'relevant': 2, 'echo_mismatches': 0, 'rankings': 2})
-    self.assertEqual(sorted(request.user_prompt.count('Rank 1') for request in judge.requests), [0, 0, 1, 1])
+
+  async def test_a_document_gets_the_same_request_at_any_rank_and_score(self):
+    judge = _RelevanceJudge(relevant={'x'})
+    metric = ContextualPrecisionDocumentJudgeMetric(judge_client=judge)
+    rankings = [
+      [RetrievalItem(id=i, content=f'Text of {i}', score=score) for i, score in order]
+      for order in ((('x', 0.9), ('y', 0.5)), (('y', 0.8), ('x', 0.2)))
+    ]
+    target = span(retrieval=[RetrievalResult(stage='selected', kind='document', items=items) for items in rankings])
+
+    await metric.compute(target, truth(expected_output='Expected'))
+
+    self.assertEqual(len(judge.requests), 4)
+    requests = {(r.system_prompt, r.user_prompt, r.response_model, r.max_output_tokens) for r in judge.requests}
+    self.assertEqual(len(requests), 2)
+    self.assertFalse(any('Rank' in request.user_prompt for request in judge.requests))
 
   async def test_results_name_the_input_documents_not_the_echoed_ids(self):
     judge = Judge(

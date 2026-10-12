@@ -198,6 +198,8 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
 - **Syllo-eval-SC** judges all the documents of a ranking (CP) or all the claims of a unit (CR) in one call:
   - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
     rank or given order. The claims are numbered.
+  - CP's per-document prompt (v2) shows no rank or retrieval score, so a document returned by several searches gets
+    the same request each time. The SC prompt keeps each document's rank, which matches its judgments to documents.
   - The output budget is the per-item call's 2,000 tokens per item, capped at the judge's output limit of 65,536.
   - CP judgments are matched to documents by rank, and CR judgments to claims by position. As in the per-item pass,
     the ids and statements the judge echoes are not checked; mismatches are only counted.

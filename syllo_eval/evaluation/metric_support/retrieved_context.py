@@ -19,14 +19,16 @@ class RetrievedItem:
   def score(self) -> float | None:
     return self.item.score
 
-  def render_for_prompt(self, rank: int) -> str:
+  def render_for_prompt(self, rank: int | None = None) -> str:
+    ranking = '' if rank is None else f'Rank {rank}\n'
+    score = '' if rank is None else f'retrieval_score: {self.item.score}\n'
     return (
-      f'Rank {rank}\n'
+      f'{ranking}'
       f'retrieved_id: {self.retrieved_id}\n'
       f'document_id: {self.item.document_id or self.item.id}\n'
       f'title: {self.item.title or ""}\n'
       f'location: {self.item.location or ""}\n'
-      f'retrieval_score: {self.item.score}\n'
+      f'{score}'
       f'content:\n{self.item.content or ""}'
     )
 
