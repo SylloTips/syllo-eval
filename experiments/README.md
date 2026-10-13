@@ -21,8 +21,9 @@ The ablations and the DeepEval baseline also rely on a few library internals:
   usage and retries rate limits as the library's judge client does.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench,
-smolagents and Open Deep Research adapters read the flattened records that client returns, `attributes.*` keys
-included, after `PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/code_agent.py`, `agents/odr.py`).
+smolagents, Open Deep Research and Dify adapters read the flattened records that client returns, `attributes.*` keys
+included, after `PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/code_agent.py`, `agents/odr.py`,
+`agents/dify.py`).
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
@@ -296,8 +297,10 @@ scripts/dify.sh up -d       # Dify 1.17.1; any docker compose arguments, e.g. sc
   attribute. The message ID would find Dify's separate message trace, which holds only the question and the answer.
 - **Caller:** `agents/dify.py` streams the answer, because Dify's agent apps do not answer in blocking mode, through
   Dify's nginx at `DIFY_BASE_URL` (`http://localhost/v1` by default).
-- **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces. Dify's searches are
-  not retrieval spans until Dify has its own trace adapter, so the search metrics skip its runs until then.
+- **Check:** a pilot (see Collection) runs the app on a few questions and archives their traces.
+- **Trace:** Dify exports no spans below its nodes, so the adapter turns the agent node's ReAct log into spans: rounds,
+  model calls and tool calls. A search whose output is the search tool's JSON is a retrieval span with its ten
+  documents; a failed search stays a tool span ([`dify/README.md`](dify/README.md#what-the-trace-holds)).
 
 ### smolagents CodeAgent
 

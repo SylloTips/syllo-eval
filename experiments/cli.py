@@ -495,7 +495,7 @@ async def _collect(args: argparse.Namespace) -> int:
         metrics=metrics,
         callers_by_agent_name={configuration.agent: integration.caller},
         trace_client=collect.TraceArchive(PhoenixClient(phoenix), outputs),
-        trace_adapters_by_agent_name={configuration.agent: integration.adapter} if integration.adapter else None,
+        trace_adapters_by_agent_name={configuration.agent: integration.adapter},
       )
       async with service:
         handle = await service.create_evaluation(

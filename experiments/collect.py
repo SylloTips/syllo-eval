@@ -46,8 +46,7 @@ class SearchServerError(ValueError):
 @dataclass(frozen=True, slots=True)
 class AgentIntegration:
   caller: AgentCaller
-  # None for the library's Phoenix adapter.
-  adapter: TraceAdapter | None
+  adapter: TraceAdapter
   # The MCP endpoint of the search server that the agent calls; None for an agent that does not search.
   search_url: str | None
 
@@ -88,8 +87,9 @@ def build_integration(
     )
   if agent == 'react':
     dify_settings = dify.DifySettings()
-    # No Dify adapter yet: its searches are not retrieval spans.
-    return AgentIntegration(caller=dify.DifyCaller(dify_settings), adapter=None, search_url=dify_settings.search_url)
+    return AgentIntegration(
+      caller=dify.DifyCaller(dify_settings), adapter=dify.DifyTraceAdapter(), search_url=dify_settings.search_url
+    )
   if agent == 'smolagents':
     # smolagents and the MCP framework are slow to import, and only the CodeAgent's collections need them.
     from agents import code_agent

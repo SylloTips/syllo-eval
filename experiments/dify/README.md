@@ -161,6 +161,21 @@ The trace adapter reads Dify's traces as follows:
   - `<model> Thought`, the model call, with its total tokens;
   - `CALL search_knowledge_base`, with `tool_call_args` and the output `tool response: <search JSON>`.
 
-  Token usage is only a total per call: prompt and completion tokens read zero.
+  Token usage is only a total per call: prompt and completion tokens read zero. With the Azure AI Studio provider,
+  the total reads zero too, so Dify runs report no agent usage.
+- **Spans.** The adapter (`agents/dify.py`) reads the question (`sys.query`) and the answer from the root. It moves
+  the `json` log out of the agent node's output into spans under the node, nested by the log's `parent_id`, each
+  holding its entry's data as Dify logged it:
+  - a `ROUND` is a chain span, with its thought, action and observation;
+  - a `Thought` is an LLM span, without usage, as Dify reports zero tokens;
+  - a `CALL` is a tool span, or a retrieval span with the question as its request when its output is the search
+    tool's JSON, after the `tool response: ` prefix and before a trailing period.
+
+  The log times its entries on a monotonic clock, so each is placed at the node's start plus its offset from the
+  log's first entry, which starts about 0.2 s after the node. An entry without timing cannot be placed: the ReAct
+  strategy logs a failed parse of the model's output as `Action parse failed`, with no timing, and goes on. Such
+  entries stay on the agent node, in its `dify.agent_log.untimed` metadata.
+- **Root timing.** The workflow root is exported after the workflow ends, as a span of no duration: its children
+  hold the timing.
 - **Large outputs.** Dify stores node outputs above 100,000 characters per string, or 1000 KiB in all, in its file
   storage, keeps a truncated copy in its database, and reloads the full output when it exports the trace.
