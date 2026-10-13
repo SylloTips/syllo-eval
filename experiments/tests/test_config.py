@@ -21,6 +21,14 @@ def _models() -> dict[str, Any]:
       'output_token_limit': 65536,
     },
     'embedding': _embedding(),
+    'claim_extractor': {
+      'provider': 'orbitals',
+      'model': 'extractor-1',
+      'label': 'Extractor',
+      'timeout_seconds': 60,
+      'batch_size': 2,
+      'ai_service_descriptions': {'kb': 'An assistant.'},
+    },
   }
 
 

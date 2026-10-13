@@ -117,6 +117,7 @@ DB_NAME=syllo-eval-paper poetry run alembic upgrade head
 ```bash
 poetry run syllo-exp benchmarks fetch     # pinned files into data/<benchmark>/raw, size and SHA-256 checked (1.5 GB)
 poetry run syllo-exp benchmarks convert   # dataset.json, samples.jsonl, claims.json and report.json per benchmark
+poetry run syllo-exp benchmarks claims    # WixQA: the expected answers' claims, extracted once with Orbitals
 poetry run syllo-exp benchmarks import    # the datasets and their claim ground truths, into the configured database
 ```
 
@@ -125,6 +126,13 @@ poetry run syllo-exp benchmarks import    # the datasets and their claim ground 
   simulator's guidelines.
 - **Scope:** each step takes `--only erb wixqa tau2`, records its outcome in the manifest, and is safe to re-run.
   Fetching resumes interrupted downloads.
+- **Orbitals claims:** `claims` sends each WixQA question and expected answer to Orbitals' claim extractor
+  (`ORBITALS_API_KEY`), as the library's claim-extractor recall does, and drops the claims it types as unverifiable.
+  It calls the batch API, `batch_size` answers at a time, with the model and the description of the WixQA assistant
+  that `claim_extractor` in [`configs/models.yaml`](configs/models.yaml) fixes; a benchmark without a description
+  there has no Orbitals claims. It writes `data/wixqa/orbitals_claims.json` after every batch, with the model and each
+  claim's type, so it resumes where it stopped and `convert` never overwrites it. `import` then stores the claims as
+  `expected_claims_orbitals`; run it after `claims`, since an import refuses to change claims it already stored.
 - **Checks:** a conversion fails on a wrong sample count, a duplicate or unstripped prompt, a gold document missing
   from the knowledge base, or a malformed claim list. A failed conversion leaves no report, and the import refuses a
   conversion that failed or was made from pins other than the current ones.
@@ -397,6 +405,7 @@ change.
 - **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
   never decomposes the expected answer, so a unit makes one judge call per claim. Recall over `decomposed_claims` (RQ2)
   and `expected_claims_verified` (RQ3) is the same subclass with another key, once those ground truths are imported.
+  On WixQA, `contextual_recall_orbitals_claims` is that subclass reading `expected_claims_orbitals`.
   DeepEval's recall over `expected_claims_verified` is likewise its gold-claims metric with that key.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.

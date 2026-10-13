@@ -20,12 +20,21 @@ from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConn
 from syllo_eval.infrastructure.exceptions import PersistenceError
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import EvaluationStatus, MetricComputationStatus
-from syllo_eval.settings import GeminiJudgeSettings, Settings
+from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
+from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
-from config import CONFIG_DIR, DATA_DIR, BenchmarkSource, EmbeddingConfig, load_config, load_environment
+from config import (
+  CONFIG_DIR,
+  DATA_DIR,
+  BenchmarkSource,
+  ClaimExtractorConfig,
+  EmbeddingConfig,
+  load_config,
+  load_environment,
+)
 from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, open_deepeval_judge
 from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
@@ -52,6 +61,7 @@ _BENCHMARK_STEPS = {
   'fetch': 'Download the pinned benchmark files, verifying their size and SHA-256.',
   'convert': 'Convert the pinned files into syllo-eval datasets and check them.',
   'import': 'Import the converted datasets and their claim ground truths into the database.',
+  'claims': 'Extract the claims of the expected answers with Orbitals, once, for the benchmarks that use them.',
 }
 _INDEX_STEPS = {
   'embed': 'Embed every knowledge-base document into data/<benchmark>/index, resuming an interrupted run.',
@@ -232,6 +242,8 @@ def _run_benchmark_step(args: argparse.Namespace) -> int:
       results = [_fetch(name, source, args.data_dir, client, manifest) for name, source in selected]
   elif args.step == 'convert':
     results = [_convert(name, source, args.data_dir, manifest) for name, source in selected]
+  elif args.step == 'claims':
+    results = asyncio.run(_extract_claims(selected, config.models.claim_extractor, args.data_dir, manifest))
   else:
     results = asyncio.run(_import_benchmarks(selected, args.data_dir, manifest))
   return 0 if all(results) else 1
@@ -262,6 +274,36 @@ def _convert(name: str, source: BenchmarkSource, data_dir: Path, manifest: Manif
   for message in report.warnings:
     print(f'  warning: {message}')
   return report.passed
+
+
+async def _extract_claims(
+  selected: Sequence[tuple[str, BenchmarkSource]], config: ClaimExtractorConfig, data_dir: Path, manifest: Manifest
+) -> list[bool]:
+  load_environment()
+  settings = OrbitalsSettings()
+  if settings.api_key is None:
+    print('Claim extraction needs ORBITALS_API_KEY.', file=sys.stderr)
+    return [False]
+  results = []
+  async with httpx.AsyncClient() as client:
+    for name, source in selected:
+      description = config.ai_service_descriptions.get(name)
+      if description is None:
+        print(f'{name}: no Orbitals claims, its claims come from the benchmark')
+        continue
+      step = f'benchmarks:claims:{name}'
+      manifest.append(step, StepStatus.STARTED)
+      extract_batch = orbitals_claims.batch_extractor(client, settings, config, description)
+      try:
+        counts = await benchmark_steps.extract_claims(name, source, data_dir, extract_batch, config.batch_size)
+      except (FileNotFoundError, ValueError, httpx.HTTPError) as error:
+        results.append(_record_failure(manifest, step, name, error))
+        continue
+      details = {'model': config.model, 'ai_service_description': description, **counts}
+      manifest.append(step, StepStatus.COMPLETED, details=details)
+      print(f'{name}: {counts["claims"]} claims of {counts["samples"]} samples in {data_dir / name}')
+      results.append(True)
+  return results
 
 
 async def _import_benchmarks(

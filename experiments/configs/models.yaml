@@ -48,3 +48,15 @@ embedding:
   tokens_per_minute: 1000000
   # A request counts at its estimate until it returns, so small requests keep the quota busy.
   max_request_tokens: 25000
+
+# Extracts once, through the batch API, the expected answers' claims of the benchmarks it describes.
+claim_extractor:
+  provider: orbitals
+  model: claim-extractor-pro-2605
+  label: Orbitals ClaimExtractor
+  timeout_seconds: 300
+  batch_size: 20
+  ai_service_descriptions:
+    wixqa: >-
+      You are the support assistant of Wix.com, a website builder. You answer Wix users' questions about building,
+      managing and growing their Wix sites, based on the Wix Help Center articles.

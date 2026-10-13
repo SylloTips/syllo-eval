@@ -61,11 +61,21 @@ class EmbeddingConfig(_ConfigModel):
     return self
 
 
+class ClaimExtractorConfig(_ConfigModel):
+  provider: Literal['orbitals']
+  model: str = Field(min_length=1)
+  label: str = Field(min_length=1)
+  timeout_seconds: float = Field(gt=0)
+  batch_size: int = Field(ge=1)
+  ai_service_descriptions: dict[str, str] = Field(min_length=1)
+
+
 class ModelsConfig(_ConfigModel):
   agents: dict[str, ModelRef] = Field(min_length=1)
   customer_simulator: ModelRef
   judge: JudgeConfig
   embedding: EmbeddingConfig
+  claim_extractor: ClaimExtractorConfig
 
 
 class Tau2Config(_ConfigModel):
