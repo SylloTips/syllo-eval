@@ -160,7 +160,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       generated_at=generated_at,
     )
 
-    self.assertEqual(report.report_version, '2.0')
+    self.assertEqual(report.report_version, '3.0')
     self.assertEqual(report.generated_at, generated_at)
     self.assertEqual(report.run.samples_processed, 3)
     self.assertEqual(report.run.duration_seconds, 300.0)
@@ -326,6 +326,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(run_tokens.agent.input_tokens, 16)
     self.assertEqual(run_tokens.agent.output_tokens, 6)
     self.assertEqual(run_tokens.agent.total_tokens, 22)
+    self.assertIsNone(run_tokens.agent.cached_input_tokens)
     self.assertEqual(run_tokens.agent.sources_with_data, 2)
     self.assertEqual(run_tokens.agent.sources_total, 3)
     self.assertEqual(run_tokens.judge.input_tokens, 20)
@@ -347,10 +348,10 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(with_tokens.judge.sources_total, 1)
 
     without_tokens = sample_reports[sample_without_tokens.id].token_usage
-    self.assertEqual(without_tokens.agent.total_tokens, 0)
+    self.assertIsNone(without_tokens.agent.total_tokens)
     self.assertEqual(without_tokens.agent.sources_with_data, 0)
     self.assertEqual(without_tokens.agent.sources_total, 1)
-    self.assertEqual(without_tokens.judge.total_tokens, 0)
+    self.assertIsNone(without_tokens.judge.total_tokens)
     self.assertEqual(without_tokens.judge.calls, 0)
     self.assertEqual(without_tokens.judge.sources_with_data, 0)
     self.assertEqual(without_tokens.judge.sources_total, 1)
