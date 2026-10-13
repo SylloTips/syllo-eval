@@ -484,6 +484,7 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
 - **Where:** run it on the host with `poetry run`, like the search servers, where the agents can reach the services.
   `--max-concurrent-samples` sets how many samples run at once; the default is `EVALUATION_MAX_CONCURRENT_SAMPLES`,
   or 1.
+- **Hangs:** `kill -USR1 <pid>` makes a running `syllo-exp` print the stack of every thread to its stderr.
 
 ## τ²-bench agent
 
