@@ -209,9 +209,29 @@ class DifyTraceAdapterTest(unittest.TestCase):
     self.assertEqual([item.id for item in retrieval.items], ['doc-7', 'doc-2'])
     self.assertEqual(retrieval.items[0].content, 'Refunds take 5 days.')
     self.assertEqual((search.start_time, search.end_time), (T0 + timedelta(seconds=2), T0 + timedelta(seconds=2.5)))
+    [evidence] = root.semantics.retrieval
+    self.assertEqual((evidence.stage, evidence.ranked), ('retrieved', False))
+    self.assertEqual(evidence.items, retrieval.items)
 
     self.assertEqual((spans['fail'].span_type, spans['fail'].semantics.retrieval), ('tool', []))
-    self.assertEqual(result.trace.adapter, 'dify:1')
+    self.assertEqual(result.trace.adapter, 'dify:2')
+
+  def test_a_missing_log_or_an_untimed_search_makes_the_evidence_unavailable(self) -> None:
+    def without_timing(output: dict[str, Any]) -> None:
+      next(entry for entry in output['json'] if entry.get('id') == 'ok')['metadata'] = {}
+
+    for change in (lambda output: output.pop('json'), without_timing):
+      records = _dify_trace()
+      agent = next(record for record in records if record['context.span_id'] == 'agent')
+      output = json.loads(agent['attributes.output.value'])
+      change(output)
+      agent['attributes.output.value'] = json.dumps(output)
+
+      root = next(span for span in DifyTraceAdapter().normalize('d' * 32, records).spans if span.external_id == 'r')
+
+      [evidence] = root.semantics.retrieval
+      self.assertEqual((evidence.availability, evidence.items), ('unavailable', []))
+      self.assertIn('agent', evidence.reason or '')
 
   def test_a_trace_without_the_request_id_or_the_question_is_refused(self) -> None:
     message_trace = _dify_trace()

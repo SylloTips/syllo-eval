@@ -63,10 +63,13 @@ class CodeAgentTraceAdapterTest(unittest.TestCase):
     self.assertEqual((retrieval.kind, retrieval.stage, retrieval.query), ('document', 'selected', 'refund policy'))
     self.assertEqual([item.id for item in retrieval.items], ['doc-7', 'doc-2'])
     self.assertEqual(retrieval.items[0].content, 'Refunds take 5 days.')
+    [evidence] = root.semantics.retrieval
+    self.assertEqual((evidence.stage, evidence.ranked), ('retrieved', False))
+    self.assertEqual(evidence.items, retrieval.items)
 
     self.assertEqual((spans['fail'].span_type, spans['final'].span_type), ('tool', 'tool'))
     self.assertEqual(spans['llm'].semantics.usage.input_tokens, 100)  # type: ignore[union-attr]
-    self.assertEqual(result.trace.adapter, 'smolagents:1')
+    self.assertEqual(result.trace.adapter, 'smolagents:2')
 
   def test_a_trace_without_the_callers_root_is_refused(self) -> None:
     records = _trace()[1:]

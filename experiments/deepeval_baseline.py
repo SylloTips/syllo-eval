@@ -363,14 +363,12 @@ def _misaligned_result(
 
 
 def deepeval_metrics(judge: DeepEvalJudge, *, output_token_limit: int) -> dict[str, EvaluationMetric]:
-  """The baseline's metrics by key. The retrieval metrics score search units, as in the main pass."""
+  """The baseline's metrics by key. The retrieval metrics score the units of the main pass."""
   return {
     'precision': DeepEvalContextualPrecision(
       judge=judge, output_token_limit=output_token_limit, target_span_types=(SEARCH_SPAN_TYPE,)
     ),
-    'recall': DeepEvalGoldClaimsContextualRecall(
-      judge=judge, output_token_limit=output_token_limit, target_span_types=(SEARCH_SPAN_TYPE,)
-    ),
+    'recall': DeepEvalGoldClaimsContextualRecall(judge=judge, output_token_limit=output_token_limit),
     'answer': DeepEvalAnswerCorrectness(judge=judge, output_token_limit=output_token_limit),
   }
 

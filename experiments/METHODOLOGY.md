@@ -82,7 +82,7 @@ per call.
   for the RQ3 claims, ERB's `claim_gold_document_chars`. The tool can cut each document after a number of characters
   and mark the cut.
 - **Call log:** the server logs every search that reaches the tool, with what it returned and which ranks were random,
-  or with its error, so the search units extracted from traces can be checked against it.
+  or with its error, so the searches extracted from traces can be checked against it.
 - **Unreachable tool:** a question whose agent could not reach the search tool, as when Open Deep Research drops a
   server it cannot connect to, is an infrastructure failure and runs again. It is not a question with no search.
 
@@ -158,10 +158,20 @@ and a simulated customer take turns until one of them ends the conversation.
 
 ## Evaluation units
 
-- **Retrieval (CP, CR, R, NDCG@10):**
-  - One search call is one unit: the ten documents it returned, in rank order. DeepEval and the ablations receive the
-    same units with the same document text.
-  - The search span carries the user question, so the judge sees the same request as in a single-search agent.
+- **Retrieved evidence (CR, R, set precision):**
+  - One question is one unit: the documents of all the agent's searches, each once, in order of first appearance and
+    unranked. The agent root holds them at the `retrieved` stage, with the user question as its request.
+  - A document counts once per id and text. Removing the repeats is a convention of this evaluation, not something
+    the agents do; the search tool always returns a document with the same text.
+  - The evidence is what the search tool returned to the agent, not what the agent kept: Dify's ReAct agent reads all
+    of it, the CodeAgent reads only what its code prints, and ODR writes its report from its researchers' notes. The
+    document metrics therefore measure retrieval exposure, not the context the answer used.
+  - A search output that is neither the tool's results nor its error message makes the question's evidence
+    unavailable, and the metrics skip it rather than score what is left.
+- **Rankings (CP, NDCG@10):** one search call is one unit, a retrieval diagnostic: the ten documents it returned, in
+  rank order. The search span carries the user question. The labels are per question, so a search for part of the
+  question cannot reach an NDCG@10 of 1.
+- DeepEval and the ablations receive the same units with the same document text.
 - **Answers (AC):** one unit per question.
 - **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, with each call's arguments
   as the step input and its result as the step output. The plan judge also sees each step's status.
@@ -185,7 +195,7 @@ Each ablation changes one design choice of the metric it is compared with (`abla
 skip rules, rubric text, scoring and result metadata stay the same; an ablation only adds metadata fields (WT: the
 rendered trace's size; a failed SC unit: its output budget and, for CP, its rank alignment).
 
-- **Syllo-eval-SC** judges all the documents (CP) or all the claims (CR) of a search unit in one call:
+- **Syllo-eval-SC** judges all the documents of a ranking (CP) or all the claims of a unit (CR) in one call:
   - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
     rank or given order. The claims are numbered.
   - The output budget is the per-item call's 2,000 tokens per item, capped at the judge's output limit of 65,536.
@@ -198,6 +208,7 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
   - The trace is the agent root and its descendants, depth-first, with ordinal span ids and no timestamps. Children
     are ordered by start time, then end time, type, name and finally source span id. Spans outside the agent root,
     such as a reward grader's, are not part of it.
+  - The root's retrieved evidence is left out: it repeats the documents of its search spans, which render in place.
   - Each span shows its typed observations, rendered as the target metrics render them: its request before its
     children, then its retrieval results, plans, executed steps and answer after them. A span without typed
     observations shows its raw input and output instead.
@@ -248,14 +259,17 @@ scoring of the retrieval metrics; answers get G-Eval's score.
 ## Aggregation
 
 - **Question scores:**
-  - A question's retrieval score is the mean over its search units.
-  - A question with no search scores 0 on the retrieval metrics.
+  - A question's CR, R and set precision are those of its retrieved evidence; its CP and NDCG@10 are the mean over
+    its search units, so a question weighs the same whatever its number of searches.
+  - A question without a successful search has an observed empty evidence, on which CR and R score 0. The planner
+    skips its CP and NDCG@10, which the analysis sets to 0 too. A question whose evidence is unavailable is not scored
+    on any retrieval metric: it is a coverage gap, not a 0.
   - An agent failure that persists after retries scores 0 on AC.
-- **Configuration scores:** a configuration's score is the mean over questions.
+- **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's
+  score statistics, which pool every computation and so weigh questions by their number of searches.
 - **Pairing:** rankings and bootstraps use the questions scored for every configuration, and their count is reported.
 - **Sensitivity analyses**, reported next to the primary results:
-  - R over the union of a question's retrieved documents;
-  - CR as "claim supported in any search";
+  - R and CR per search, averaged over a question's searches;
   - CP and NDCG@10 from the first search only.
 
 ## RQ1 references

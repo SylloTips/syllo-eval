@@ -3,14 +3,27 @@ import statistics
 import tempfile
 import unittest
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastmcp import Client
 from pydantic import JsonValue
 
+from syllo_eval.model import Span
+from syllo_eval.trace_semantics import RetrievalItem, RetrievalResult, SpanSemantics
+
 from indexing.embedding import EmbeddingError, Embeddings, InputType
 from indexing.vector_store import StoredPoint
-from search_tool.search import RESULTS, TRUNCATION_MARK, CallLog, KnowledgeBaseSearch, RandomSwap, SearchError
+from search_tool.search import (
+  RESULTS,
+  TRUNCATION_MARK,
+  CallLog,
+  KnowledgeBaseSearch,
+  RandomSwap,
+  SearchError,
+  search_retrieval,
+  with_retrieved_evidence,
+)
 from search_tool.server import SETTINGS_URI, TOOL_NAME, build_server
 
 POINTS = [
@@ -222,6 +235,73 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
       with self.subTest(query=query):
         self.assertTrue(result.is_error)
         self.assertIn(message, getattr(result.content[0], 'text'))
+
+
+class RetrievedEvidenceTest(unittest.TestCase):
+  def _span(self, span_id: str, second: int, *results: RetrievalResult) -> Span:
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc) + timedelta(seconds=second)
+    return Span(
+      external_id=span_id,
+      trace_id='t',
+      parent_span_id=None if span_id == 'r' else 'r',
+      span_type='agent_root' if span_id == 'r' else 'retrieval',
+      name=span_id,
+      start_time=start,
+      end_time=start,
+      input_data=None,
+      output_data=None,
+      semantics=SpanSemantics(request='question', retrieval=list(results)),
+    )
+
+  def _search(self, *documents: tuple[str, str]) -> RetrievalResult:
+    items = [RetrievalItem(id=document_id, content=content) for document_id, content in documents]
+    return RetrievalResult(kind='document', stage='selected', items=items)
+
+  def test_the_root_gets_the_documents_of_every_search_once_in_call_order(self) -> None:
+    late = self._span('late', 2, self._search(('d1', 'one'), ('d3', 'three'), ('d1', 'one, cut')))
+    early = self._span('early', 1, self._search(('d2', 'two'), ('d1', 'one')))
+    spans = [self._span('r', 0), late, early]
+
+    [root, *searches] = with_retrieved_evidence(spans)
+
+    [evidence] = root.semantics.retrieval
+    self.assertEqual((evidence.stage, evidence.ranked, evidence.availability), ('retrieved', False, 'available'))
+    self.assertEqual(
+      [(item.id, item.content) for item in evidence.items],
+      [('d2', 'two'), ('d1', 'one'), ('d3', 'three'), ('d1', 'one, cut')],
+    )
+    self.assertEqual(root.semantics.request, 'question')
+    self.assertEqual(searches, spans[1:])
+
+  def test_an_unreadable_search_makes_the_evidence_unavailable(self) -> None:
+    unreadable = search_retrieval('Error calling tool')
+    assert unreadable is not None
+    spans = [self._span('r', 0), self._span('ok', 1, self._search(('d1', 'one'))), self._span('bad', 2, unreadable)]
+
+    [evidence] = with_retrieved_evidence(spans)[0].semantics.retrieval
+
+    self.assertEqual((evidence.availability, evidence.items), ('unavailable', []))
+    self.assertIn('bad', evidence.reason or '')
+
+  def test_without_a_search_the_root_gets_an_observed_empty_evidence(self) -> None:
+    [evidence] = with_retrieved_evidence([self._span('r', 0)])[0].semantics.retrieval
+
+    self.assertEqual((evidence.availability, evidence.items), ('available', []))
+
+  def test_a_search_output_is_results_a_failure_or_unreadable(self) -> None:
+    results: JsonValue = {'call_id': 'c', 'query': 'q', 'results': [{'rank': 1, 'id': 'd1', 'title': 't', 'text': 'x'}]}
+
+    readable: list[JsonValue] = [results, json.dumps(results)]
+    for output in readable:
+      found = search_retrieval(output)
+      assert found is not None
+      self.assertEqual(([item.id for item in found.items], found.availability), (['d1'], 'available'))
+    self.assertIsNone(search_retrieval('The search failed: the query is empty'))
+    unreadable_outputs: list[JsonValue] = ['Error calling tool', None, {'results': []}]
+    for output in unreadable_outputs:
+      unreadable = search_retrieval(output)
+      assert unreadable is not None
+      self.assertEqual(unreadable.availability, 'unavailable')
 
 
 if __name__ == '__main__':

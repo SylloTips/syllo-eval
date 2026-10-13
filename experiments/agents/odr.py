@@ -42,7 +42,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import SettingsConfigDict
 
 from syllo_eval.evaluation.trace_adapter import PhoenixTraceAdapter, TraceProcessingResult
@@ -53,7 +53,7 @@ from syllo_eval.trace_semantics import Answer, SpanSemantics
 from ablation_metrics import SEARCH_SPAN_TYPE
 from config import Configuration, ExperimentConfig, ModelRef
 from indexing.embedding import AzureFoundrySettings
-from search_tool.search import SearchResults
+from search_tool.search import search_retrieval, with_retrieved_evidence
 from search_tool.server import PATH, TOOL_NAME
 
 ROOT_SPAN_NAME = 'odr.request'
@@ -461,7 +461,8 @@ class OdrTraceAdapter:
   """The canonical trace of one ODR run: its root answers the question, and each search is a retrieval for it.
 
   A search becomes a retrieval span when its output is the search tool's JSON, which LangChain's MCP client returns as
-  text blocks. A failed search, whose output is an error message, stays a tool span: it is not a search unit. A trace
+  text blocks. A failed search, whose output is the server's error message, stays a tool span; any other output becomes
+  a retrieval span whose results are unavailable. A trace
   with an LLM call to any model but ``model`` is refused, so that every phase is known to use it.
   """
 
@@ -486,20 +487,18 @@ class OdrTraceAdapter:
         semantics = SpanSemantics(request=question, answer=Answer(text=answer) if answer and answer.strip() else None)
         span = span.model_copy(update={'semantics': semantics})
       elif (span.metadata or {}).get('attributes.tool.name') == TOOL_NAME:
-        found = _search_results(span.output_data)
-        if found is not None:
-          semantics = SpanSemantics(request=question, retrieval=[found.retrieval()])
+        retrieval = search_retrieval(_search_text(span.output_data))
+        if retrieval is not None:
+          semantics = SpanSemantics(request=question, retrieval=[retrieval])
           span = span.model_copy(update={'span_type': SEARCH_SPAN_TYPE, 'semantics': semantics})
       spans.append(span)
-    return TraceProcessingResult(trace=base.trace.model_copy(update={'adapter': 'odr:1'}), spans=spans)
+    return TraceProcessingResult(
+      trace=base.trace.model_copy(update={'adapter': 'odr:2'}), spans=with_retrieved_evidence(spans)
+    )
 
 
-def _search_results(output: Any) -> SearchResults | None:
-  """The search tool's results in a search span's output, or None for a failed search."""
+def _search_text(output: Any) -> Any:
+  """A search span's output as the tool wrote it: LangChain's MCP client splits it into text blocks."""
   if not isinstance(output, list):
-    return None
-  text = ''.join(block['text'] for block in output if isinstance(block, dict) and block.get('type') == 'text')
-  try:
-    return SearchResults.model_validate_json(text)
-  except ValidationError:
-    return None
+    return output
+  return ''.join(block['text'] for block in output if isinstance(block, dict) and block.get('type') == 'text')

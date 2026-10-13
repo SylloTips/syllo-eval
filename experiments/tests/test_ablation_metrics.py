@@ -44,6 +44,7 @@ from metric_fakes import (
   truths,
   without_judge_keys,
 )
+from search_tool.search import with_retrieved_evidence
 
 LIMIT = 65_536
 SEARCH = (SEARCH_SPAN_TYPE,)
@@ -195,7 +196,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(_plan_items(ablation, UNIT_SPANS), _plan_items(main, UNIT_SPANS))
 
   async def test_one_call_gives_the_main_pass_result_for_the_same_decisions(self) -> None:
-    target = search_span('s', ['d1', 'd2'])
+    target = search_span('s', ['d1', 'd2'], stage='retrieved')
     main_judge = ScriptedJudge(
       recall_judgments((CLAIMS[0].text, True)), recall_judgments(('It was approved in March.', False))
     )
@@ -227,7 +228,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
       output_token_limit=LIMIT,
       rubric_addition='Cite the policy.',
     )
-    items = [RetrievedItem(item) for item in search_span('s', ['d1']).semantics.retrieval[0].items]
+    items = [RetrievedItem(item) for item in search_span('s', ['d1'], stage='retrieved').semantics.retrieval[0].items]
 
     built_in_system = _paragraphs(built_in.build_system_prompt())
     system = _paragraphs(ablation.build_single_call_system_prompt())
@@ -236,7 +237,9 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn(definition, system[0])
     self.assertEqual(system[1:], built_in_system[1:])
     user = _paragraphs(ablation.build_single_call_user_prompt(items, [claim.text for claim in CLAIMS]))
-    built_in_user = _paragraphs(built_in.build_user_prompt(search_span('s', ['d1']), items, CLAIMS[0].text))
+    built_in_user = _paragraphs(
+      built_in.build_user_prompt(search_span('s', ['d1'], stage='retrieved'), items, CLAIMS[0].text)
+    )
     self.assertEqual(user[1], built_in_user[1])
     self.assertEqual(user[2], 'Statements:\n1. Dana approved the budget.\n2. It was approved in May.')
 
@@ -244,7 +247,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)))
     metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
 
-    result = await metric.compute(search_span('s', ['d1']), truths(claims_truth(*CLAIMS)))
+    result = await metric.compute(search_span('s', ['d1'], stage='retrieved'), truths(claims_truth(*CLAIMS)))
 
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None and result.raw_output is not None
@@ -258,7 +261,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
       judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)), output_tokens=output_tokens)
       metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(output_tokens=output_tokens):
-        result = await metric.compute(search_span('s', ['d1']), truths(claims_truth(*CLAIMS)))
+        result = await metric.compute(search_span('s', ['d1'], stage='retrieved'), truths(claims_truth(*CLAIMS)))
         assert result.metadata is not None
         self.assertEqual(result.metadata['failure'], failure)
 
@@ -338,6 +341,11 @@ class RenderWholeTraceTest(unittest.TestCase):
     self.assertIn('output:\nSearch the knowledge base.', rendered)
     self.assertNotIn('"answer": "Dana did."', rendered)
     self.assertNotIn('budget approval', rendered)
+
+  def test_the_targets_copy_of_its_searches_is_left_out(self) -> None:
+    spans = _trace()
+
+    self.assertEqual(render_whole_trace(with_retrieved_evidence(spans), 'root'), render_whole_trace(spans, 'root'))
 
   def test_a_plan_renders_only_its_observed_step_fields(self) -> None:
     steps = [PlannedStep(id='1', operation='lookup'), PlannedStep(id='2', operation='search', parameters={'q': 'x'})]

@@ -56,9 +56,10 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
 
     self.assertEqual([metric.name for metric in tau2], ['plan_efficiency'])
     self.assertEqual(
-      [metric.name for metric in search], ['set_precision_document', 'set_recall_document', 'ndcg_at_10_document']
+      [metric.name for metric in search],
+      ['set_precision_retrieved_document', 'set_recall_retrieved_document', 'ndcg_at_10_document'],
     )
-    self.assertEqual({metric.target_span_types for metric in search}, {('retrieval',)})
+    self.assertEqual([metric.target_span_types for metric in search], [('agent_root',)] * 2 + [('retrieval',)])
 
   def test_each_stack_names_the_search_server_it_calls(self) -> None:
     config = load_config()

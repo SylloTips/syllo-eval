@@ -18,7 +18,15 @@ from pydantic import Field, JsonValue
 from config import EmbeddingConfig
 from indexing.embedding import AzureFoundrySettings, open_embedding_client
 from indexing.vector_store import QdrantSettings, open_search_index
-from search_tool.search import RESULTS, CallLog, KnowledgeBaseSearch, RandomSwap, SearchError, SearchResults
+from search_tool.search import (
+  FAILURE_PREFIX,
+  RESULTS,
+  CallLog,
+  KnowledgeBaseSearch,
+  RandomSwap,
+  SearchError,
+  SearchResults,
+)
 
 TOOL_NAME = 'search_knowledge_base'
 PATH = '/mcp'
@@ -50,7 +58,7 @@ def build_server(search: KnowledgeBaseSearch, settings: Mapping[str, JsonValue])
     try:
       return await search.search(query)
     except SearchError as error:
-      raise ToolError(f'The search failed: {error}') from error
+      raise ToolError(f'{FAILURE_PREFIX}{error}') from error
     except Exception:
       # FastMCP turns it into a tool error; its own traceback is silenced (cli.py), so it is logged here.
       logger.exception('Search for %r failed unexpectedly', query)

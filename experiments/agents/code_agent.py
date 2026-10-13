@@ -17,7 +17,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from pydantic import Field, ValidationError
+from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 from smolagents import CodeAgent, LiteLLMModel, LogLevel, MCPClient
 
@@ -29,7 +29,7 @@ from syllo_eval.trace_semantics import Answer, SpanSemantics
 from ablation_metrics import SEARCH_SPAN_TYPE
 from config import Configuration, ExperimentConfig
 from indexing.embedding import AzureFoundrySettings
-from search_tool.search import SearchResults
+from search_tool.search import search_retrieval, with_retrieved_evidence
 from search_tool.server import TOOL_NAME
 
 ROOT_SPAN_NAME = 'smolagents.request'
@@ -112,7 +112,8 @@ def build_caller(
 class CodeAgentTraceAdapter:
   """Searches that returned the search tool's JSON become retrieval spans, with the question as their request.
 
-  A failed search, whose output is an error message, stays a tool span: it is not a search unit.
+  A failed search, whose output is the server's error message, stays a tool span. Any other output becomes a retrieval
+  span whose results are unavailable.
   """
 
   def normalize(self, trace_id: str, records: list[dict[str, Any]]) -> TraceProcessingResult:
@@ -130,12 +131,11 @@ class CodeAgentTraceAdapter:
         semantics = SpanSemantics(request=question, answer=Answer(text=answer) if answer and answer.strip() else None)
         span = span.model_copy(update={'semantics': semantics})
       elif (span.metadata or {}).get('attributes.tool.name') == TOOL_NAME:
-        try:
-          retrieval = SearchResults.model_validate(span.output_data).retrieval()
-        except ValidationError:
-          pass
-        else:
+        retrieval = search_retrieval(span.output_data)
+        if retrieval is not None:
           semantics = SpanSemantics(request=question, retrieval=[retrieval])
           span = span.model_copy(update={'span_type': SEARCH_SPAN_TYPE, 'semantics': semantics})
       spans.append(span)
-    return TraceProcessingResult(trace=base.trace.model_copy(update={'adapter': 'smolagents:1'}), spans=spans)
+    return TraceProcessingResult(
+      trace=base.trace.model_copy(update={'adapter': 'smolagents:2'}), spans=with_retrieved_evidence(spans)
+    )

@@ -245,8 +245,9 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
   {"call_id": "87e80b95…", "query": "…", "results": [{"rank": 1, "id": "…", "title": "…", "text": "…"}, …]}
   ```
 
-  A search unit is a tool output that parses as such an object; anything else is a failed call, since the agents'
-  clients do not all keep MCP's error flag. The server's own failures read `The search failed: <reason>`.
+  A successful search is a tool output that parses as such an object, and a failed one reads
+  `The search failed: <reason>`: the adapters read the text, since the agents' clients do not all keep MCP's error
+  flag. Any other output is unreadable, and makes the question's retrieved evidence unavailable.
 - **Determinism:** the same query always returns the same documents. Qdrant ranks the documents both ways, and the
   server cuts and fuses the rankings itself, ordering equal scores by id: Qdrant's own fusion orders ties at random,
   and its cut picks among tied documents by how it stores them.
@@ -392,19 +393,29 @@ change.
 |---|---|---|---|
 | `contextual_precision_document_judge` (built-in) | one search call | one per document | |
 | `contextual_precision_document_judge_sc` | one search call | one | `contextual_precision_document_judge` |
-| `contextual_recall_gold_claims` | one search call | one per gold claim | |
-| `contextual_recall_gold_claims_sc` | one search call | one | `contextual_recall_gold_claims` |
+| `contextual_recall_gold_claims` | one question | one per gold claim | |
+| `contextual_recall_gold_claims_sc` | one question | one | `contextual_recall_gold_claims` |
 | `answer_correctness_judge` (built-in) | one question | one | |
 | `answer_correctness_judge_wt` | one question | one | `answer_correctness_judge` |
 | `plan_correctness_judge` (built-in) | one τ²-bench trajectory | one | |
 | `plan_correctness_judge_wt` | one τ²-bench trajectory | one | `plan_correctness_judge` |
 | `deepeval_contextual_precision` | one search call | one | `contextual_precision_document_judge` |
-| `deepeval_contextual_recall_gold_claims` | one search call | one | `contextual_recall_gold_claims` |
+| `deepeval_contextual_recall_gold_claims` | one question | one | `contextual_recall_gold_claims` |
 | `deepeval_answer_correctness` | one question | one | `answer_correctness_judge` |
 
-- **Search units:** the retrieval metrics are built with `target_span_types=(SEARCH_SPAN_TYPE,)`, so each search call
-  is one unit. Each agent's adapter must emit every search call as a `retrieval` span, with the user question as its
-  request and the returned documents as one ranked `selected` document result.
+- **Retrieval units:** each agent's adapter reads every search output with `search_retrieval`
+  (`search_tool/search.py`):
+  - the tool's results become a `retrieval` span, with the user question as its request and the documents as one
+    ranked `selected` document result;
+  - the tool's error message (`The search failed: …`) leaves a tool span;
+  - any other output becomes a `retrieval` span whose result is `unavailable`.
+
+  `with_retrieved_evidence` then gives the agent root the retrieved evidence: one unranked document result at the
+  `retrieved` stage, holding each document of the question's searches once, in order of first appearance. It is
+  empty when no search succeeded, and `unavailable` when a search output could not be read. Contextual precision and
+  NDCG@10 are built with `target_span_types=(SEARCH_SPAN_TYPE,)`, so each search call is one unit.
+  `contextual_recall_gold_claims`, `set_precision_retrieved_document` and `set_recall_retrieved_document` read the
+  root's `retrieved` stage, so each question is one unit; the built-in metrics read `selected` and skip the root.
 - **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
   never decomposes the expected answer, so a unit makes one judge call per claim. Recall over `decomposed_claims` (RQ2)
   and `expected_claims_verified` (RQ3) is the same subclass with another key, once those ground truths are imported.
@@ -445,8 +456,8 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
 
 - **What it does:** a fresh syllo-eval run of one configuration on every sample of its benchmark. The run calls the
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
-  τ²-bench, and set precision, set recall and NDCG@10 of each search on ERB and WixQA. Judge metrics repeat the run
-  later, on its stored traces.
+  τ²-bench, and on ERB and WixQA set precision and set recall of each question's retrieved evidence and NDCG@10 of
+  each search. Judge metrics repeat the run later, on its stored traces.
 - **Agents:** every stack has a caller: τ²-bench's agent, the Dify agent, the smolagents CodeAgent and Open Deep
   Research. A stack without one fails type checking in `collect.build_integration`.
 - **Search server:** before any sample, the collection of an agent that searches reads the settings of the server that
