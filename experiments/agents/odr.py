@@ -114,7 +114,7 @@ class OdrSettings(EnvSettings):
   max_attempts: int = Field(default=3, ge=1)
   retry_delay_seconds: float = Field(default=60.0, ge=0)
   # A provider can hold a request open for good, and neither ODR nor Anthropic's client sets a timeout.
-  timeout_seconds: float = Field(default=3600.0, gt=0)
+  timeout_seconds: float = Field(default=1200.0, gt=0)
   # DeepSeek is a deployment of the Foundry resource at AZURE_FOUNDRY_BASE_URL, called through its Azure OpenAI API.
   azure_api_version: str = Field(default='2025-04-01-preview', min_length=1)
 
@@ -256,7 +256,7 @@ class OdrCaller:
     metadata: Mapping[str, Any],
     max_attempts: int = 3,
     retry_delay_seconds: float = 60.0,
-    timeout_seconds: float = 3600.0,
+    timeout_seconds: float = 1200.0,
     graph: Any = deep_research.deep_researcher,
   ):
     self._config = {'configurable': dict(configurable)}

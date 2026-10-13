@@ -366,7 +366,7 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
     too: ODR then ends its research and writes the report from what the earlier rounds found;
   - ODR wrote an error in place of its report;
   - spans of the run did not reach Phoenix;
-  - the run took longer than `ODR_TIMEOUT_SECONDS` (3600): Anthropic's client sets no request timeout.
+  - the run took longer than `ODR_TIMEOUT_SECONDS` (1200): Anthropic's client sets no request timeout.
 
   Any other failure fails the sample at once. The agent's own failures count as they happen:
   - a search that the server answered with an error, such as an empty query, is a failed call;
