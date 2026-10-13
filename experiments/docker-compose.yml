@@ -29,7 +29,7 @@ services:
       - qdrant:/qdrant/storage
 
   phoenix:
-    image: arizephoenix/phoenix:version-20.19.0
+    image: arizephoenix/phoenix:version-20.21.0
     environment:
       PHOENIX_POSTGRES_HOST: db
       PHOENIX_POSTGRES_USER: postgres
