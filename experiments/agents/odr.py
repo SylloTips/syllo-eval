@@ -21,12 +21,16 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import anthropic
+import httpx
 import open_deep_research.deep_researcher as deep_research
+import open_deep_research.utils as odr_utils
 import openai
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_core.tools import ToolException
+from langchain_core.tools import BaseTool, ToolException
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from open_deep_research.configuration import Configuration as OdrSettingNames
 from open_deep_research.utils import get_all_tools
 from openinference.instrumentation.langchain import LangChainInstrumentor
@@ -65,6 +69,38 @@ _FLUSH_TIMEOUT_MILLIS = 120_000
 _SPAN_QUEUE_SIZE = 1_000_000
 
 logger = logging.getLogger(__name__)
+_CONNECT_TIMEOUT_SECONDS = 2.0
+_CONNECT_RETRIES = 2
+_search_tools: dict[str, list[BaseTool]] = {}
+
+
+def _http_client(
+  headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None, auth: httpx.Auth | None = None
+) -> httpx.AsyncClient:
+  timeout = timeout or httpx.Timeout(30.0)
+  return httpx.AsyncClient(
+    headers=headers,
+    auth=auth,
+    follow_redirects=True,
+    timeout=httpx.Timeout(timeout.read, connect=_CONNECT_TIMEOUT_SECONDS, write=timeout.write, pool=timeout.pool),
+    transport=httpx.AsyncHTTPTransport(retries=_CONNECT_RETRIES),
+  )
+
+
+async def _load_search_tools(config: Any, existing_tool_names: set[str]) -> list[BaseTool]:
+  mcp_config = OdrSettingNames.from_runnable_config(config).mcp_config
+  url = mcp_config.url.rstrip('/') + PATH
+  if url not in _search_tools:
+    connection = StreamableHttpConnection(url=url, transport='streamable_http', httpx_client_factory=_http_client)
+    tools = await MultiServerMCPClient({'search': connection}).get_tools()
+    tools = [odr_utils.wrap_mcp_authenticate_tool(tool) for tool in tools if tool.name in mcp_config.tools]
+    if not tools:
+      return []
+    _search_tools[url] = tools
+  return _search_tools[url]
+
+
+odr_utils.load_mcp_tools = _load_search_tools
 
 
 class OdrSettings(EnvSettings):
@@ -78,7 +114,7 @@ class OdrSettings(EnvSettings):
   max_attempts: int = Field(default=3, ge=1)
   retry_delay_seconds: float = Field(default=60.0, ge=0)
   # A provider can hold a request open for good, and neither ODR nor Anthropic's client sets a timeout.
-  timeout_seconds: float = Field(default=3600.0, gt=0)
+  timeout_seconds: float = Field(default=1200.0, gt=0)
   # DeepSeek is a deployment of the Foundry resource at AZURE_FOUNDRY_BASE_URL, called through its Azure OpenAI API.
   azure_api_version: str = Field(default='2025-04-01-preview', min_length=1)
 
@@ -220,7 +256,7 @@ class OdrCaller:
     metadata: Mapping[str, Any],
     max_attempts: int = 3,
     retry_delay_seconds: float = 60.0,
-    timeout_seconds: float = 3600.0,
+    timeout_seconds: float = 1200.0,
     graph: Any = deep_research.deep_researcher,
   ):
     self._config = {'configurable': dict(configurable)}
@@ -256,9 +292,13 @@ class OdrCaller:
         attempt += 1
 
   async def _run(self, question: str, request_id: str) -> None:
-    # ODR loads the tools at every researcher step and drops an unreachable server without an error.
-    if TOOL_NAME not in {tool.name for tool in await get_all_tools(self._config)}:
-      raise _TransientError(f'the search tool is unreachable at {self._config["configurable"]["mcp_config"]["url"]}')
+    url = self._config['configurable']['mcp_config']['url']
+    try:
+      tools = await get_all_tools(self._config)
+    except Exception as error:
+      raise _TransientError(f'the search tool is unreachable at {url}: {error!r}') from error
+    if TOOL_NAME not in {tool.name for tool in tools}:
+      raise _TransientError(f'the search tool is unreachable at {url}')
     watch = RunWatch()
     attributes = {
       'request_id': request_id,

@@ -2,7 +2,9 @@
 
 import argparse
 import asyncio
+import faulthandler
 import logging
+import signal
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
@@ -200,6 +202,7 @@ def _fraction(value: str) -> float:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+  faulthandler.register(signal.SIGUSR1, file=2)
   args = build_parser().parse_args(argv)
   if args.command == 'configurations':
     config = load_config(args.config_dir)
