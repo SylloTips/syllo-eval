@@ -350,6 +350,7 @@ any per-sample `rubric` still apply. The report's `run.config` records the addit
 Each computed metric records its `latency_seconds` in its metadata; judge metrics also record their judge calls,
 client-level attempts, provider latency, and token usage, including cached and reasoning tokens when the provider
 reports them. The report sums judge calls and cached input tokens per run and per sample, separately from agent usage.
+A token total is `null` when no call reported that count, so an unreported count is never shown as zero.
 
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.

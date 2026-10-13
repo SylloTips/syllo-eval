@@ -25,7 +25,7 @@ from syllo_eval.model import (
   Span,
 )
 
-_REPORT_VERSION = '2.0'
+_REPORT_VERSION = '3.0'
 _TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens')
 _FAILURE_PHASES = ('agent_call', 'trace_fetch', 'metric_compute', 'unknown')
 _FAILURE_PHASE_SET = set(_FAILURE_PHASES)
@@ -82,10 +82,10 @@ class EvaluationReportMetricComputationCounts(BaseModel):
 
 
 class EvaluationReportTokenUsage(BaseModel):
-  input_tokens: int
-  output_tokens: int
-  total_tokens: int
-  cached_input_tokens: int
+  input_tokens: int | None
+  output_tokens: int | None
+  total_tokens: int | None
+  cached_input_tokens: int | None
   sources_with_data: int
   sources_total: int
 
@@ -600,14 +600,14 @@ def _build_token_usage_section(
 
 
 def _sum_token_usage(usages: Iterable[Mapping[str, int]], sources_total: int) -> EvaluationReportTokenUsage:
-  totals = {key: 0 for key in _TOKEN_USAGE_KEYS}
+  totals: dict[str, int | None] = dict.fromkeys(_TOKEN_USAGE_KEYS)
   sources_with_data = 0
   for usage in usages:
     sources_with_data += 1
     for key in _TOKEN_USAGE_KEYS:
       value = usage.get(key)
       if isinstance(value, int):
-        totals[key] += value
+        totals[key] = (totals[key] or 0) + value
   return EvaluationReportTokenUsage(
     **totals,
     sources_with_data=sources_with_data,
