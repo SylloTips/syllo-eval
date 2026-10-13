@@ -15,6 +15,7 @@ import anthropic
 import httpx
 import httpx2
 import open_deep_research.deep_researcher as deep_research
+import open_deep_research.utils as odr_utils
 import uvicorn
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -256,6 +257,25 @@ def _tools(*names: str) -> list[MagicMock]:
     tool.name = name
     tools.append(tool)
   return tools
+
+
+class SearchToolsTest(unittest.IsolatedAsyncioTestCase):
+  @patch.dict('agents.odr._search_tools', clear=True)
+  async def test_the_search_tool_is_discovered_once_per_server_and_connects_with_retries(self) -> None:
+    config = {'configurable': {'mcp_config': {'url': 'http://127.0.0.1:8101', 'tools': [TOOL_NAME]}}}
+    with patch('agents.odr.MultiServerMCPClient') as client:
+      client.return_value.get_tools = AsyncMock(return_value=_tools(TOOL_NAME, 'other'))
+      first = await odr_utils.load_mcp_tools(config, set())
+      second = await odr_utils.load_mcp_tools(config, set())
+
+    self.assertEqual(client.call_count, 1)
+    self.assertIs(first, second)
+    self.assertEqual([tool.name for tool in first], [TOOL_NAME])
+    connection = client.call_args.args[0]['search']
+    self.assertEqual(connection['url'], f'http://127.0.0.1:8101{PATH}')
+    http = connection['httpx_client_factory'](timeout=httpx.Timeout(30, read=300))
+    self.assertEqual((http.timeout.connect, http.timeout.read), (2.0, 300))
+    await http.aclose()
 
 
 class OdrCallerTest(unittest.IsolatedAsyncioTestCase):

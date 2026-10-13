@@ -350,6 +350,10 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
   - The adapter refuses a trace with an LLM call to any other model.
 - **Search:** `ODR_SEARCH_URL`, by default `http://127.0.0.1:8101`, with the server on the configuration's collection.
   It is the server's base URL: ODR appends `/mcp` itself.
+  - ODR looks the tool up before every researcher step and goes on without it when the lookup fails. The caller
+    replaces that lookup with one that runs once per server and process, and fails instead of returning no tools.
+  - Each search still opens its own connection, with a 2-second connect timeout and two retries. A connection that
+    fails never reaches the server, so a retry repeats no search or embedding; the read timeout is unchanged.
 - **Trace:** the caller's root span `odr.request` holds the `request_id`, the question and the report as text, without
   the thinking that Sonnet's reply also holds. Every search whose output is the search tool's JSON, which LangChain's
   MCP client returns as text blocks, is a retrieval span with its ten documents; a failed search stays a tool span.
@@ -357,8 +361,7 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
   the run through LangChain's callbacks, and a question runs again from the start, with a new request id, up to
   `ODR_MAX_ATTEMPTS` attempts (3), `ODR_RETRY_DELAY_SECONDS` (60) apart, when:
   - the search tool was unreachable: before the run, for a researcher's model call or tool step, or for a search that
-    got no answer from the server. ODR drops a server it cannot reach without an error, and its researchers go on
-    without searching;
+    got no answer from the server after the connection retries;
   - a provider's rate limit, outage or connection error outlasted the retries of ODR and of the client, in a researcher
     too: ODR then ends its research and writes the report from what the earlier rounds found;
   - ODR wrote an error in place of its report;
