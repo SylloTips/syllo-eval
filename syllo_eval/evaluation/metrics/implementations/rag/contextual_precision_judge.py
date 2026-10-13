@@ -30,11 +30,21 @@ class ContextualPrecisionJudgePayload(BaseModel):
   judgments: list[ContextualPrecisionJudgment]
 
 
+class ContextualPrecisionItemJudgment(BaseModel):
+  retrieved_id: str
+  relevant: bool
+  reasoning: str
+
+
+class ContextualPrecisionItemJudgePayload(BaseModel):
+  judgments: list[ContextualPrecisionItemJudgment]
+
+
 class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
   """Scores whether relevant retrieved items appear early in the ranked list."""
 
   variant: str = ''
-  prompt_version = 'v1'
+  prompt_version = 'v2'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
   accepts_target_span_types = True
@@ -106,7 +116,7 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
     """
     ranked_items = [(rank, item) for items in rankings for rank, item in enumerate(items, start=1)]
     judge_responses, failure = await judge_batch(
-      (self._judge_retrieved_item(span, ground_truth, rank, item) for rank, item in ranked_items),
+      (self._judge_retrieved_item(span, ground_truth, item) for _, item in ranked_items),
       max_output_tokens=self.max_output_tokens,
     )
     if failure is not None:
@@ -119,7 +129,7 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
         return self._failed_judgment_count_result(
           [item for _, item in ranked_items], rank, payload, result, judge_responses
         )
-      judgments.append(payload.judgments[0])
+      judgments.append(ContextualPrecisionJudgment(rank=rank, **payload.judgments[0].model_dump()))
     return judge_responses, judgments
 
   def _build_result(
@@ -191,27 +201,26 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
       rubric_addition=self._rubric_addition,
     )
 
-  def build_user_prompt(self, span: Span, ground_truth: GroundTruth, rank: int, item: RetrievedItem) -> str:
+  def build_user_prompt(self, span: Span, ground_truth: GroundTruth, item: RetrievedItem) -> str:
     return render_prompt(
       f'contextual_precision/{self.prompt_version}/user.md',
       variant=self.variant,
       request=span.semantics.request or '<empty>',
       expected_answer=ground_truth.ground_truth_value['expected_output'],
-      item=item.render_for_prompt(rank),
+      item=item.render_for_prompt(),
     )
 
   async def _judge_retrieved_item(
     self,
     span: Span,
     ground_truth: GroundTruth,
-    rank: int,
     item: RetrievedItem,
-  ) -> LlmJudgeResponse[ContextualPrecisionJudgePayload]:
+  ) -> LlmJudgeResponse[ContextualPrecisionItemJudgePayload]:
     return await self._judge_client.judge(
       LlmJudgeRequest(
         system_prompt=self.build_system_prompt(),
-        user_prompt=self.build_user_prompt(span, ground_truth, rank, item),
-        response_model=ContextualPrecisionJudgePayload,
+        user_prompt=self.build_user_prompt(span, ground_truth, item),
+        response_model=ContextualPrecisionItemJudgePayload,
         temperature=0.0,
         max_output_tokens=self.max_output_tokens,
       )
@@ -221,7 +230,7 @@ class _BaseContextualPrecisionJudgeMetric(SpanEvaluationMetric):
     self,
     retrieved_items: list[RetrievedItem],
     rank: int,
-    payload: ContextualPrecisionJudgePayload,
+    payload: ContextualPrecisionItemJudgePayload,
     judge_response: LlmJudgeResponse,
     responses: list[LlmJudgeResponse],
   ) -> MetricComputationResult:

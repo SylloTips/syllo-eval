@@ -126,7 +126,7 @@ class ContextualPrecisionSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn(definition, system[0])
     self.assertEqual(system[1:], built_in_system[1:])
     user = _paragraphs(ablation.build_single_call_user_prompt(target, truth(), items))
-    built_in_user = _paragraphs(built_in.build_user_prompt(target, truth(), 1, items[0]))
+    built_in_user = _paragraphs(built_in.build_user_prompt(target, truth(), items[0]))
     self.assertEqual(user[1:3], built_in_user[1:3])
     self.assertIn('Rank 1\nretrieved_id: d1', user[3])
     self.assertIn('Rank 2\nretrieved_id: d2', '\n\n'.join(user[3:]))

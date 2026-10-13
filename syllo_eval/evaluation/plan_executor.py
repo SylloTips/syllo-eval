@@ -4,6 +4,8 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
+from contextvars import ContextVar
+from typing import Any
 from uuid import UUID, uuid4
 
 from syllo_eval.evaluation.metric_planner import MetricPlanItem
@@ -13,6 +15,8 @@ from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import MetricComputation, MetricComputationStatus
 
 logger = logging.getLogger(__name__)
+
+sample_cache: ContextVar[dict[Any, Any]] = ContextVar('sample_cache')
 
 
 class PlanExecutor:
@@ -42,6 +46,20 @@ class PlanExecutor:
     Returns:
         List of persisted metric computation records, in plan item order.
     """
+    cache: dict[Any, Any] = {}
+    token = sample_cache.set(cache)
+    try:
+      return await self._execute(plan_items, evaluation_run_sample_id)
+    finally:
+      sample_cache.reset(token)
+      unfinished = [value for value in cache.values() if isinstance(value, asyncio.Future) and not value.done()]
+      for future in unfinished:
+        future.cancel()
+      await asyncio.gather(*unfinished, return_exceptions=True)
+
+  async def _execute(
+    self, plan_items: AsyncIterable[MetricPlanItem], evaluation_run_sample_id: UUID
+  ) -> list[MetricComputation]:
     pending: dict[asyncio.Task[MetricComputation], tuple[int, MetricPlanItem]] = {}
     computations_by_index: dict[int, MetricComputation] = {}
     failures: list[BaseException] = []

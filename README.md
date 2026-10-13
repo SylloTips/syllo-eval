@@ -359,6 +359,9 @@ ground-truth keys it reads in `ground_truth_keys`, and `compute(target, ground_t
 by key. Every declared key is required by default; override `ground_truth_skip_reason(ground_truths)` to make some
 optional or to accept any one of them, returning `None` when the metric can run. Each computation records the ground
 truths it used.
+Metric computations, and the judge calls they make, can share state for one sample in
+`syllo_eval.evaluation.plan_executor.sample_cache`: a dict that starts empty for each sample and is dropped when the
+sample's metrics end, cancelling and awaiting any unfinished future left in it.
 
 ## Configuration
 
