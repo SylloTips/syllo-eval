@@ -6,14 +6,14 @@ that a pilot runs on, goes to ``pilot/``.
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 
 import httpx
 
 from syllo_eval.infrastructure import DatabaseManager
 
-from benchmarks import erb, tau2, wixqa
+from benchmarks import erb, orbitals_claims, tau2, wixqa
 from syllo_eval.datasets.model import DatasetJsonPayload
 
 from benchmarks.common import (
@@ -65,6 +65,19 @@ async def import_converted(
   return await import_benchmark(db_manager, name=source.dataset_name, payload=payload, claims=claims)
 
 
+async def extract_claims(
+  name: str,
+  source: BenchmarkSource,
+  data_dir: Path,
+  extract_batch: Callable[[list[orbitals_claims.Conversation]], Awaitable[list[orbitals_claims.Extraction]]],
+  batch_size: int,
+) -> dict[str, int]:
+  payload, _ = _read_checked(name, source, data_dir)
+  directory = data_dir / name
+  path = directory / orbitals_claims.CLAIMS_FILE
+  return await orbitals_claims.extract(payload, read_records(directory), path, extract_batch, batch_size)
+
+
 def pilot_dataset_name(source: BenchmarkSource) -> str:
   return f'{source.dataset_name}-pilot'
 
@@ -109,4 +122,5 @@ def _read_checked(name: str, source: BenchmarkSource, data_dir: Path) -> tuple[D
     raise ValueError(f'{name} failed its checks, so it cannot be imported: {report["errors"]}')
   if report.get('source') != source.model_dump(mode='json'):
     raise ValueError(f'{name} was converted from other pins; run `syllo-exp benchmarks convert --only {name}` again')
-  return read_benchmark(directory)
+  payload, claims = read_benchmark(directory)
+  return payload, {**claims, **orbitals_claims.read(directory)}

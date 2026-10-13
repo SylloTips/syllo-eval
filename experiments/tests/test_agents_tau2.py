@@ -397,6 +397,14 @@ class BuildCallerTest(unittest.TestCase):
             'tokens_per_minute': 100_000,
             'max_request_tokens': 50_000,
           },
+          'claim_extractor': {
+            'provider': 'orbitals',
+            'model': 'extractor-1',
+            'label': 'Extractor',
+            'timeout_seconds': 60,
+            'batch_size': 2,
+            'ai_service_descriptions': {'kb': 'An assistant.'},
+          },
         },
         'configurations': [
           {'id': 'tau2/test/trial-2', 'benchmark': 'tau2', 'agent': 'tau2-llm-agent', 'model': 'model-a', 'trial': 2}

@@ -59,6 +59,7 @@ from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 from syllo_eval.trace_semantics import RetrievalResult
 
 from benchmarks.erb import CLAIMS_KEY as ERB_GOLD_CLAIMS_KEY
+from benchmarks.orbitals_claims import CLAIMS_KEY as ORBITALS_CLAIMS_KEY
 from config import EXPERIMENTS_DIR
 
 # Span type the agent adapters give each search call: its semantics carry the user question as the request, and the
@@ -95,6 +96,14 @@ class GoldClaimsContextualRecall(ContextualRecallDocumentStoredClaimsMetric):
   claims_key = ERB_GOLD_CLAIMS_KEY
   metric_name = 'contextual_recall_gold_claims'
   metric_description = 'Contextual recall over the ERB gold claims; one judge call per claim.'
+
+
+class OrbitalsClaimsContextualRecall(GoldClaimsContextualRecall):
+  claims_key = ORBITALS_CLAIMS_KEY
+  metric_name = 'contextual_recall_orbitals_claims'
+  metric_description = (
+    'Contextual recall over the Orbitals claims of the WixQA expected answer; one judge call per claim.'
+  )
 
 
 class ContextualPrecisionSC(ContextualPrecisionDocumentJudgeMetric):
