@@ -116,6 +116,7 @@ class PhoenixTraceAdapter:
         input_tokens=record.get('attributes.llm.token_count.prompt'),
         output_tokens=record.get('attributes.llm.token_count.completion'),
         total_tokens=record.get('attributes.llm.token_count.total'),
+        cached_input_tokens=record.get('attributes.llm.token_count.prompt_details.cache_read'),
         cost=cost,
         currency='USD' if cost is not None else None,
       )

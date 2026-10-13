@@ -187,6 +187,7 @@ class TestTraceProcessorLlmMetadata(unittest.IsolatedAsyncioTestCase):
         'attributes.llm.token_count.prompt': 12,
         'attributes.llm.token_count.completion': 5,
         'attributes.llm.token_count.total': 17,
+        'attributes.llm.token_count.prompt_details.cache_read': 8,
         'attributes.llm.cost.total': 0.0021,
       },
       {
@@ -221,9 +222,16 @@ class TestTraceProcessorLlmMetadata(unittest.IsolatedAsyncioTestCase):
     assert spans_by_id['span-llm-with-tokens'].semantics.usage is not None
     self.assertEqual(
       spans_by_id['span-llm-with-tokens'].semantics.usage.model_dump(
-        include={'input_tokens', 'output_tokens', 'total_tokens', 'cost', 'currency'}
+        include={'input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'cost', 'currency'}
       ),
-      {'input_tokens': 12, 'output_tokens': 5, 'total_tokens': 17, 'cost': 0.0021, 'currency': 'USD'},
+      {
+        'input_tokens': 12,
+        'output_tokens': 5,
+        'total_tokens': 17,
+        'cached_input_tokens': 8,
+        'cost': 0.0021,
+        'currency': 'USD',
+      },
     )
     without_tokens = spans_by_id['span-llm-without-tokens']
     self.assertNotIn('token_usage', without_tokens.metadata or {})
