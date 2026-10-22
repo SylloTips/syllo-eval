@@ -64,7 +64,7 @@ expected output of each step.
 | `dify/` | the Dify agent's DSL, configuration guide, and the Compose override that runs Dify beside Phoenix |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
-| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify |
+| `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify; `dify-patch-plugins.sh`, which adapts Dify's plugins to GPT models and token counting |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets |

@@ -45,6 +45,19 @@ Install from Plugins > Marketplace:
 The export pins the agent plugin, but its `dependencies` list is empty, so the import does not offer to install either
 plugin.
 
+Run `scripts/dify-patch-plugins.sh` once the plugins are installed. It patches both, then restarts the plugin daemon:
+
+- **Stop word:** the ReAct strategy adds the stop word `Observation` to every model call, and GPT models refuse the
+  `stop` parameter. For GPT 6 and later only, the agent plugin then sends no stop word and ignores the rest of a reply
+  after its first Action, as the stop word would have cut it; other models are unchanged.
+- **Token usage:** the ReAct strategy always streams, and the Azure AI Studio plugin reads token usage only from a
+  whole response. The plugin then calls the model without streaming and returns the whole reply as one chunk, with
+  its usage, and the agent logs each model call's input and output tokens, which the trace adapter reads. Cached
+  tokens stay unknown: Dify's API drops them between the plugins, since its usage model has no field for them.
+
+The patches are idempotent and check the plugin versions; reinstalling a plugin undoes its patch, so run the script
+again.
+
 ## 3. Model provider
 
 Under Integrations > Model Provider > Azure AI Studio, choose Add Model. This is Dify's
@@ -161,13 +174,15 @@ The trace adapter reads Dify's traces as follows:
   - `<model> Thought`, the model call, with its total tokens;
   - `CALL search_knowledge_base`, with `tool_call_args` and the output `tool response: <search JSON>`.
 
-  Token usage is only a total per call: prompt and completion tokens read zero. With the Azure AI Studio provider,
-  the total reads zero too, so Dify runs report no agent usage.
+  Unpatched, token usage is only a total per call, and with the Azure AI Studio provider it reads zero, so Dify runs
+  report no agent usage. With the patched plugins, each `Thought` entry's data also holds its `usage`: prompt and
+  completion tokens.
 - **Spans.** The adapter (`agents/dify.py`) reads the question (`sys.query`) and the answer from the root. It moves
   the `json` log out of the agent node's output into spans under the node, nested by the log's `parent_id`, each
   holding its entry's data as Dify logged it:
   - a `ROUND` is a chain span, with its thought, action and observation;
-  - a `Thought` is an LLM span, without usage, as Dify reports zero tokens;
+  - a `Thought` is an LLM span, with its input and output tokens when its entry holds `usage`, and without cached
+    tokens, which Dify does not report;
   - a `CALL` is a tool span, or a retrieval span with the question as its request when its output is the search
     tool's JSON, after the `tool response: ` prefix and before a trailing period.
 

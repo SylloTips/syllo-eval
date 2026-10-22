@@ -18,7 +18,7 @@ from pydantic_settings import SettingsConfigDict
 from syllo_eval.evaluation.trace_adapter import PhoenixTraceAdapter, TraceProcessingResult
 from syllo_eval.model import Sample, Span
 from syllo_eval.settings import EnvSettings
-from syllo_eval.trace_semantics import Answer, SpanSemantics
+from syllo_eval.trace_semantics import Answer, LlmUsage, SpanSemantics
 
 from ablation_metrics import SEARCH_SPAN_TYPE
 from search_tool.search import search_retrieval, with_retrieved_evidence
@@ -127,7 +127,7 @@ class DifyTraceAdapter:
           span = span.model_copy(update={'output_data': output, 'metadata': metadata})
       spans.append(span)
     return TraceProcessingResult(
-      trace=base.trace.model_copy(update={'adapter': 'dify:2'}), spans=with_retrieved_evidence(spans, unreadable)
+      trace=base.trace.model_copy(update={'adapter': 'dify:3'}), spans=with_retrieved_evidence(spans, unreadable)
     )
 
 
@@ -145,6 +145,7 @@ def _log_spans(agent: Span, log: Any, question: str) -> tuple[list[Span], list[d
     data, clock = entry.get('data') or {}, entry['metadata']
     start = agent.start_time + timedelta(seconds=clock['started_at'] - origin)
     is_tool = 'tool_name' in data
+    usage = None if is_tool else data.get('usage')
     span = Span(
       external_id=str(entry['id']),
       trace_id=agent.trace_id,
@@ -157,6 +158,17 @@ def _log_spans(agent: Span, log: Any, question: str) -> tuple[list[Span], list[d
       output_data=data.get('output') if is_tool else data,
       status='success' if entry.get('status') == 'success' else 'error' if entry.get('status') == 'error' else 'unset',
       metadata={'dify.agent_log.metadata': clock, 'dify.agent_log.error': entry.get('error')},
+      semantics=SpanSemantics(
+        usage=LlmUsage(
+          call_id=str(entry['id']),
+          provider=clock.get('provider'),
+          input_tokens=usage.get('prompt_tokens'),
+          output_tokens=usage.get('completion_tokens'),
+          total_tokens=clock.get('total_tokens'),
+        )
+        if isinstance(usage, dict)
+        else None
+      ),
     )
     if (
       data.get('tool_name') == TOOL_NAME
