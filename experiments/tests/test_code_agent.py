@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from agents.code_agent import ROOT_SPAN_NAME, CodeAgentTraceAdapter
+from agents.code_agent import ROOT_SPAN_NAME, CodeAgentTraceAdapter, _LiteLLMModel
 
 TRACE_ID = 'c' * 32
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
@@ -76,6 +76,18 @@ class CodeAgentTraceAdapterTest(unittest.TestCase):
     records[0]['parent_id'] = None
     with self.assertRaisesRegex(ValueError, ROOT_SPAN_NAME):
       CodeAgentTraceAdapter().normalize(TRACE_ID, records)
+
+
+class BuildCallerTest(unittest.TestCase):
+  def test_gpt_6_and_later_get_no_stop_sequences_as_smolagents_gives_gpt_5(self) -> None:
+    for model_id, supported in (
+      ('azure/gpt-6.1-sol', False),
+      ('azure/gpt-5.2', False),
+      ('azure_ai/DeepSeek-V4.1-Flash', True),
+      ('azure/gpt-4.1', True),
+    ):
+      with self.subTest(model_id=model_id):
+        self.assertIs(_LiteLLMModel(model_id=model_id).supports_stop_parameter, supported)
 
 
 if __name__ == '__main__':
