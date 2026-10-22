@@ -1,6 +1,6 @@
 """Append-only record of experiment steps and the evaluation runs they produced.
 
-Each step (for example ``collect:erb/react/sonnet``) appends one JSON line per status change; the latest line of a
+Each step (for example ``collect:erb/react/gpt``) appends one JSON line per status change; the latest line of a
 step is its current state, so a campaign can resume by skipping completed steps.
 """
 

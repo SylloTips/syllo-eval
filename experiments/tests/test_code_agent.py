@@ -1,9 +1,14 @@
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import patch
 
-from agents.code_agent import ROOT_SPAN_NAME, CodeAgentTraceAdapter, _LiteLLMModel
+from syllo_eval.settings import PhoenixSettings
+
+from agents.code_agent import ROOT_SPAN_NAME, CodeAgentTraceAdapter, _LiteLLMModel, build_caller
+from config import load_config
 
 TRACE_ID = 'c' * 32
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
@@ -79,6 +84,42 @@ class CodeAgentTraceAdapterTest(unittest.TestCase):
 
 
 class BuildCallerTest(unittest.TestCase):
+  def setUp(self) -> None:
+    self.config = load_config()
+    foundry = {'AZURE_FOUNDRY_BASE_URL': 'https://resource.services.ai.azure.com', 'AZURE_FOUNDRY_API_KEY': 'key'}
+    environment = {name: value for name, value in os.environ.items() if not name.startswith('SMOLAGENTS_')}
+    for patcher in (
+      patch.dict(os.environ, {**environment, **foundry}, clear=True),
+      patch('agents.code_agent.SmolagentsInstrumentor'),
+    ):
+      patcher.start()
+      self.addCleanup(patcher.stop)
+
+  def _model(self, configuration_id: str) -> dict[str, Any]:
+    configuration = self.config.configuration(configuration_id)
+    return build_caller(configuration, self.config, phoenix=PhoenixSettings(project_id='wixqa-d662dc4'))._model
+
+  def test_gpt_runs_through_the_azure_openai_api_of_the_foundry_resource(self) -> None:
+    self.assertEqual(
+      self._model('wixqa/smolagents/gpt'),
+      {
+        'model_id': 'azure/gpt-6.1-sol',
+        'api_base': 'https://resource.services.ai.azure.com',
+        'api_key': 'key',
+        'api_version': '2025-04-01-preview',
+      },
+    )
+
+  def test_deepseek_runs_through_the_model_inference_api_of_the_foundry_resource(self) -> None:
+    self.assertEqual(
+      self._model('wixqa/smolagents/deepseek'),
+      {
+        'model_id': 'azure_ai/DeepSeek-V4.1-Flash',
+        'api_base': 'https://resource.services.ai.azure.com/models',
+        'api_key': 'key',
+      },
+    )
+
   def test_gpt_6_and_later_get_no_stop_sequences_as_smolagents_gives_gpt_5(self) -> None:
     for model_id, supported in (
       ('azure/gpt-6.1-sol', False),

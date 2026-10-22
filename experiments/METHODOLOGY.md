@@ -98,8 +98,8 @@ Open Deep Research runs unmodified, at commit `1b7d2e8` of `langchain-ai/open_de
   compression of their findings and the report.
   - ODR sets each phase's output limit: 10,000 tokens for the brief, the supervisor and the researchers, 8,192 for
     the compression, 10,000 for the report. Every other parameter is the provider's default.
-  - Sonnet thus runs with adaptive thinking, which counts toward the limit, and DeepSeek-V4.1-Flash, from an Azure AI
-    Foundry deployment, at its default temperature.
+  - Both models are Azure AI Foundry deployments. GPT 6.1 Sol thus runs with its default reasoning, which counts
+    toward the limit, and DeepSeek-V4.1-Flash at its default temperature.
 - **Limits:** ODR's defaults: at most 5 researchers at once, 6 supervisor rounds, and 10 model calls per researcher,
   each of which can call several tools at once. Each model call of the brief, the supervisor and the researchers gets 3
   attempts.
@@ -129,14 +129,15 @@ Each τ²-bench configuration runs τ²-bench's own agent on all 114 retail task
 and a simulated customer take turns until one of them ends the conversation.
 
 - **Models:** the agent model is the configuration's.
-  - Sonnet runs with a 16,000-token output limit and the API's defaults otherwise: high effort, and adaptive thinking,
-    which it cannot turn off. It accepts no sampling parameters.
+  - GPT 6.1 Sol runs with the API's defaults, from an Azure AI Foundry deployment: its default reasoning, and no
+    sampling parameters, since GPT models take temperature 0 only with reasoning turned off. Its calls go to the
+    Responses API, as it takes function tools on Chat Completions only with reasoning turned off.
   - DeepSeek-V4.1-Flash runs at temperature 0, from an Azure AI Foundry deployment.
   - The customer is GPT 6 Luna, from an Azure AI Foundry deployment, at temperature 0 with reasoning turned off, which
     temperature 0 requires.
   - τ²-bench grades the natural-language assertions with the agent model and its arguments, as τ²-bench does.
 - **Trials:** four per model. Trial n uses the seed that τ²-bench's own runner gives its n-th trial from its default
-  base seed of 300: 626729, 373753, 361454 and 1567. Models that take no seed, such as Anthropic's, ignore it.
+  base seed of 300: 626729, 373753, 361454 and 1567. Models that take no seed ignore it.
 - **Limits:** τ²-bench's defaults. A simulation ends after 200 steps or 10 failed tool calls, and then it is scored
   like any other.
 - **Reward:** τ²-bench's evaluator scores every simulation, whatever ended it. The reward is recorded per simulation
@@ -306,7 +307,7 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   - It is the share of the 15 configuration pairs that differ significantly.
   - Significance uses a paired bootstrap over questions (B = 10,000) with Holm correction per metric at p < 0.05.
   - It is also computed for the human grades, R and NDCG@10, and for AC on the annotated questions.
-- **Known order:** ReAct/Sonnet on ERB with f = 0 ≻ 0.25 ≻ 0.5, checked with R and NDCG@10.
+- **Known order:** ReAct/GPT on ERB with f = 0 ≻ 0.25 ≻ 0.5, checked with R and NDCG@10.
 
 ## RQ3 constructions
 

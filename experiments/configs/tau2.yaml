@@ -3,10 +3,14 @@
 # as tau2 grades with the agent model.
 
 # litellm arguments per agent model (keys of models.yaml), passed as tau2's llm_args.
-# Sonnet 5.5 accepts no sampling parameters; DeepSeek keeps tau2's default temperature.
+# GPT 6.1 Sol keeps the provider's defaults: GPT models take tau2's default temperature 0 only without reasoning.
+# DeepSeek keeps tau2's default temperature.
 agent_llm_args:
-  sonnet: { max_tokens: 16000 }
+  gpt: {}
   deepseek: { temperature: 0.0 }
+# Agent models called through the Responses API, by litellm's azure/responses/ route: GPT 6.1 Sol refuses function
+# tools on Chat Completions unless its reasoning is turned off.
+responses_api_models: [gpt]
 # GPT models accept temperature 0 only with reasoning turned off. litellm 1.82.6 (needed by tau2-bench) knows only that
 # GPT-5 models take a reasoning effort, so it drops it for GPT 6 Luna, which then rejects temperature 0.
 # `allowed_openai_params` makes litellm send it.
