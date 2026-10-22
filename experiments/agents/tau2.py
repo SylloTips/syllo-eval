@@ -189,7 +189,9 @@ def build_caller(
   raw = data_dir / 'tau2' / 'raw'
   tasks = json.loads(verify_pinned_files(config.benchmarks['tau2'], raw)['tasks'].read_text(encoding='utf-8'))
   agent = {
-    'model': _route(config.models.agents[configuration.model]),
+    'model': _route(
+      config.models.agents[configuration.model], responses=configuration.model in config.tau2.responses_api_models
+    ),
     'llm_args': config.tau2.agent_llm_args[configuration.model],
   }
   spec = {
@@ -229,9 +231,9 @@ def build_caller(
   )
 
 
-def _route(model: ModelRef) -> str:
-  """The litellm route of a model, such as anthropic/claude-sonnet-5-5."""
-  return f'{model.provider}/{model.model}'
+def _route(model: ModelRef, *, responses: bool = False) -> str:
+  """The litellm route of a model, such as azure/gpt-6.1-sol, or azure/responses/gpt-6.1-sol for the Responses API."""
+  return f'{model.provider}/responses/{model.model}' if responses else f'{model.provider}/{model.model}'
 
 
 class Tau2TraceAdapter:

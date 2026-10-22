@@ -84,6 +84,7 @@ class Tau2Config(_ConfigModel):
   # litellm arguments, per agent model key and for the customer simulator.
   agent_llm_args: dict[str, dict[str, JsonValue]]
   customer_llm_args: dict[str, JsonValue]
+  responses_api_models: list[str] = Field(default_factory=list)
   max_steps: int = Field(gt=0)
   max_errors: int = Field(gt=0)
   base_seed: int
@@ -177,6 +178,9 @@ class ExperimentConfig(_ConfigModel):
     missing_args = sorted(tau2_models - set(self.tau2.agent_llm_args))
     if missing_args:
       raise ValueError(f'tau2 configurations use agent models without llm args in tau2.yaml: {missing_args}')
+    unknown_responses = sorted(set(self.tau2.responses_api_models) - set(self.models.agents))
+    if unknown_responses:
+      raise ValueError(f'tau2.yaml routes undefined agent models to the Responses API: {unknown_responses}')
     # Agent rows are unique per (name, version tag), and each run evaluates one agent on one dataset.
     runs = Counter((c.benchmark, c.agent, c.version_tag) for c in self.configurations)
     clashing = [run for run, count in runs.items() if count > 1]
