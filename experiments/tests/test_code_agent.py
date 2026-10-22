@@ -107,6 +107,8 @@ class BuildCallerTest(unittest.TestCase):
         'api_base': 'https://resource.services.ai.azure.com',
         'api_key': 'key',
         'api_version': '2025-04-01-preview',
+        'timeout': 120,
+        'max_retries': 5,
       },
     )
 

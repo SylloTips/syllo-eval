@@ -325,6 +325,10 @@ Phoenix with OpenInference's smolagents instrumentation.
   inference API.
   - GPT reasoning models refuse the `stop` parameter. smolagents then cuts each reply at its stop sequences itself,
     but recognizes such models by name, up to the GPT-5 family; the caller adds GPT 6 and later.
+  - GPT 6.1 Sol requests time out after `SMOLAGENTS_AZURE_TIMEOUT_SECONDS` (120) and are retried up to
+    `SMOLAGENTS_AZURE_MAX_RETRIES` (5) times. About 1 call in 10 reasons for tens of thousands of hidden tokens or
+    never returns, while 99.6% of its WixQA calls took under 120 s; litellm's default 600 s timeout with 2 retries
+    made such a step cost up to 30 minutes and then fail the sample. The WixQA GPT runs predate this limit.
 - **Search:** `SMOLAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
   collection. MCP results come as text, so the agent reads the same JSON as the other agents, and `json` is among its
   authorized imports to parse them.

@@ -43,6 +43,8 @@ class CodeAgentSettings(EnvSettings):
 
   search_url: str = Field(default='http://127.0.0.1:8101/mcp', min_length=1)
   azure_api_version: str = Field(default='2025-04-01-preview', min_length=1)
+  azure_timeout_seconds: float = Field(default=120, gt=0)
+  azure_max_retries: int = Field(default=5, ge=0)
 
 
 class _LiteLLMModel(LiteLLMModel):
@@ -99,6 +101,8 @@ def build_caller(
         api_base=foundry.base_url,
         api_key=foundry.api_key,
         api_version=settings.azure_api_version,
+        timeout=settings.azure_timeout_seconds,
+        max_retries=settings.azure_max_retries,
       )
     else:
       model.update(api_base=f'{foundry.base_url.rstrip("/")}/models', api_key=foundry.api_key)
