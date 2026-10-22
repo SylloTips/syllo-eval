@@ -267,8 +267,10 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
 - **Dify** (1.17.1): add the server under Integrations > Tools > MCP > Add MCP Server (HTTP), at
   `http://host.docker.internal:<port>/mcp`.
   - Dify calls external servers through its `ssrf_proxy`, which refuses private addresses. Set
-    `SSRF_PROXY_ALLOW_PRIVATE_DOMAINS=host.docker.internal` in Dify's `docker/.env` and recreate `ssrf_proxy`. On
-    Linux, also give `ssrf_proxy` `extra_hosts: ['host.docker.internal:host-gateway']`, and serve on `--host 0.0.0.0`.
+    `SSRF_PROXY_ALLOW_PRIVATE_DOMAINS=host.docker.internal` in Dify's `docker/.env` and recreate `ssrf_proxy`.
+    [`dify/compose.override.yaml`](dify/compose.override.yaml) maps `host.docker.internal` to the host for
+    `ssrf_proxy`. On Linux, the host is the Docker bridge, `172.17.0.1` by default: serve there with `--host`, and
+    point every agent's search URL at it.
   - Dify's classic Agent app switches to function calling whenever the model supports it. A ReAct agent needs a
     Chatflow or Workflow Agent node with the ReAct strategy.
 - **smolagents:** the caller connects at `SMOLAGENTS_SEARCH_URL` (see smolagents CodeAgent).

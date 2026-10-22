@@ -14,6 +14,9 @@ services:
   plugin_daemon:
     ports: !override
       - '127.0.0.1:${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}:${PLUGIN_DEBUGGING_PORT:-5003}'
+  ssrf_proxy:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
 networks:
   experiments:
