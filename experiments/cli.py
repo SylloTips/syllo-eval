@@ -125,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
     help='Run on the pilot dataset of the benchmark (`syllo-exp benchmarks pilot`) instead of the full one.',
   )
   collect.add_argument(
+    '--phoenix-project',
+    help="Phoenix project of the agent's spans and trace lookups (default: the benchmark's dataset name).",
+  )
+  collect.add_argument(
     '--max-concurrent-samples',
     type=_positive_int,
     help='Samples run at once (default: EVALUATION_MAX_CONCURRENT_SAMPLES, or 1).',
@@ -501,7 +505,7 @@ async def _collect(args: argparse.Namespace) -> int:
   logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
   logging.getLogger('httpx').setLevel(logging.WARNING)
   settings = Settings()
-  phoenix = collect.phoenix_settings(settings.phoenix, source.dataset_name, configuration.agent)
+  phoenix = collect.phoenix_settings(settings.phoenix, args.phoenix_project or source.dataset_name, configuration.agent)
   outputs = RunOutputs(args.outputs_dir)
   step = f'collect:{configuration.id}' + (':pilot' if args.pilot else '')
   manifest = Manifest(args.manifest)
