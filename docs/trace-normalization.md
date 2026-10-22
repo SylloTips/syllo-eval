@@ -49,3 +49,6 @@ EvaluationService(
 
 Callers return a request ID; the Phoenix client resolves it to the trace whose root span carries a matching `request_id`
 attribute. Root spans named in `PhoenixSettings.request_id_excluded_root_span_names` (case-insensitive) are skipped.
+Spans can reach Phoenix after the root span, so a trace in which a span names a parent that Phoenix does not hold yet
+is fetched again, up to `PhoenixSettings.max_retries` times with the trace-fetch backoff; the last fetch is returned
+as it is, and normalization rejects its missing parent.

@@ -68,7 +68,23 @@ class PhoenixClient:
   async def get_trace_json(self, trace_id: str) -> List[Dict[str, Any]]:
     """Fetch all spans for a trace via Phoenix GraphQL, returning flattened records."""
     self._validate_trace_id(trace_id)
-    nodes = await self._fetch_trace_spans_via_graphql(trace_id)
+    attempts = max(1, self.config.max_retries)
+    for attempt in range(1, attempts + 1):
+      nodes = await self._fetch_trace_spans_via_graphql(trace_id)
+      span_ids = {(node.get('context') or {}).get('spanId') for node in nodes}
+      missing = sorted({node['parentId'] for node in nodes if node.get('parentId')} - span_ids)
+      if not missing or attempt == attempts:
+        break
+      backoff_seconds = self._trace_fetch_backoff_seconds(attempt)
+      logger.info(
+        'Phoenix trace is missing parent spans yet trace_id=%s missing=%s attempt=%s/%s backoff_seconds=%s',
+        trace_id,
+        missing,
+        attempt,
+        attempts,
+        backoff_seconds,
+      )
+      await asyncio.sleep(backoff_seconds)
     return [self._normalize_span_node(node) for node in nodes]
 
   async def get_trace_id_by_request_id(self, request_id: str) -> str | None:

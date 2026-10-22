@@ -190,6 +190,30 @@ class IngestionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(normalized.status, expected)
         self.assertEqual((normalized.metadata or {})['phoenix.status_message'], 'Source detail')
 
+  async def test_phoenix_fetch_waits_for_missing_parent_spans(self):
+    def page(*nodes):
+      edges = [{'node': {'name': id, 'parentId': parent, 'context': {'spanId': id}}} for id, parent in nodes]
+      return {'data': {'getTraceByOtelId': {'spans': {'edges': edges, 'pageInfo': {'hasNextPage': False}}}}}
+
+    partial, complete = (
+      page(('root', None), ('child', 'middle')),
+      page(('root', None), ('middle', 'root'), ('child', 'middle')),
+    )
+    for responses, settings, expected in [
+      ([partial, complete], PhoenixSettings(), ['root', 'middle', 'child']),
+      ([partial, partial], PhoenixSettings(max_retries=2), ['root', 'child']),
+    ]:
+      with self.subTest(expected=expected):
+        client = PhoenixClient(settings)
+        with (
+          patch.object(client, '_post_graphql', new=AsyncMock(side_effect=responses)) as post,
+          patch('syllo_eval.infrastructure.arize.asyncio.sleep', new=AsyncMock()) as sleep,
+        ):
+          records = await client.get_trace_json('t')
+        self.assertEqual([r['name'] for r in records], expected)
+        self.assertEqual(post.await_count, 2)
+        sleep.assert_awaited_once_with(settings.trace_fetch_initial_backoff_seconds)
+
   async def test_identical_ingestion_is_idempotent_and_conflicting_content_is_rejected(self):
     records = [record('root')]
     normalized = PhoenixTraceAdapter().normalize('t', records)
