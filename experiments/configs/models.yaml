@@ -3,10 +3,10 @@
 # models are deployments of the Azure AI Foundry resource at AZURE_FOUNDRY_BASE_URL, named as the model.
 
 agents:
-  sonnet:
-    provider: anthropic
-    model: claude-sonnet-5-5
-    label: Claude Sonnet 5.5
+  gpt:
+    provider: azure
+    model: gpt-6.1-sol
+    label: GPT 6.1 Sol
   deepseek:
     # Served through Foundry's model inference API, which litellm calls azure_ai.
     provider: azure_ai

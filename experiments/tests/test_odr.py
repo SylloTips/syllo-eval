@@ -311,7 +311,7 @@ class OdrCallerTest(unittest.IsolatedAsyncioTestCase):
       configurable=configurable,
       tracer=self.tracer,
       flush=flush,
-      metadata={'configuration': 'wixqa/odr/sonnet'},
+      metadata={'configuration': 'wixqa/odr/gpt'},
       graph=graph,
       **options,
     )
@@ -329,7 +329,7 @@ class OdrCallerTest(unittest.IsolatedAsyncioTestCase):
     attributes = root.attributes or {}
     self.assertEqual(attributes['request_id'], request_id)
     self.assertEqual((attributes['input.value'], attributes['output.value']), (QUESTION, 'The report.'))
-    self.assertEqual(json.loads(str(attributes['metadata'])), {'configuration': 'wixqa/odr/sonnet'})
+    self.assertEqual(json.loads(str(attributes['metadata'])), {'configuration': 'wixqa/odr/gpt'})
     self.assertIsNone(root.parent)
     assert root.context is not None
     self.assertEqual(self.flushed, [root.context.trace_id])
@@ -468,19 +468,25 @@ class BuildCallerTest(unittest.TestCase):
     configuration = self.config.configuration(configuration_id)
     return build_caller(configuration, self.config, phoenix=self.phoenix, settings=self.settings, **options)
 
-  def test_sonnet_runs_every_phase_through_anthropic_without_web_search(self) -> None:
-    caller = self._build('wixqa/odr/sonnet')
+  def test_gpt_runs_every_phase_on_the_foundry_deployment_without_web_search(self) -> None:
+    foundry = AzureFoundrySettings(base_url='https://resource.services.ai.azure.com', api_key='foundry-key')
+
+    caller = self._build('wixqa/odr/gpt', foundry=foundry)
 
     configurable = caller._config['configurable']
     models = {configurable[setting] for setting in ('research_model', 'compression_model', 'final_report_model')}
-    self.assertEqual(models | {configurable['summarization_model']}, {'anthropic:claude-sonnet-5-5'})
+    self.assertEqual(models | {configurable['summarization_model']}, {'azure_openai:gpt-6.1-sol'})
     self.assertEqual((configurable['search_api'], configurable['allow_clarification']), ('none', False))
     self.assertEqual(
       configurable['mcp_config'], {'url': 'http://127.0.0.1:8101', 'tools': [TOOL_NAME], 'auth_required': False}
     )
     self.assertEqual(configurable['mcp_prompt'], self.config.odr.mcp_prompt)
     self.init_chat_model.assert_called_once_with(
-      'anthropic:claude-sonnet-5-5', configurable_fields=('model', 'max_tokens', 'api_key')
+      'azure_openai:gpt-6.1-sol',
+      configurable_fields=('model', 'max_tokens', 'api_key'),
+      azure_endpoint='https://resource.services.ai.azure.com',
+      api_key='foundry-key',
+      api_version='2025-04-01-preview',
     )
     self.assertIs(deep_research.configurable_model, self.init_chat_model.return_value)
     self.instrumentor.return_value.instrument.assert_called_once()
@@ -508,7 +514,7 @@ class BuildCallerTest(unittest.TestCase):
         patch.dict(os.environ, {name: value}),
         self.assertRaisesRegex(ValueError, f'unset {name}: ODR would read them'),
       ):
-        self._build('wixqa/odr/sonnet')
+        self._build('wixqa/odr/gpt')
     self.init_chat_model.assert_not_called()
 
   def test_the_search_url_is_the_servers_base_url(self) -> None:

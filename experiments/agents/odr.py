@@ -116,7 +116,7 @@ class OdrSettings(EnvSettings):
   retry_delay_seconds: float = Field(default=60.0, ge=0)
   # A provider can hold a request open for good, and neither ODR nor Anthropic's client sets a timeout.
   timeout_seconds: float = Field(default=1200.0, gt=0)
-  # DeepSeek is a deployment of the Foundry resource at AZURE_FOUNDRY_BASE_URL, called through its Azure OpenAI API.
+  # GPT and DeepSeek are Foundry deployments at AZURE_FOUNDRY_BASE_URL, called through its Azure OpenAI API.
   azure_api_version: str = Field(default='2025-04-01-preview', min_length=1)
 
   @field_validator('search_url')
@@ -444,7 +444,7 @@ def _model(
   if ref.provider == 'anthropic':
     # ODR passes ANTHROPIC_API_KEY itself.
     return f'anthropic:{ref.model}', {}
-  if ref.provider == 'azure_ai':
+  if ref.provider in ('azure', 'azure_ai'):
     foundry = foundry or AzureFoundrySettings()
     if not (foundry.base_url and foundry.api_key):
       raise ValueError(f'{configuration.id}: AZURE_FOUNDRY_BASE_URL and AZURE_FOUNDRY_API_KEY must be set')

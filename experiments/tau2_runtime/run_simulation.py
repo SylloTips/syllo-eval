@@ -28,7 +28,7 @@ _FLUSH_TIMEOUT_MILLIS = 120_000
 class ModelSpec(BaseModel):
   model_config = ConfigDict(extra='forbid')
 
-  # A litellm model route, such as anthropic/claude-sonnet-5-5.
+  # A litellm model route, such as azure/gpt-6.1-sol.
   model: str = Field(min_length=1)
   llm_args: dict[str, Any] = Field(default_factory=dict)
 

@@ -70,10 +70,10 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
       'ODR_SEARCH_URL': 'http://127.0.0.1:8104',
     }
     configurations = {
-      'react': 'erb/react/sonnet',
-      'smolagents': 'erb/smolagents/sonnet',
-      'odr': 'erb/odr/sonnet',
-      'tau2-llm-agent': 'tau2/llm-agent/sonnet/trial-1',
+      'react': 'erb/react/gpt',
+      'smolagents': 'erb/smolagents/gpt',
+      'odr': 'erb/odr/gpt',
+      'tau2-llm-agent': 'tau2/llm-agent/gpt/trial-1',
     }
     with (
       patch.dict(os.environ, environment),
@@ -109,17 +109,17 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
     served = {'collection': 'erb-69916e3', 'swap_fraction': 0.0, 'seed': 0, 'max_document_chars': None}
 
     with patch('collect._search_server_settings', AsyncMock(return_value=served)):
-      await collect.check_search_server(config.configuration('erb/odr/sonnet'), config, url)
+      await collect.check_search_server(config.configuration('erb/odr/gpt'), config, url)
       with self.assertRaisesRegex(
         collect.SearchServerError,
         'serves erb-69916e3 with swap fraction 0.0, but the configuration needs wixqa-d662dc4 with swap fraction 0.0; '
         'relaunch it with `syllo-exp search-server --collection wixqa-d662dc4 --port 8101`',
       ):
-        await collect.check_search_server(config.configuration('wixqa/odr/sonnet'), config, url)
+        await collect.check_search_server(config.configuration('wixqa/odr/gpt'), config, url)
       with self.assertRaisesRegex(
         collect.SearchServerError, 'with swap fraction 0.25; .* --port 8101 --swap-fraction 0.25`'
       ):
-        await collect.check_search_server(config.configuration('erb/react/sonnet/f0.25'), config, url)
+        await collect.check_search_server(config.configuration('erb/react/gpt/f0.25'), config, url)
 
   async def test_a_search_server_that_does_not_answer_stops_the_collection(self) -> None:
     config = load_config()
@@ -131,7 +131,7 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
         'did not report its settings \\(refused\\); start it with `syllo-exp search-server --collection wixqa-d662dc4',
       ),
     ):
-      await collect.check_search_server(config.configuration('wixqa/odr/sonnet'), config, 'http://127.0.0.1:8101/mcp')
+      await collect.check_search_server(config.configuration('wixqa/odr/gpt'), config, 'http://127.0.0.1:8101/mcp')
 
   async def test_the_archive_keeps_each_fetched_trace_in_the_import_format(self) -> None:
     record = {'context.span_id': 's1', 'name': 'root', 'start_time': datetime(2026, 10, 1, tzinfo=timezone.utc)}
@@ -210,9 +210,7 @@ class CollectCliTest(unittest.TestCase):
   def test_runs_the_configuration_on_its_dataset_and_records_the_run(self) -> None:
     self._finishing(EvaluationStatus.COMPLETED, completed=114, failed=0)
 
-    status, output, _ = self._collect(
-      '--configuration', 'tau2/llm-agent/sonnet/trial-1', '--max-concurrent-samples', '4'
-    )
+    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/gpt/trial-1', '--max-concurrent-samples', '4')
 
     self.assertEqual(status, 0, output)
     phoenix = self.build_integration.call_args.kwargs['phoenix']
@@ -224,14 +222,14 @@ class CollectCliTest(unittest.TestCase):
     self.assertIsInstance(kwargs['trace_client'], collect.TraceArchive)
     self.service.create_evaluation.assert_awaited_once_with(
       agent_name='tau2-llm-agent',
-      agent_version_tag='sonnet-trial1',
+      agent_version_tag='gpt-trial1',
       dataset_id=self.dataset_id,
       max_concurrent_samples=4,
       selected_metric_names=['plan_efficiency'],
     )
     records = Manifest(self.manifest).records()
     self.assertEqual([record.status for record in records], [StepStatus.STARTED, StepStatus.COMPLETED])
-    self.assertEqual({record.step for record in records}, {'collect:tau2/llm-agent/sonnet/trial-1'})
+    self.assertEqual({record.step for record in records}, {'collect:tau2/llm-agent/gpt/trial-1'})
     self.assertEqual(records[-1].run_ids, (self.run_id,))
     self.assertEqual(records[-1].details['samples'], {'total': 114, 'completed': 114, 'failed': 0})
     self.assertIn(f'run {self.run_id} COMPLETED: 114 of 114 samples completed', output)
@@ -239,22 +237,20 @@ class CollectCliTest(unittest.TestCase):
   def test_a_pilot_runs_on_the_pilot_dataset_and_is_recorded_apart(self) -> None:
     self._finishing(EvaluationStatus.COMPLETED, completed=3, failed=0)
 
-    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/sonnet/trial-1', '--pilot')
+    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/gpt/trial-1', '--pilot')
 
     self.assertEqual(status, 0, output)
     self.uow.datasets.get_by_name.assert_awaited_once_with('tau2-retail-v1.0.1-pilot')
     # Agents keep sending spans to the benchmark's project.
     self.assertEqual(self.build_integration.call_args.kwargs['phoenix'].project_id, 'tau2-retail-v1.0.1')
     record = Manifest(self.manifest).records()[-1]
-    self.assertEqual(
-      (record.step, record.status), ('collect:tau2/llm-agent/sonnet/trial-1:pilot', StepStatus.COMPLETED)
-    )
+    self.assertEqual((record.step, record.status), ('collect:tau2/llm-agent/gpt/trial-1:pilot', StepStatus.COMPLETED))
     self.assertEqual(record.details['dataset_name'], 'tau2-retail-v1.0.1-pilot')
 
   def test_failed_samples_leave_the_step_failed(self) -> None:
     self._finishing(EvaluationStatus.PARTIALLY_COMPLETED, completed=112, failed=2)
 
-    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/sonnet/trial-1')
+    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/gpt/trial-1')
 
     self.assertEqual(status, 1)
     self.assertEqual(Manifest(self.manifest).records()[-1].status, StepStatus.FAILED)
@@ -263,7 +259,7 @@ class CollectCliTest(unittest.TestCase):
   def test_a_dataset_that_is_not_imported_fails_before_any_run(self) -> None:
     self.dataset = None
 
-    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/sonnet/trial-1')
+    status, output, _ = self._collect('--configuration', 'tau2/llm-agent/gpt/trial-1')
 
     self.assertEqual(status, 1)
     self.service.create_evaluation.assert_not_awaited()
@@ -280,7 +276,7 @@ class CollectCliTest(unittest.TestCase):
   def test_an_agent_that_cannot_be_set_up_fails_the_step_before_any_run(self) -> None:
     self.integration_error = ValueError('DIFY_API_KEY must be set to the API key of the app under test')
 
-    status, output, _ = self._collect('--configuration', 'erb/react/sonnet')
+    status, output, _ = self._collect('--configuration', 'erb/react/gpt')
 
     self.assertEqual(status, 1)
     self.service.create_evaluation.assert_not_awaited()
@@ -293,7 +289,7 @@ class CollectCliTest(unittest.TestCase):
     )
     self.search_settings.return_value = {'collection': 'erb-69916e3', 'swap_fraction': 0.0}
 
-    status, output, _ = self._collect('--configuration', 'wixqa/odr/sonnet')
+    status, output, _ = self._collect('--configuration', 'wixqa/odr/gpt')
 
     self.assertEqual(status, 1)
     self.search_settings.assert_awaited_once_with('http://127.0.0.1:8101/mcp')
@@ -302,7 +298,7 @@ class CollectCliTest(unittest.TestCase):
     self.assertEqual(record.status, StepStatus.FAILED)
     command = '`syllo-exp search-server --collection wixqa-d662dc4 --port 8101`'
     self.assertIn(f'relaunch it with {command}', str(record.details['error']))
-    self.assertIn('collect: failed: SearchServerError: wixqa/odr/sonnet: the search server', output)
+    self.assertIn('collect: failed: SearchServerError: wixqa/odr/gpt: the search server', output)
 
 
 if __name__ == '__main__':

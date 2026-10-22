@@ -192,13 +192,13 @@ class ExperimentConfigTest(unittest.TestCase):
     for configuration in config.configurations:
       by_benchmark.setdefault(configuration.benchmark, []).append(configuration)
 
-    # Section 5.1: 3 agents x 2 models on ERB and WixQA, plus two degraded ReAct/Sonnet runs on ERB;
+    # Section 5.1: 3 agents x 2 models on ERB and WixQA, plus two degraded ReAct/GPT runs on ERB;
     # 2 models x 4 trials on tau2.
     self.assertEqual(len(by_benchmark['wixqa']), 6)
     self.assertEqual(len(by_benchmark['erb']), 8)
     self.assertEqual(sorted(c.degradation for c in by_benchmark['erb'] if c.degradation), [0.25, 0.5])
     self.assertEqual(len(by_benchmark['tau2']), 8)
-    self.assertEqual(config.configuration('erb/react/sonnet/f0.5').version_tag, 'sonnet-f0.5')
+    self.assertEqual(config.configuration('erb/react/gpt/f0.5').version_tag, 'gpt-f0.5')
     self.assertEqual(
       {name: source.expected_samples for name, source in config.benchmarks.items()},
       {'erb': 480, 'wixqa': 400, 'tau2': 114},
@@ -212,7 +212,7 @@ class ExperimentConfigTest(unittest.TestCase):
         'tau2': {'tasks', 'splits', 'database', 'policy', 'user_guidelines'},
       },
     )
-    self.assertEqual(set(config.tau2.agent_llm_args), {'sonnet', 'deepseek'})
+    self.assertEqual(set(config.tau2.agent_llm_args), {'gpt', 'deepseek'})
     self.assertEqual((config.odr.search_api, config.odr.allow_clarification), ('none', False))
     with self.assertRaises(KeyError):
       config.configuration('missing')

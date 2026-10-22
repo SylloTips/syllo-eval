@@ -65,7 +65,7 @@ Under Integrations > Model Provider > Azure AI Studio, choose Add Model. This is
 
 | Field | Value |
 |---|---|
-| Model Name | `DeepSeek-V4.1-Flash`, the deployment in `configs/models.yaml` |
+| Model Name | `DeepSeek-V4.1-Flash` or `gpt-6.1-sol`, the deployments in `configs/models.yaml` |
 | Model Type | LLM |
 | Azure AI Studio Endpoint | `https://<resource>.services.ai.azure.com/models`: append `/models` to `AZURE_FOUNDRY_BASE_URL` |
 | API Key | the value of `AZURE_FOUNDRY_API_KEY` |
@@ -83,7 +83,8 @@ without `/chat/completions` or `/openai/v1`.
 The Agent node selects `langgenius/azure_ai_studio/azure_ai_studio` and `DeepSeek-V4.1-Flash`, matching the deployment
 the tau2 agent calls. The export sets no model parameters, so the provider's defaults apply; check them in the pilot.
 For an existing app, select this model in its Agent node and publish again. Switching the provider does not change
-the instruction, tool or iteration limit.
+the instruction, tool or iteration limit. The GPT app is a copy of the DeepSeek app with `gpt-6.1-sol` selected in its
+Agent node, and its own tracing and API key.
 
 ## 4. MCP server
 

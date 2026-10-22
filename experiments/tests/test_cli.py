@@ -68,7 +68,7 @@ class CliTest(unittest.TestCase):
     status, output = _run(['configurations'])
 
     self.assertEqual(status, 0)
-    self.assertIn('erb/react/sonnet/f0.25', output)
+    self.assertIn('erb/react/gpt/f0.25', output)
     self.assertIn('version=deepseek-trial4', output)
     self.assertIn('22 configurations', output)
 
@@ -76,13 +76,13 @@ class CliTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as directory:
       manifest_path = Path(directory) / 'manifest.jsonl'
       manifest = Manifest(manifest_path)
-      manifest.append('collect:erb/react/sonnet', StepStatus.STARTED)
-      manifest.append('collect:erb/react/sonnet', StepStatus.COMPLETED)
+      manifest.append('collect:erb/react/gpt', StepStatus.STARTED)
+      manifest.append('collect:erb/react/gpt', StepStatus.COMPLETED)
 
       status, output = _run(['steps', '--manifest', str(manifest_path)])
 
     self.assertEqual(status, 0)
-    self.assertEqual(output.count('collect:erb/react/sonnet'), 1)
+    self.assertEqual(output.count('collect:erb/react/gpt'), 1)
     self.assertIn('completed', output)
 
 

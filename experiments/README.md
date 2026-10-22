@@ -221,7 +221,7 @@ matches, fused by reciprocal rank.
 
 ```bash
 poetry run syllo-exp search-server --collection erb-69916e3 --port 8101                        # erb, f = 0
-poetry run syllo-exp search-server --collection erb-69916e3 --port 8101 --swap-fraction 0.25  # erb/react/sonnet/f0.25
+poetry run syllo-exp search-server --collection erb-69916e3 --port 8101 --swap-fraction 0.25  # erb/react/gpt/f0.25
 poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101                      # wixqa
 ```
 
@@ -319,11 +319,16 @@ The pro-code agent is smolagents' `CodeAgent` (`agents/code_agent.py`), which wr
 and revises its plan every 3 steps. It runs in `syllo-exp`'s own process, one new agent per sample, and is traced to
 Phoenix with OpenInference's smolagents instrumentation.
 
-- **Model:** the configuration's model through litellm, with the provider's defaults, as in the Dify agent.
-  `ANTHROPIC_API_KEY` for Sonnet; DeepSeek on the Foundry resource of `AZURE_FOUNDRY_BASE_URL` and
-  `AZURE_FOUNDRY_API_KEY`.
+- **Model:** the configuration's model through litellm, with the provider's defaults, as in the Dify agent. Both
+  models are deployments of the Foundry resource at `AZURE_FOUNDRY_BASE_URL`, called with `AZURE_FOUNDRY_API_KEY`:
+  GPT 6.1 Sol through its Azure OpenAI API (version `SMOLAGENTS_AZURE_API_VERSION`), DeepSeek through its model
+  inference API.
   - GPT reasoning models refuse the `stop` parameter. smolagents then cuts each reply at its stop sequences itself,
     but recognizes such models by name, up to the GPT-5 family; the caller adds GPT 6 and later.
+  - GPT 6.1 Sol requests time out after `SMOLAGENTS_AZURE_TIMEOUT_SECONDS` (120) and are retried up to
+    `SMOLAGENTS_AZURE_MAX_RETRIES` (5) times. About 1 call in 10 reasons for tens of thousands of hidden tokens or
+    never returns, while 99.6% of its WixQA calls took under 120 s; litellm's default 600 s timeout with 2 retries
+    made such a step cost up to 30 minutes and then fail the sample. The WixQA GPT runs predate this limit.
 - **Search:** `SMOLAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
   collection. MCP results come as text, so the agent reads the same JSON as the other agents, and `json` is among its
   authorized imports to parse them.
@@ -348,20 +353,20 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
   provider's default, as in the Dify agent.
   - ODR builds each phase's model from one module-level model, configured per phase. The caller replaces it with one
     that defaults to the configuration's model and carries its connection, which ODR's settings cannot name.
-  - Sonnet runs on Anthropic's API with `ANTHROPIC_API_KEY`.
-  - DeepSeek runs on the Foundry deployment at `AZURE_FOUNDRY_BASE_URL`, through its Azure OpenAI API (version
-    `ODR_AZURE_API_VERSION`), with `AZURE_FOUNDRY_API_KEY`. ODR passes no key for it, which the other routes to the
-    deployment would fill with `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`.
-  - The adapter refuses a trace with an LLM call to any other model.
+  - GPT 6.1 Sol and DeepSeek run on their Foundry deployments at `AZURE_FOUNDRY_BASE_URL`, through its Azure OpenAI
+    API (version `ODR_AZURE_API_VERSION`), with `AZURE_FOUNDRY_API_KEY`. ODR passes no key for them, which the other
+    routes to the deployments would fill with `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`.
+  - The adapter refuses a trace with an LLM call to any other model. A dated version of the model, as Azure reports
+    GPT models (`gpt-6.1-sol-2026-09-29`), is the model.
 - **Search:** `ODR_SEARCH_URL`, by default `http://127.0.0.1:8101`, with the server on the configuration's collection.
   It is the server's base URL: ODR appends `/mcp` itself.
   - ODR looks the tool up before every researcher step and goes on without it when the lookup fails. The caller
     replaces that lookup with one that runs once per server and process, and fails instead of returning no tools.
   - Each search still opens its own connection, with a 2-second connect timeout and two retries. A connection that
     fails never reaches the server, so a retry repeats no search or embedding; the read timeout is unchanged.
-- **Trace:** the caller's root span `odr.request` holds the `request_id`, the question and the report as text, without
-  the thinking that Sonnet's reply also holds. Every search whose output is the search tool's JSON, which LangChain's
-  MCP client returns as text blocks, is a retrieval span with its ten documents; a failed search stays a tool span.
+- **Trace:** the caller's root span `odr.request` holds the `request_id`, the question and the report as text. Every
+  search whose output is the search tool's JSON, which LangChain's MCP client returns as text blocks, is a retrieval
+  span with its ten documents; a failed search stays a tool span.
 - **Runs again:** ODR turns many failures into text or silence, so a failed run can look complete. The caller watches
   the run through LangChain's callbacks, and a question runs again from the start, with a new request id, up to
   `ODR_MAX_ATTEMPTS` attempts (3), `ODR_RETRY_DELAY_SECONDS` (60) apart, when:
@@ -371,7 +376,7 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
     too: ODR then ends its research and writes the report from what the earlier rounds found;
   - ODR wrote an error in place of its report;
   - spans of the run did not reach Phoenix;
-  - the run took longer than `ODR_TIMEOUT_SECONDS` (1200): Anthropic's client sets no request timeout.
+  - the run took longer than `ODR_TIMEOUT_SECONDS` (1200): a provider can hold a request open for good.
 
   Any other failure fails the sample at once. The agent's own failures count as they happen:
   - a search that the server answered with an error, such as an empty query, is a failed call;
@@ -455,7 +460,7 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
 ## Collection
 
 ```bash
-poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max-concurrent-samples 4
+poetry run syllo-exp collect --configuration tau2/llm-agent/gpt/trial-1 --max-concurrent-samples 4
 ```
 
 - **What it does:** a fresh syllo-eval run of one configuration on every sample of its benchmark. The run calls the
@@ -485,7 +490,7 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
 
   ```bash
   poetry run syllo-exp benchmarks pilot --benchmark tau2 --samples 0 24 40
-  poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --pilot
+  poetry run syllo-exp collect --configuration tau2/llm-agent/gpt/trial-1 --pilot
   ```
 
   - `benchmarks pilot` takes the given samples of the checked conversion, with their ground truths and claims. It
@@ -509,7 +514,7 @@ conversation by checking the final database and the task's assertions. One sampl
 ```bash
 scripts/setup-tau2.sh                                   # once: the τ²-bench environment, in .venv-tau2
 poetry run syllo-exp benchmarks fetch --only tau2       # the tasks, and the environment's database, policy and guidelines
-poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max-concurrent-samples 4
+poetry run syllo-exp collect --configuration tau2/llm-agent/gpt/trial-1 --max-concurrent-samples 4
 ```
 
 - **Environment:** τ²-bench's dependencies conflict with syllo-eval's, so it runs in an environment of its own,
@@ -528,9 +533,11 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/sonnet/trial-1 --max
   - The agent is the configuration's model, with the arguments of `agent_llm_args`.
   - The customer is `customer_simulator` in [`configs/models.yaml`](configs/models.yaml).
   - τ²-bench's assertion grader is the agent model.
-  - litellm reads `ANTHROPIC_API_KEY` for Sonnet. The `azure/` and `azure_ai/` models, GPT 6 Luna and
-    DeepSeek-V4.1-Flash, are deployments of the Foundry resource at `AZURE_FOUNDRY_BASE_URL`, called with
-    `AZURE_FOUNDRY_API_KEY`. The `azure/` ones also use the API version `TAU2_AZURE_API_VERSION`.
+  - The models of `responses_api_models`, GPT 6.1 Sol, are called through Azure's Responses API, on litellm's
+    `azure/responses/` route: on Chat Completions, GPT 6.1 Sol takes function tools only with reasoning turned off.
+  - The `azure/` and `azure_ai/` models, GPT 6.1 Sol, GPT 6 Luna and DeepSeek-V4.1-Flash, are deployments of the
+    Foundry resource at `AZURE_FOUNDRY_BASE_URL`, called with `AZURE_FOUNDRY_API_KEY`. The `azure/` ones also use the
+    API version `TAU2_AZURE_API_VERSION`.
 - **Grader replies:** τ²-bench fails a simulation whose grader reply is not JSON, such as JSON in a Markdown fence.
   The process reads such a reply as the JSON inside it, with τ²-bench's own helper; a JSON reply is read unchanged
   ([`METHODOLOGY.md`](METHODOLOGY.md), τ²-bench runs).

@@ -116,9 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
       'compute the metrics that need no judge.'
     ),
   )
-  collect.add_argument(
-    '--configuration', required=True, help='Configuration id, such as tau2/llm-agent/sonnet/trial-1.'
-  )
+  collect.add_argument('--configuration', required=True, help='Configuration id, such as tau2/llm-agent/gpt/trial-1.')
   collect.add_argument(
     '--pilot',
     action='store_true',
