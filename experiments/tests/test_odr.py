@@ -127,8 +127,13 @@ class OdrTraceAdapterTest(unittest.TestCase):
     self.assertEqual(result.trace.adapter, 'odr:2')
 
   def test_a_call_to_another_model_is_refused(self) -> None:
-    with self.assertRaisesRegex(ValueError, f'LLM call to gpt-4.1, not {MODEL}'):
-      OdrTraceAdapter(MODEL).normalize(TRACE_ID, _trace(model='gpt-4.1'))
+    for model in ('gpt-4.1', f'{MODEL}-mini', f'{MODEL}-2026'):
+      with self.subTest(model=model), self.assertRaisesRegex(ValueError, f'LLM call to {model}, not {MODEL}'):
+        OdrTraceAdapter(MODEL).normalize(TRACE_ID, _trace(model=model))
+
+  def test_a_dated_version_of_the_model_is_the_model(self) -> None:
+    result = OdrTraceAdapter(MODEL).normalize(TRACE_ID, _trace(model=f'{MODEL}-2026-09-29'))
+    self.assertEqual(result.trace.adapter, 'odr:2')
 
   def test_a_trace_without_the_callers_root_is_refused(self) -> None:
     records = _trace()[1:]

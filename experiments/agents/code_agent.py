@@ -5,6 +5,7 @@ and the answer. Spans are exported as they end, so the trace is in Phoenix when 
 """
 
 import asyncio
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -34,12 +35,19 @@ from search_tool.server import TOOL_NAME
 
 ROOT_SPAN_NAME = 'smolagents.request'
 PLANNING_INTERVAL = 3
+_REFUSES_STOP = re.compile(r'gpt-(?:[6-9]|\d{2,})')
 
 
 class CodeAgentSettings(EnvSettings):
   model_config = SettingsConfigDict(env_prefix='SMOLAGENTS_')
 
   search_url: str = Field(default='http://127.0.0.1:8101/mcp', min_length=1)
+
+
+class _LiteLLMModel(LiteLLMModel):
+  @property
+  def supports_stop_parameter(self) -> bool:
+    return super().supports_stop_parameter and not _REFUSES_STOP.match((self.model_id or '').split('/')[-1])
 
 
 class CodeAgentCaller:
@@ -63,7 +71,7 @@ class CodeAgentCaller:
     ):
       agent = CodeAgent(
         tools=tools,
-        model=LiteLLMModel(**self._model),
+        model=_LiteLLMModel(**self._model),
         planning_interval=PLANNING_INTERVAL,
         additional_authorized_imports=['json'],
         verbosity_level=LogLevel.OFF,

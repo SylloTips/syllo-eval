@@ -322,6 +322,8 @@ Phoenix with OpenInference's smolagents instrumentation.
 - **Model:** the configuration's model through litellm, with the provider's defaults, as in the Dify agent.
   `ANTHROPIC_API_KEY` for Sonnet; DeepSeek on the Foundry resource of `AZURE_FOUNDRY_BASE_URL` and
   `AZURE_FOUNDRY_API_KEY`.
+  - GPT reasoning models refuse the `stop` parameter. smolagents then cuts each reply at its stop sequences itself,
+    but recognizes such models by name, up to the GPT-5 family; the caller adds GPT 6 and later.
 - **Search:** `SMOLAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
   collection. MCP results come as text, so the agent reads the same JSON as the other agents, and `json` is among its
   authorized imports to parse them.
