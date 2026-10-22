@@ -214,7 +214,22 @@ class DifyTraceAdapterTest(unittest.TestCase):
     self.assertEqual(evidence.items, retrieval.items)
 
     self.assertEqual((spans['fail'].span_type, spans['fail'].semantics.retrieval), ('tool', []))
-    self.assertEqual(result.trace.adapter, 'dify:2')
+    self.assertEqual(result.trace.adapter, 'dify:3')
+
+  def test_a_model_call_that_logged_its_tokens_has_its_usage(self) -> None:
+    records = _dify_trace()
+    output = json.loads(records[2]['attributes.output.value'])
+    output['json'][1]['data']['usage'] = {'prompt_tokens': 1200, 'completion_tokens': 80}
+    output['json'][1]['metadata']['total_tokens'] = 1280
+    records[2]['attributes.output.value'] = json.dumps(output)
+
+    spans = {span.external_id: span for span in DifyTraceAdapter().normalize('d' * 32, records).spans}
+
+    usage = spans['thought'].semantics.usage
+    assert usage is not None
+    self.assertEqual((usage.input_tokens, usage.output_tokens, usage.total_tokens), (1200, 80, 1280))
+    self.assertEqual((usage.call_id, usage.cached_input_tokens), ('thought', None))
+    self.assertIsNone(spans['round'].semantics.usage)
 
   def test_a_missing_log_or_an_untimed_search_makes_the_evidence_unavailable(self) -> None:
     def without_timing(output: dict[str, Any]) -> None:
