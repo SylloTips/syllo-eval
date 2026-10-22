@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -463,11 +464,13 @@ class OdrTraceAdapter:
   A search becomes a retrieval span when its output is the search tool's JSON, which LangChain's MCP client returns as
   text blocks. A failed search, whose output is the server's error message, stays a tool span; any other output becomes
   a retrieval span whose results are unavailable. A trace
-  with an LLM call to any model but ``model`` is refused, so that every phase is known to use it.
+  with an LLM call to any model but ``model``, or a dated version of it such as Azure reports, is refused, so that every
+  phase is known to use it.
   """
 
   def __init__(self, model: str):
     self._model = model
+    self._models = re.compile(rf'{re.escape(model)}(?:-\d{{4}}-\d{{2}}-\d{{2}})?')
 
   def normalize(self, trace_id: str, records: list[dict[str, Any]]) -> TraceProcessingResult:
     base = PhoenixTraceAdapter().normalize(trace_id, records)
@@ -481,7 +484,7 @@ class OdrTraceAdapter:
     spans = []
     for span in base.spans:
       usage = span.semantics.usage
-      if usage is not None and usage.model != self._model:
+      if usage is not None and not self._models.fullmatch(usage.model or ''):
         raise ValueError(f'Trace {trace_id} has an LLM call to {usage.model}, not {self._model}')
       if span.parent_span_id is None:
         semantics = SpanSemantics(request=question, answer=Answer(text=answer) if answer and answer.strip() else None)
