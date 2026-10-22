@@ -496,6 +496,16 @@ class BuildCallerTest(unittest.TestCase):
       },
     )
 
+  def test_models_on_the_responses_api_are_routed_there_as_agent_and_grader(self) -> None:
+    tau2 = self.config.tau2.model_copy(update={'responses_api_models': ['model-a']})
+    self.config = self.config.model_copy(update={'tau2': tau2})
+
+    spec = self._build()._spec
+
+    self.assertEqual(spec['agent']['model'], 'anthropic/responses/claude-a')
+    self.assertEqual(spec['grader'], spec['agent'])
+    self.assertEqual(spec['customer']['model'], 'azure/gpt-c')
+
   def test_needs_the_runtime_and_the_pinned_files(self) -> None:
     with self.assertRaisesRegex(FileNotFoundError, 'run scripts/setup-tau2.sh'):
       self._build(settings=Tau2Settings(python=Path(self._directory.name) / 'missing' / 'python'))

@@ -157,6 +157,12 @@ class ExperimentConfigTest(unittest.TestCase):
     with self.assertRaisesRegex(ValidationError, "without llm args in tau2.yaml: \\['model-a'\\]"):
       ExperimentConfig.model_validate(_config(configurations, tau2=_tau2(agent_llm_args={})))
 
+  def test_only_agent_models_go_to_the_responses_api(self) -> None:
+    configurations = [{'id': 't', 'benchmark': 'tau2', 'agent': 'tau2-llm-agent', 'model': 'model-a', 'trial': 1}]
+    ExperimentConfig.model_validate(_config(configurations, tau2=_tau2(responses_api_models=['model-a'])))
+    with self.assertRaisesRegex(ValidationError, "undefined agent models to the Responses API: \\['model-z'\\]"):
+      ExperimentConfig.model_validate(_config(configurations, tau2=_tau2(responses_api_models=['model-z'])))
+
   def test_trial_seeds_are_the_ones_tau2_draws_for_its_trials(self) -> None:
     tau2 = Tau2Config.model_validate(_tau2())
     # tau2's runner: random.seed(300), then one randint(0, 1_000_000) per trial.
