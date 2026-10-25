@@ -60,6 +60,10 @@ class RepeatNotAllowedError(ValueError):
   """Raised when a source evaluation run cannot be repeated."""
 
 
+class SampleSelectionError(ValueError):
+  """Raised when requested sample ids are not traced samples of the source run."""
+
+
 def build_db_manager(settings: Settings) -> DatabaseManager:
   """Build an independent pool; never reuse or replace process-global state."""
   db_settings = settings.database
@@ -131,6 +135,22 @@ def resolve_selected_metric_names_csv(
   if raw_metrics is None:
     return list(available_names)
   return resolve_selected_metric_names(raw_metrics.split(','), available_names)
+
+
+def _select_repeat_samples(traced_sample_ids: Sequence[UUID], sample_ids: Sequence[UUID] | None) -> list[UUID]:
+  if sample_ids is None:
+    return list(traced_sample_ids)
+  requested = set(sample_ids)
+  if not requested:
+    raise SampleSelectionError('Select at least one sample to repeat.')
+  if len(requested) != len(sample_ids):
+    raise SampleSelectionError('Sample ids must be distinct.')
+  untraced = requested.difference(traced_sample_ids)
+  if untraced:
+    raise SampleSelectionError(
+      f'Samples without a stored trace in the source run: {", ".join(sorted(map(str, untraced)))}'
+    )
+  return [sample_id for sample_id in traced_sample_ids if sample_id in requested]
 
 
 def _resolve_rubric_additions(
@@ -527,8 +547,9 @@ class EvaluationService:
     max_concurrent_tasks: int | None = None,
     sample_compute_timeout: float | None = None,
     rubric_additions: Mapping[str, str] | None = None,
+    sample_ids: Sequence[UUID] | None = None,
   ) -> EvaluationHandle:
-    """Recompute stored traces; rubric additions default to the source run's for metrics still selected."""
+    """Recompute stored traces, all or only ``sample_ids``; rubric additions default to the source run's."""
     async with UnitOfWork(self._db_manager) as uow:
       source_run = await uow.evaluation_runs.get_by_id(source_run_id)
       if source_run is None:
@@ -544,6 +565,7 @@ class EvaluationService:
 
       agent = await uow.agents.get_by_id_or_raise(source_run.agent_id)
 
+    planned_sample_ids = _select_repeat_samples(traced_sample_ids, sample_ids)
     selected_metric_names = self._resolve_repeat_metric_names(source_metric_names, metrics)
     if rubric_additions is None:
       source_additions = (source_run.config or {}).get('rubric_additions') or {}
@@ -554,7 +576,7 @@ class EvaluationService:
       agent_id=source_run.agent_id,
       dataset_id=source_run.dataset_id,
       selected_metric_names=selected_metric_names,
-      planned_sample_ids=traced_sample_ids,
+      planned_sample_ids=planned_sample_ids,
       max_concurrent_samples=max_concurrent_samples,
       max_concurrent_tasks=max_concurrent_tasks,
       sample_trace_timeout=None,

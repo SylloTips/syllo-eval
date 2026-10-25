@@ -9,7 +9,12 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from syllo_eval.API.app import _drain_evaluation_tasks, create_app
-from syllo_eval.service import AgentCallerSelectionError, MetricSelectionError, RepeatNotAllowedError
+from syllo_eval.service import (
+  AgentCallerSelectionError,
+  MetricSelectionError,
+  RepeatNotAllowedError,
+  SampleSelectionError,
+)
 from syllo_eval.datasets import DatasetAlreadyExistsError, DatasetImportSummary, DatasetListPage
 from syllo_eval.evaluation.evaluation_report import EvaluationReportNotAvailableError
 from syllo_eval.evaluation.trace_import import TraceImportError
@@ -84,8 +89,15 @@ class _ServiceStub:
       raise self._error
     return self._started_evaluation
 
-  async def repeat_evaluation(self, *, source_run_id, metrics, rubric_additions=None):
-    self.repeat_calls.append({'source_run_id': source_run_id, 'metrics': metrics, 'rubric_additions': rubric_additions})
+  async def repeat_evaluation(self, *, source_run_id, metrics, rubric_additions=None, sample_ids=None):
+    self.repeat_calls.append(
+      {
+        'source_run_id': source_run_id,
+        'metrics': metrics,
+        'rubric_additions': rubric_additions,
+        'sample_ids': sample_ids,
+      }
+    )
     if self._error is not None:
       raise self._error
     return self._started_evaluation
@@ -345,6 +357,7 @@ class TestEvaluationApi(unittest.TestCase):
 
   def test_post_repeat_returns_202_with_source_run_identifier(self) -> None:
     source_run_id = uuid4()
+    sample_id = uuid4()
     run = self._build_run()
     run.source_run_id = source_run_id
     service = _ServiceStub(started_evaluation=_EvaluationHandleStub(run))
@@ -360,6 +373,7 @@ class TestEvaluationApi(unittest.TestCase):
         json={
           'metrics': ['answer_correctness_judge'],
           'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
+          'sample_ids': [str(sample_id)],
         },
       )
 
@@ -373,6 +387,7 @@ class TestEvaluationApi(unittest.TestCase):
           'source_run_id': source_run_id,
           'metrics': ['answer_correctness_judge'],
           'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
+          'sample_ids': [sample_id],
         }
       ],
     )
@@ -388,6 +403,15 @@ class TestEvaluationApi(unittest.TestCase):
 
     self.assertEqual(response.status_code, 409)
     self.assertEqual(response.json(), {'detail': 'Source run is still running.'})
+
+  def test_post_repeat_returns_400_for_untraced_samples(self) -> None:
+    service = _ServiceStub(error=SampleSelectionError('Samples without a stored trace in the source run: x'))
+    app = create_app(service=cast(Any, service))
+
+    with TestClient(app) as client:
+      response = client.post(f'/evaluations/{uuid4()}/repeat', json={'sample_ids': [str(uuid4())]})
+
+    self.assertEqual(response.status_code, 400)
 
   def test_get_evaluations_returns_paginated_runs(self) -> None:
     completed_run = EvaluationRun(

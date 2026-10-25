@@ -247,6 +247,9 @@ poetry run my-eval repeat <evaluation-run-uuid> --metrics set_recall_snippet
 # Rescore the same traces with stricter judge requirements
 poetry run my-eval repeat <evaluation-run-uuid> --rubric-additions strict.json
 
+# Recompute only some traced samples of the source run
+poetry run my-eval repeat <evaluation-run-uuid> --sample-id <sample-uuid> --sample-id <sample-uuid>
+
 # Score exported trace files without calling the agent or the trace source
 poetry run my-eval import traces/*.json --trace-adapter my-source \
   --agent-name my-agent --agent-version-tag v1 --dataset-id <dataset-uuid>
@@ -264,7 +267,8 @@ the root span's `semantics.request`, or its text input when the adapter sets non
 when a file is invalid, the adapter is unknown, or a trace does not match exactly one sample.
 
 Without `--metrics`, a fresh run uses every metric available with your configuration, and a repeat uses the metrics of
-the source run. `--rubric-additions` takes a JSON file mapping selected LLM-judge metrics to extra requirements, for
+the source run. A repeat recomputes every traced sample of the source run, or only those given with `--sample-id`; its
+plan, totals and coverage then cover just those samples. `--rubric-additions` takes a JSON file mapping selected LLM-judge metrics to extra requirements, for
 example `{"answer_correctness_judge": "The answer must cite the warranty clause."}`; a repeat without it reuses the
 source run's additions. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
 `PARTIALLY_COMPLETED` runs, and non-zero when the run fails. `run`, `import` and `repeat` also write the report with
@@ -283,7 +287,7 @@ poetry run uvicorn my_eval.app:app --port 8005
 | `GET` | `/evaluations/{id}` | Run status with per-sample counts |
 | `GET` | `/evaluations/{id}/report` | Aggregated report of a finished run |
 | `POST` | `/evaluations/import` | Score exported traces in the background (start fields plus `traces` and optional `trace_adapter`, default `phoenix`) |
-| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run (optional `metrics` and `rubric_additions`) |
+| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run (optional `metrics`, `rubric_additions` and `sample_ids`) |
 | `POST` | `/evaluations/{id}/cancel` | Best-effort cancellation; the run ends as `FAILED` |
 | `POST` | `/datasets` | Import a dataset payload |
 | `GET` | `/datasets` | List datasets |

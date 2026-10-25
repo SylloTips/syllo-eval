@@ -9,6 +9,7 @@ from syllo_eval.service import (
   EvaluationService,
   MetricSelectionError,
   RepeatNotAllowedError,
+  SampleSelectionError,
   available_metric_names,
   resolve_selected_metric_names,
   resolve_selected_metric_names_csv,
@@ -470,6 +471,60 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(build_kwargs['selected_metric_names'], ['llm_calls'])
     self.assertEqual(build_kwargs['planned_sample_ids'], [traced_sample.sample_id])
     self.assertEqual(build_kwargs['source_run_id'], source_run.id)
+
+  async def test_repeat_evaluation_plans_only_selected_traced_samples(self) -> None:
+    source_run = EvaluationRun(
+      id=uuid4(),
+      agent_id=uuid4(),
+      dataset_id=uuid4(),
+      status=EvaluationStatus.PARTIALLY_COMPLETED,
+      start_time=datetime.now(tz=timezone.utc),
+      end_time=datetime.now(tz=timezone.utc),
+    )
+    first, second, third, untraced = (
+      EvaluationRunSample(
+        id=uuid4(),
+        evaluation_run_id=source_run.id,
+        sample_id=uuid4(),
+        trace_id=trace_id,
+        status=EvaluationSampleStatus.COMPLETED if trace_id else EvaluationSampleStatus.FAILED,
+      )
+      for trace_id in ('trace-1', 'trace-2', 'trace-3', None)
+    )
+    service = EvaluationService(
+      settings=cast(
+        Any,
+        SimpleNamespace(llm_judge=SimpleNamespace(provider=None), orbitals=SimpleNamespace(api_key=None)),
+      ),
+      db_manager=cast(DatabaseManager, object()),
+    )
+
+    def unit_of_work() -> _UnitOfWorkStub:
+      return _UnitOfWorkStub(
+        _EvaluationRunsRepositoryStub(get_by_id_result=source_run),
+        evaluation_run_samples=_EvaluationRunSamplesRepositoryStub(
+          list_by_evaluation_run_result=[first, second, third, untraced]
+        ),
+        evaluation_run_metrics=_EvaluationRunMetricsRepositoryStub(list_metrics_result=['llm_calls']),
+        agents=_AgentsRepositoryStub(
+          get_by_id_or_raise_result=Agent(id=source_run.agent_id, name='demo-agent', version_tag='v-test')
+        ),
+      )
+
+    execution = _PreparedExecutionStub(source_run.model_copy(update={'id': uuid4(), 'source_run_id': source_run.id}))
+    with (
+      patch('syllo_eval.service.UnitOfWork', side_effect=lambda *_: unit_of_work()),
+      patch.object(service, '_build_execution_from_plan', AsyncMock(return_value=execution)) as build_execution,
+    ):
+      await service.repeat_evaluation(source_run_id=source_run.id, sample_ids=[third.sample_id, first.sample_id])
+      for invalid in ([], [first.sample_id, first.sample_id], [untraced.sample_id], [uuid4()]):
+        with self.subTest(invalid=invalid), self.assertRaises(SampleSelectionError):
+          await service.repeat_evaluation(source_run_id=source_run.id, sample_ids=invalid)
+
+    build_execution.assert_awaited_once()
+    await_args = build_execution.await_args
+    assert await_args is not None
+    self.assertEqual(await_args.kwargs['planned_sample_ids'], [first.sample_id, third.sample_id])
 
 
 if __name__ == '__main__':

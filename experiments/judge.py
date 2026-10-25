@@ -3,24 +3,45 @@
 Experiment services disable the built-in metrics, so they never allocate a judge of their own: built-in metric classes
 and the experiment metrics all receive this client. It pins the model, thinking level, timeout and retries from the
 experiment config, and applies one concurrency limit to every judge call of a run. A request identical to an earlier
-one of the same sample gets its verdict without a new call, reporting no tokens.
+one of the same sample gets its verdict without a new call, reporting no tokens. ``judge_metrics`` binds each
+experiment arm's metrics to it.
 """
 
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
+from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
+from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
+  ContextualPrecisionDocumentJudgeMetric,
+)
 from syllo_eval.evaluation.plan_executor import sample_cache
+from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.settings import GeminiJudgeSettings
 
-from config import JudgeConfig
+from ablation_metrics import (
+  SEARCH_SPAN_TYPE,
+  AnswerCorrectnessWT,
+  ContextualPrecisionSC,
+  GoldClaimsContextualRecall,
+  GoldClaimsContextualRecallSC,
+  OrbitalsClaimsContextualRecall,
+  PlanCorrectnessWT,
+  stored_span_loader,
+)
+from config import Benchmark, JudgeConfig
+
+Arm = Literal['main', 'sc', 'wt']
+ARMS: tuple[Arm, ...] = ('main', 'sc', 'wt')
 
 
 class ConfiguredTemperatureJudgeClient:
@@ -88,3 +109,35 @@ async def open_judge_client(config: JudgeConfig, settings: GeminiJudgeSettings) 
   finally:
     # The judge client leaves an injected chat model to its owner.
     await chat_model.async_client.aclose()
+
+
+def judge_metrics(
+  benchmark: Benchmark, arm: Arm, *, judge: LlmJudgeClient, db_manager: DatabaseManager, output_token_limit: int
+) -> list[EvaluationMetric]:
+  """The metrics of ``arm`` on ``benchmark``, bound to ``judge``; empty when the arm does not apply to it.
+
+  ``main`` is Syllo-eval itself; ``sc`` judges every document or claim of a unit in one call (RQ1 Relevance and Fact
+  Support); ``wt`` reads the whole trace (RQ1 Answers and Plans).
+  """
+  search = (SEARCH_SPAN_TYPE,)
+  if benchmark == 'tau2':
+    if arm == 'main':
+      return [PlanCorrectnessJudgeMetric(judge_client=judge)]
+    return [PlanCorrectnessWT(judge_client=judge, load_spans=stored_span_loader(db_manager))] if arm == 'wt' else []
+  if arm == 'main':
+    recall = GoldClaimsContextualRecall if benchmark == 'erb' else OrbitalsClaimsContextualRecall
+    return [
+      AnswerCorrectnessJudgeMetric(judge_client=judge),
+      ContextualPrecisionDocumentJudgeMetric(judge_client=judge, target_span_types=search),
+      recall(judge_client=judge),
+    ]
+  if arm == 'sc':
+    precision = ContextualPrecisionSC(
+      judge_client=judge, output_token_limit=output_token_limit, target_span_types=search
+    )
+    if benchmark == 'wixqa':
+      return [precision]
+    return [precision, GoldClaimsContextualRecallSC(judge_client=judge, output_token_limit=output_token_limit)]
+  return (
+    [AnswerCorrectnessWT(judge_client=judge, load_spans=stored_span_loader(db_manager))] if benchmark == 'erb' else []
+  )
