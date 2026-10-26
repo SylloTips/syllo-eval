@@ -390,7 +390,7 @@ class _SpanStore:
 
 
 def _score_reply(request: LlmJudgeRequest) -> dict[str, Any]:
-  return {'score': 0.7, 'reasoning': 'Mostly correct.'}
+  return {'score': 1.0, 'reasoning': 'Correct.'}
 
 
 class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
@@ -434,8 +434,8 @@ class AnswerCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
 
     rendered, span_count = render_whole_trace(_trace(), 'root')
     self.assertEqual(store.loaded, ['trace-1'])
-    self.assertEqual(result.score, 0.7)
-    self.assertEqual(result.reasoning, 'Mostly correct.')
+    self.assertEqual(result.score, 1.0)
+    self.assertEqual(result.reasoning, 'Correct.')
     assert result.metadata is not None
     self.assertEqual(result.metadata['trace_render'], {'spans': span_count, 'chars': len(rendered)})
     self.assertEqual(result.metadata['judge_calls'], 1)
@@ -518,7 +518,7 @@ class PlanCorrectnessWTTest(unittest.IsolatedAsyncioTestCase):
     result = await metric.compute(_trace()[3], plan_truths)
 
     self.assertEqual(metric.ground_truth_skip_reason({}), 'Missing required ground truth: expected_plan.')
-    self.assertEqual(result.score, 0.7)
+    self.assertEqual(result.score, 1.0)
     self.assertIn('Expected plan (the reference solution):\nStep 1: operation=search', judge.requests[0].user_prompt)
     self.assertEqual(
       judge.requests[0].system_prompt, PlanCorrectnessJudgeMetric(judge_client=judge).build_system_prompt()

@@ -286,8 +286,8 @@ scoring of the retrieval metrics; answers get G-Eval's score.
     on false positives, because non-gold items can be relevant. Cohen's κ is secondary.
   - Degraded runs are excluded.
 - **Answers:**
-  - Two annotators grade on the AC anchors (1.0, 0.7, 0.4, 0.0), blind to configuration and judge output, and an
-    adjudicator resolves every disagreement.
+  - Two annotators grade each answer correct (1.0) or incorrect (0.0) with the AC system prompt (v2), verbatim, blind
+    to configuration and judge output, and an adjudicator resolves every disagreement.
   - Report Spearman ρ of the judge vs. the adjudicated grades.
   - Report judge vs. each annotator next to annotator vs. annotator.
 - **Plans:**
