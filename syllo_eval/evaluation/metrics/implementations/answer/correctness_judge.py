@@ -1,13 +1,24 @@
 from collections.abc import Mapping
 
+from pydantic import field_validator
+
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_final_answer,
   ground_truth_text,
 )
-from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric
+from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric, JudgeScorePayload
 from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.model import GroundTruth, GroundTruthKey, Span
+
+
+class AnswerCorrectnessPayload(JudgeScorePayload):
+  @field_validator('score')
+  @classmethod
+  def _binary_score(cls, score: float) -> float:
+    if score not in (0.0, 1.0):
+      raise ValueError('score must be exactly 0.0 or 1.0')
+    return score
 
 
 class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
@@ -15,7 +26,7 @@ class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
 
   metric_name = 'answer_correctness_judge'
   metric_description = 'Uses an LLM judge to score how well the agent answer matches the expected answer.'
-  prompt_version = 'v1'
+  prompt_version = 'v2'
 
   def input_skip_reason(self, span: Span) -> str | None:
     return 'Trace does not provide an answer.' if span.semantics.answer is None else None
@@ -23,6 +34,10 @@ class AnswerCorrectnessJudgeMetric(BaseLlmJudgeMetric):
   @property
   def target_span_types(self) -> tuple[str, ...]:
     return ('agent_root',)
+
+  @property
+  def response_model(self) -> type[JudgeScorePayload]:
+    return AnswerCorrectnessPayload
 
   @property
   def ground_truth_keys(self) -> tuple[str, ...]:
