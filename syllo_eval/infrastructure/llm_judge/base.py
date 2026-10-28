@@ -45,8 +45,16 @@ class LangChainLlmJudgeClient:
     self._close = close
 
   @property
+  def provider(self) -> str:
+    return self._provider_name
+
+  @property
   def model(self) -> str:
     return self._model
+
+  @property
+  def models(self) -> tuple[str, ...]:
+    return (self._model,)
 
   async def judge(self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
     async with self._semaphore:

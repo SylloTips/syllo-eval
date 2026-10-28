@@ -43,7 +43,7 @@ from syllo_eval.infrastructure.orbitals import OrbitalsClaimExtractorClient
 from syllo_eval.infrastructure.unit_of_work import TransactionalUnitOfWork, UnitOfWork
 from syllo_eval.model import EvaluationRun, EvaluationRunSample, EvaluationSampleStatus, EvaluationStatus
 from syllo_eval.orchestration.evaluation_orchestrator import EvaluationConfig, EvaluationOrchestrator
-from syllo_eval.settings import EnvSettings, EvaluationSettings, Settings
+from syllo_eval.settings import EnvSettings, EvaluationSettings, LlmJudgeSettings, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +299,7 @@ class EvaluationService:
     trace_adapters_by_agent_name: Mapping[str, TraceAdapter] | None = None,
     trace_integration: TraceIntegration | None = None,
     trace_adapters_by_name: Mapping[str, TraceAdapter] | None = None,
+    judge_client_factory: Callable[[LlmJudgeSettings], LlmJudgeClient | None] = build_llm_judge_client,
   ):
     if trace_client is not None and trace_integration is not None:
       raise ValueError('Supply either trace_client or trace_integration, not both')
@@ -318,6 +319,7 @@ class EvaluationService:
       raise ValueError('Supply trace adapters or a trace integration, not both')
     self._trace_client = trace_client
     self._trace_integration = trace_integration
+    self._judge_client_factory = judge_client_factory
     builtins = [metric_class.metric_name for metric_class in BUILTIN_METRICS] if include_builtin_metrics else []
     _reject_bad_metric_names([*builtins, *(metric.name for metric in self._custom_metrics)])
 
@@ -673,7 +675,7 @@ class EvaluationService:
         required_clients(selected_metric_names) if self._include_builtin_metrics else MetricClientRequirements()
       )
       if requirements.judge:
-        judge_client = build_llm_judge_client(self._settings.llm_judge)
+        judge_client = self._judge_client_factory(self._settings.llm_judge)
         if judge_client is not None:
           resources.push_async_callback(judge_client.aclose)
       if requirements.claim_extractor:
@@ -686,6 +688,7 @@ class EvaluationService:
         selected_metric_names=list(selected_metric_names),
         planned_sample_ids=list(planned_sample_ids),
         config=self._build_run_config_snapshot(
+          judge_client=judge_client,
           selected_metric_names=selected_metric_names,
           rubric_additions=rubric_additions or {},
           max_concurrent_samples=max_concurrent_samples,
@@ -774,6 +777,7 @@ class EvaluationService:
   def _build_run_config_snapshot(
     self,
     *,
+    judge_client: LlmJudgeClient | None,
     selected_metric_names: Sequence[str],
     rubric_additions: Mapping[str, str],
     max_concurrent_samples: int,
@@ -782,17 +786,12 @@ class EvaluationService:
     sample_compute_timeout: float | None,
     retrieval_span_types: Sequence[str],
   ) -> dict[str, object | None]:
-    provider = self._settings.llm_judge.provider
-    model = None
-    if provider == 'openai':
-      model = self._settings.llm_judge.openai.model
-    elif provider == 'gemini':
-      model = self._settings.llm_judge.gemini.model
-
+    models = list(getattr(judge_client, 'models', ()))
     return {
       'plan_snapshot_version': 1,
-      'llm_judge_provider': provider,
-      'llm_judge_model': model,
+      'llm_judge_provider': getattr(judge_client, 'provider', None),
+      'llm_judge_model': models[0] if models else None,
+      'llm_judge_models': models or None,
       'orbitals_claim_extractor_model': (
         self._settings.orbitals.claim_extractor_model if self._settings.orbitals.api_key is not None else None
       ),
