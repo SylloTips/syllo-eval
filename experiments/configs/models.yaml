@@ -19,13 +19,14 @@ customer_simulator:
   model: gpt-6-luna
   label: GPT 6 Luna
 
-# One judge for every framework (Syllo-eval, its ablations, DeepEval). Temperature and thinking level are frozen at
-# the pilot gate: the paper uses temperature 0, while Google recommends the default 1.0 for Gemini 3 models.
+# One judge for every framework (Syllo-eval, its ablations, DeepEval), at the model's own defaults: Gemini's model
+# metadata (2026-10-25) gives temperature 1 (maximum 2) and thinking support. The temperature is sent explicitly, since
+# the built-in metrics ask for 0.0.
 judge:
   provider: gemini
-  model: gemini-3.8-flash # paper placeholder
+  model: gemini-3.8-flash
   label: Gemini 3.8 Flash
-  temperature: 0.0
+  temperature: 1.0
   thinking_level: null
   timeout_seconds: 300
   max_retries: 5

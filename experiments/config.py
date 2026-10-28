@@ -156,12 +156,20 @@ class BenchmarkSource(_ConfigModel):
   files: dict[str, PinnedFile] = Field(min_length=1)
 
 
+class JudgeSamplesConfig(_ConfigModel):
+  """Sample keys the judge step scores outside a full pass; see ``configs/judge.yaml``."""
+
+  pilot_samples: dict[Benchmark, tuple[str, ...]] = Field(default_factory=dict)
+  annotated_samples: dict[Benchmark, tuple[str, ...]] = Field(default_factory=dict)
+
+
 class ExperimentConfig(_ConfigModel):
   models: ModelsConfig
   configurations: tuple[Configuration, ...] = Field(min_length=1)
   benchmarks: dict[Benchmark, BenchmarkSource]
   tau2: Tau2Config
   odr: OdrConfig
+  judge_samples: JudgeSamplesConfig = JudgeSamplesConfig()
 
   @model_validator(mode='after')
   def _check_references(self) -> 'ExperimentConfig':
@@ -202,6 +210,7 @@ def load_config(config_dir: Path = CONFIG_DIR) -> ExperimentConfig:
     benchmarks=_read_yaml(config_dir / 'benchmarks.yaml'),
     tau2=_read_yaml(config_dir / 'tau2.yaml'),
     odr=_read_yaml(config_dir / 'odr.yaml'),
+    judge_samples=_read_yaml(config_dir / 'judge.yaml'),
   )
 
 

@@ -112,6 +112,17 @@ async def import_pilot(
   return outcome
 
 
+def sample_prompts(name: str, source: BenchmarkSource, data_dir: Path, sample_keys: Sequence[str]) -> list[str]:
+  """The input prompts of the samples with the given ``sample_key``s, in their order, from the checked conversion."""
+  payload, _ = _read_checked(name, source, data_dir)
+  records = read_records(data_dir / name)
+  prompts = {str(record['sample_key']): sample.input_prompt for record, sample in zip(records, payload.samples)}
+  unknown = sorted(set(sample_keys) - set(prompts))
+  if unknown:
+    raise ValueError(f'{name} has no samples with keys {unknown}')
+  return [prompts[key] for key in sample_keys]
+
+
 def _read_checked(name: str, source: BenchmarkSource, data_dir: Path) -> tuple[DatasetJsonPayload, ClaimsByKey]:
   """A conversion that passed its checks and was made from ``source``'s current pins."""
   directory = data_dir / name

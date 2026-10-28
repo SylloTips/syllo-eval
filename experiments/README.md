@@ -426,14 +426,46 @@ change.
   `contextual_recall_gold_claims`, `set_precision_retrieved_document` and `set_recall_retrieved_document` read the
   root's `retrieved` stage, so each question is one unit; the built-in metrics read `selected` and skip the root.
 - **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
-  never decomposes the expected answer, so a unit makes one judge call per claim. Recall over `decomposed_claims` (RQ2)
-  and `expected_claims_verified` (RQ3) is the same subclass with another key, once those ground truths are imported.
+  never decomposes the expected answer, so a unit makes one judge call per claim; it serves RQ1 attribution and RQ2.
+  Recall over `expected_claims_verified` (RQ3) is the same subclass with another key, once those claims are imported.
   On WixQA, `contextual_recall_orbitals_claims` is that subclass reading `expected_claims_orbitals`.
   DeepEval's recall over `expected_claims_verified` is likewise its gold-claims metric with that key.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
 - **Failures:** a failed unit records its cause in `metadata['failure']` (the library's classes, plus `trace_load` for
   a whole-trace unit whose trace could not be loaded) and the usage of every judge call.
+
+## Judge
+
+```bash
+poetry run syllo-exp judge --source-run <collection run id> --arm main --repetition 1   # 2 and 3 are the retests
+poetry run syllo-exp judge --source-run <collection run id> --arm sc --pilot
+poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <judge run id>
+```
+
+- **What it does:** it repeats a finished collection run (`COMPLETED` or `PARTIALLY_COMPLETED`, of a benchmark or of
+  its pilot dataset) on its stored traces with the judge metrics of one arm. The source run's benchmark selects them:
+
+  | Arm | ERB | WixQA | τ²-bench |
+  |---|---|---|---|
+  | `main` | AC, CP, CR over `expected_claims_gold` | AC, CP, CR over `expected_claims_orbitals` | PC |
+  | `sc` | CP and CR SC | CP SC | refused |
+  | `wt` | AC WT, on the annotated questions | refused | PC WT |
+
+- **Samples:** every traced sample, except that ERB `wt` scores the `annotated_samples` of `configs/judge.yaml` and
+  `--pilot` scores its `pilot_samples`, both by sample key within the source run's dataset. A sample without a trace
+  is a collection failure: it is counted in the manifest, never judged, and left out of those selections.
+- **Manifest:** the step is `judge:<source run>:<arm>:<repetition>`, with `:pilot` or `:retry-<n>` appended for those
+  runs, and records the run, the configuration, the metrics, the judge settings, the collection failures, the failed
+  units per metric and class, and the unresolved samples.
+- **Completion:** a sample is unresolved until it completes and each of its metrics has an outcome: an interrupted
+  sample can hold only part of its computations, and a computation failed without an outcome of the judge
+  ([`METHODOLOGY.md`](METHODOLOGY.md), Failures) is none. `--retry <judge run>` takes the latest attempt of the same step,
+  never a pilot, and scores its unresolved samples again in a new run, which replaces their whole earlier attempt.
+  Every other sample's latest attempt is then resolved, so the step completes when a retry leaves nothing unresolved,
+  listing every attempt in order; for each sample, the latest run that scored it holds its results. Every attempt's cost stays recorded.
+- **Requirements:** the database, the converted benchmarks for `--pilot` and ERB `wt`, and `GOOGLE_API_KEY` for the
+  shared judge (`configs/models.yaml`). No agent is called.
 
 ## DeepEval baseline
 
@@ -611,13 +643,12 @@ The parent project's `poetry run ruff check .` and `poetry run ruff format .` al
 1. **Collect.** Fresh runs call each agent and archive its raw traces (`syllo-exp collect`). They compute only
    deterministic metrics.
 2. **Judge.** Every judge evaluation repeats a collection run on its stored traces:
-   - the main pass and two retests;
-   - the gold-claim pass;
-   - the SC and WT ablations;
+   - the main pass and two retests, and the SC and WT ablations (`syllo-exp judge`);
    - the DeepEval baseline (`syllo-exp deepeval`).
 3. **Construct.** RQ3 lists and padded traces are imported as new traces.
 4. **Annotate.** Humans grade 180 answers and verify ERB facts.
 5. **Analyze.** Tables 2–4 and every red placeholder are regenerated from the exports.
 
-A pilot on a small slice gates the full campaign (`benchmarks pilot`, then `collect --pilot`). It fixes the judge's
-temperature and thinking level and checks cost.
+A pilot on a small slice gates the full campaign (`benchmarks pilot`, then `collect --pilot`), and `judge --pilot`
+checks each arm and its cost range before the judge passes. The judge runs at the model's default temperature and
+thinking level.

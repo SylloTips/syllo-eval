@@ -1,0 +1,6 @@
+# Samples the judge step scores outside a full pass, by the benchmark's sample_key (`syllo-exp judge`).
+# Pilot: a few stress cases per benchmark, for a smoke test and a cost range before the full passes.
+pilot_samples:
+  tau2: ['0', '24', '40']
+# Annotated: the ERB questions drawn for human grading; the ERB whole-trace arm scores only these.
+annotated_samples: {}

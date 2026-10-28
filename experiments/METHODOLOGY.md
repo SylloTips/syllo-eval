@@ -186,8 +186,7 @@ Claims are stored as ground truth, never re-derived during a run:
 
 | Key | Content | Used by |
 |---|---|---|
-| `expected_claims_gold` | ERB answer facts, for Basic and Semantic questions (single gold document) | RQ1 attribution |
-| `decomposed_claims` | each expected answer decomposed once with the built-in decomposition prompt, after the pilot | RQ2 CR |
+| `expected_claims_gold` | ERB answer facts, for Basic and Semantic questions (single gold document) | RQ1 attribution, RQ2 CR on ERB |
 | `expected_claims_verified` | ERB facts an annotator found in the gold document, as truncated by the search tool | RQ3 CR |
 | `expected_claims_orbitals` | each WixQA expected answer decomposed once by Orbitals' `claim-extractor-pro-2605`, from the question and the answer, with the description of the WixQA assistant in `configs/models.yaml`, without the claims it types as unverifiable | WixQA CR |
 
@@ -270,7 +269,8 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   - A question without a successful search has an observed empty evidence, on which CR and R score 0. The planner
     skips its CP and NDCG@10, which the analysis sets to 0 too. A question whose evidence is unavailable is not scored
     on any retrieval metric: it is a coverage gap, not a 0.
-  - An agent failure that persists after retries scores 0 on AC.
+  - An agent failure that persists after retries is a collection failure: the question has no trace, so it is
+    excluded from every metric and reported separately per configuration, never as a judge score.
 - **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's
   score statistics, which pool every computation and so weigh questions by their number of searches.
 - **Pairing:** rankings and bootstraps use the questions scored for every configuration, and their count is reported.

@@ -9,7 +9,7 @@ import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
 import httpx
@@ -21,7 +21,13 @@ from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
 from syllo_eval.infrastructure.exceptions import PersistenceError
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
-from syllo_eval.model import EvaluationStatus, MetricComputationStatus
+from syllo_eval.model import (
+  EvaluationRunSample,
+  EvaluationSampleStatus,
+  EvaluationStatus,
+  MetricComputation,
+  MetricComputationStatus,
+)
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
@@ -33,7 +39,9 @@ from config import (
   DATA_DIR,
   BenchmarkSource,
   ClaimExtractorConfig,
+  Configuration,
   EmbeddingConfig,
+  ExperimentConfig,
   load_config,
   load_environment,
 )
@@ -41,6 +49,7 @@ from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, o
 from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
 from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
+from judge import ARMS, judge_metrics, open_judge_client
 from manifest import Manifest, StepStatus
 from run_outputs import RunOutputs
 from service import build_service, open_database
@@ -155,6 +164,33 @@ def build_parser() -> argparse.ArgumentParser:
   deepeval.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
   deepeval.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
 
+  judge = commands.add_parser(
+    'judge',
+    help='Score the stored traces of a collection run with the metrics of one experiment arm.',
+    description=(
+      'Repeat a finished collection run on its stored traces with the judge metrics of one arm: main (Syllo-eval), '
+      'sc (single-call ablation) or wt (whole-trace ablation).'
+    ),
+  )
+  judge.add_argument('--source-run', type=UUID, required=True, help='Collection run whose stored traces are scored.')
+  judge.add_argument('--arm', choices=ARMS, required=True, help='Experiment arm.')
+  judge.add_argument(
+    '--repetition', type=int, choices=(1, 2, 3), default=1, help='Pass of the main arm: 2 and 3 are the retests.'
+  )
+  scope = judge.add_mutually_exclusive_group()
+  scope.add_argument('--pilot', action='store_true', help="Score only the benchmark's pilot samples (judge.yaml).")
+  scope.add_argument(
+    '--retry', type=UUID, metavar='JUDGE_RUN', help='Score again the unresolved samples of a run of the same step.'
+  )
+  judge.add_argument(
+    '--max-concurrent-samples',
+    type=_positive_int,
+    help='Samples scored at once (default: EVALUATION_MAX_CONCURRENT_SAMPLES, or 1); cost runs use 1.',
+  )
+  judge.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  judge.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Folder of the converted benchmarks.')
+  judge.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
+
   search = commands.add_parser(
     'search-server',
     help='Serve the search tool of one knowledge base over MCP.',
@@ -228,6 +264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_collect(args))
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
+  elif args.command == 'judge':
+    return asyncio.run(_judge(args))
   return 0
 
 
@@ -623,6 +661,220 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
   if unscored:
     print(f'deepeval: failed: {unscored} units failed without a judge outcome and must run again')
   return 0 if complete else 1
+
+
+async def _judge(args: argparse.Namespace) -> int:
+  """Repeat a collection run with one arm's metrics; the manifest records the step, its run and unresolved samples."""
+  if args.repetition != 1 and args.arm != 'main':
+    print('judge: only the main arm has repetitions', file=sys.stderr)
+    return 2
+  config = load_config(args.config_dir)
+  judge_config = config.models.judge
+  load_environment()
+  settings, judge_settings = Settings(), GeminiJudgeSettings()
+  if judge_settings.api_key is None:
+    print('The judge needs GOOGLE_API_KEY.', file=sys.stderr)
+    return 2
+  manifest = Manifest(args.manifest)
+  base_step = f'judge:{args.source_run}:{args.arm}:{args.repetition}'
+  chain = _step_chain(manifest, base_step)
+  step = base_step
+  if args.pilot:
+    step = f'{base_step}:pilot'
+  elif args.retry:
+    # Retrying only the latest attempt keeps every other sample's latest attempt resolved, so the step is complete
+    # exactly when a retry leaves nothing unresolved.
+    if not chain or args.retry != chain[-1]:
+      latest = f'its latest attempt is {chain[-1]}' if chain else 'it has no run yet'
+      print(f'judge: --retry must name the latest attempt of {base_step}; {latest}', file=sys.stderr)
+      return 2
+    step = f'{base_step}:retry-{sum(name.startswith(f"{base_step}:retry-") for name in manifest.latest()) + 1}'
+  details: dict[str, Any] = {
+    'source_run_id': str(args.source_run),
+    'judge': judge_config.model_dump(include={'model', 'temperature', 'thinking_level'}),
+  }
+  run_ids: tuple[UUID, ...] = ()
+  try:
+    async with open_database(settings) as db_manager, open_judge_client(judge_config, judge_settings) as judge:
+      if not await db_manager.health_check():
+        raise DatabaseConnectionError('Database health check failed')
+      source = await _collection_run(db_manager, config, args.source_run)
+      configuration = source.configuration
+      metrics = judge_metrics(
+        configuration.benchmark,
+        args.arm,
+        judge=judge,
+        db_manager=db_manager,
+        output_token_limit=judge_config.output_token_limit,
+      )
+      if not metrics:
+        raise ValueError(f'the {args.arm} arm does not apply to {configuration.benchmark}')
+      metric_names = [metric.name for metric in metrics]
+      if args.retry:
+        sample_ids: list[UUID] | None = await _retry_samples(db_manager, args.retry, args.source_run, metric_names)
+      else:
+        sample_ids = await _scoped_samples(db_manager, config, source, args)
+      details.update(
+        configuration=configuration.id,
+        metrics=metric_names,
+        collection_failures=source.collection_failures,
+        samples=len(source.traced) if sample_ids is None else len(sample_ids),
+      )
+      async with build_service(settings, db_manager, metrics=metrics) as service:
+        handle = await service.repeat_evaluation(
+          source_run_id=args.source_run,
+          metrics=metric_names,
+          max_concurrent_samples=args.max_concurrent_samples,
+          sample_ids=sample_ids,
+        )
+        run_ids = (handle.run.id,)
+        # A crash past this point leaves the step started, with the run it made.
+        manifest.append(step, StepStatus.STARTED, run_ids=run_ids, details=details)
+        run = await handle.execute()
+      failed_units = await _failed_units(db_manager, run.id)
+      unresolved = await _unresolved_samples(db_manager, run.id, metric_names)
+  except (ValueError, PersistenceError, psycopg.Error) as error:
+    _record_failure(manifest, step, 'judge', error, run_ids=run_ids, details=details)
+    return 1
+  details.update(run_status=run.status.value, failed_units=failed_units, unresolved=[str(s) for s in unresolved])
+  manifest.append(step, StepStatus.FAILED if unresolved else StepStatus.COMPLETED, run_ids=run_ids, details=details)
+  if args.retry and not unresolved:
+    # The real step completes once a retry resolves what its earlier runs left. Its runs are every attempt in order:
+    # for each sample, the latest run that scored it holds its results.
+    base = manifest.latest().get(base_step)
+    manifest.append(
+      base_step,
+      StepStatus.COMPLETED,
+      run_ids=tuple(dict.fromkeys((*chain, *run_ids))),
+      details={**(base.details if base else {}), 'unresolved': []},
+    )
+  print(f'judge: run {run.id} {run.status.value}, {configuration.id} {args.arm} arm on the traces of {args.source_run}')
+  for metric, kinds in failed_units.items():
+    print(f'  {metric} failed units: ' + ', '.join(f'{count} {kind}' for kind, count in kinds.items()))
+  if unresolved:
+    print(f'judge: failed: {len(unresolved)} samples are unresolved; score them again with --retry {run.id}')
+  return 1 if unresolved else 0
+
+
+def _step_chain(manifest: Manifest, base_step: str) -> list[UUID]:
+  """The runs of a judge step and of its retries, in the order they were made."""
+  records = manifest.records()
+  steps = [record for record in records if record.step == base_step or record.step.startswith(f'{base_step}:retry-')]
+  return list(dict.fromkeys(run_id for record in steps for run_id in record.run_ids))
+
+
+class _CollectionRun(NamedTuple):
+  configuration: Configuration
+  dataset_id: UUID
+  traced: frozenset[UUID]
+  collection_failures: int
+
+
+async def _collection_run(db_manager: DatabaseManager, config: ExperimentConfig, run_id: UUID) -> _CollectionRun:
+  """A finished collection run: its configuration, dataset, traced samples and samples without a trace."""
+  async with UnitOfWork(db_manager) as uow:
+    run = await uow.evaluation_runs.get_by_id_or_raise(run_id)
+    dataset = await uow.datasets.get_by_id_or_raise(run.dataset_id)
+    agent = await uow.agents.get_by_id_or_raise(run.agent_id)
+    run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run_id)
+  if run.source_run_id is not None:
+    raise ValueError(f'run {run_id} repeats run {run.source_run_id}; pass the collection run')
+  if run.status not in (EvaluationStatus.COMPLETED, EvaluationStatus.PARTIALLY_COMPLETED):
+    raise ValueError(f'collection run {run_id} is {run.status.value}, not finished')
+  benchmarks = {
+    name
+    for name, source in config.benchmarks.items()
+    if dataset.name in (source.dataset_name, benchmark_steps.pilot_dataset_name(source))
+  }
+  agent_version = (agent.name, agent.version_tag)
+  matches = [
+    c for c in config.configurations if c.benchmark in benchmarks and (c.agent, c.version_tag) == agent_version
+  ]
+  if len(matches) != 1:
+    raise ValueError(f'run {run_id} ({dataset.name}, {agent.name}/{agent.version_tag}) matches no configuration')
+  traced = frozenset(run_sample.sample_id for run_sample in run_samples if run_sample.trace_id is not None)
+  return _CollectionRun(matches[0], run.dataset_id, traced, len(run_samples) - len(traced))
+
+
+async def _scoped_samples(
+  db_manager: DatabaseManager, config: ExperimentConfig, source: _CollectionRun, args: argparse.Namespace
+) -> list[UUID] | None:
+  """The traced samples of a pilot or of the ERB whole-trace arm, by sample key; ``None`` for every traced one."""
+  benchmark = source.configuration.benchmark
+  keys: tuple[str, ...] | None = None
+  if benchmark == 'erb' and args.arm == 'wt':
+    keys = config.judge_samples.annotated_samples.get(benchmark, ())
+  if args.pilot:
+    pilot = config.judge_samples.pilot_samples.get(benchmark, ())
+    keys = pilot if keys is None else tuple(key for key in pilot if key in keys)
+  if keys is None:
+    return None
+  if not keys:
+    raise ValueError(f'configs/judge.yaml lists no samples of {benchmark} for this step')
+  prompts = benchmark_steps.sample_prompts(benchmark, config.benchmarks[benchmark], args.data_dir, keys)
+  async with UnitOfWork(db_manager) as uow:
+    samples = await uow.samples.list_by_dataset(source.dataset_id)
+  ids = {sample.input_prompt: sample.id for sample in samples}
+  missing = [key for key, prompt in zip(keys, prompts) if prompt not in ids]
+  if missing:
+    raise ValueError(f"the source run's dataset has no samples with keys {missing}")
+  # Collection failures have no trace to judge; the manifest counts them with the run's.
+  scoped = [ids[prompt] for prompt in prompts if ids[prompt] in source.traced]
+  if not scoped:
+    raise ValueError(f'none of the samples {list(keys)} has a trace in the source run')
+  return scoped
+
+
+async def _retry_samples(
+  db_manager: DatabaseManager, judge_run_id: UUID, source_run_id: UUID, metric_names: Sequence[str]
+) -> list[UUID]:
+  async with UnitOfWork(db_manager) as uow:
+    judge_run = await uow.evaluation_runs.get_by_id_or_raise(judge_run_id)
+    judge_metric_names = await uow.evaluation_run_metrics.list_metrics(judge_run_id)
+  if judge_run.source_run_id != source_run_id or sorted(judge_metric_names) != sorted(metric_names):
+    raise ValueError(f'run {judge_run_id} is not a run of this step')
+  unresolved = await _unresolved_samples(db_manager, judge_run_id, metric_names)
+  if not unresolved:
+    raise ValueError(f'run {judge_run_id} has no unresolved samples')
+  return unresolved
+
+
+async def _unresolved_samples(db_manager: DatabaseManager, run_id: UUID, metric_names: Sequence[str]) -> list[UUID]:
+  async with UnitOfWork(db_manager) as uow:
+    planned = await uow.evaluation_run_plan_samples.list_sample_ids(run_id)
+    run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run_id)
+    computations = await uow.metric_computations.list_by_evaluation_run(run_id)
+  return unresolved_samples(planned, run_samples, computations, metric_names)
+
+
+def unresolved_samples(
+  planned: Sequence[UUID],
+  run_samples: Sequence[EvaluationRunSample],
+  computations: Sequence[MetricComputation],
+  metric_names: Sequence[str],
+) -> list[UUID]:
+  """Planned samples that did not complete, or with a metric that has no outcome.
+
+  Completed computations, persisted skips and judge outcomes are outcomes. A metric without any computation, or with
+  one failed for another reason (provider, trace load, unclassified), is unresolved. A sample whose compute phase did
+  not complete is unresolved even with computations, since an interruption can leave only some of them persisted.
+  """
+  completed = {
+    run_sample.sample_id for run_sample in run_samples if run_sample.status is EvaluationSampleStatus.COMPLETED
+  }
+  sample_ids = {run_sample.id: run_sample.sample_id for run_sample in run_samples}
+  resolved: defaultdict[tuple[UUID, str], list[bool]] = defaultdict(list)
+  for computation in computations:
+    resolved[(sample_ids[computation.evaluation_run_sample_id], computation.metric)].append(
+      computation.status is not MetricComputationStatus.FAILED
+      or (computation.metadata or {}).get('failure') in _JUDGE_OUTCOMES
+    )
+  return [
+    sample_id
+    for sample_id in planned
+    if sample_id not in completed
+    or not all(resolved[(sample_id, metric)] and all(resolved[(sample_id, metric)]) for metric in metric_names)
+  ]
 
 
 async def _failed_units(db_manager: DatabaseManager, run_id: UUID) -> dict[str, dict[str, int]]:

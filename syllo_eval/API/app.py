@@ -16,6 +16,7 @@ from syllo_eval.service import (
   EvaluationService,
   MetricSelectionError,
   RepeatNotAllowedError,
+  SampleSelectionError,
   ServiceFactory,
   load_service_factory,
 )
@@ -53,6 +54,7 @@ class ImportEvaluationRequest(StartEvaluationRequest):
 class RepeatEvaluationRequest(BaseModel):
   metrics: list[str] | None = None
   rubric_additions: dict[str, str] | None = None
+  sample_ids: list[UUID] | None = None
 
 
 class StartEvaluationResponse(BaseModel):
@@ -160,7 +162,10 @@ IMPORT_ERROR_RESPONSE: dict[int | str, dict[str, Any]] = {
 
 REPEAT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
   **NOT_FOUND_RESPONSE,
-  **METRIC_SELECTION_ERROR_RESPONSE,
+  status.HTTP_400_BAD_REQUEST: {
+    'model': ErrorResponse,
+    'description': 'Unknown or invalid metric name(s), or sample ids that are not traced samples of the source run.',
+  },
   status.HTTP_409_CONFLICT: {
     'model': ErrorResponse,
     'description': 'The source run cannot be repeated.',
@@ -356,10 +361,11 @@ def create_app(
         source_run_id=evaluation_run_id,
         metrics=request.metrics,
         rubric_additions=request.rubric_additions,
+        sample_ids=request.sample_ids,
       )
     except NotFoundError as err:
       raise _build_not_found_http_exception(evaluation_run_id) from err
-    except MetricSelectionError as err:
+    except (MetricSelectionError, SampleSelectionError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
     except RepeatNotAllowedError as err:
       raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err)) from err

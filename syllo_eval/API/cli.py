@@ -239,6 +239,7 @@ async def _repeat(
   selected_metric_names: Sequence[str] | None,
   rubric_additions: dict[str, str] | None,
   report_path: Path | None,
+  sample_ids: Sequence[UUID] | None = None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
@@ -246,6 +247,7 @@ async def _repeat(
       source_run_id=source_run_id,
       metrics=selected_metric_names,
       rubric_additions=rubric_additions,
+      sample_ids=sample_ids,
       max_concurrent_tasks=max_concurrent_tasks,
       sample_compute_timeout=sample_compute_timeout,
     )
@@ -324,6 +326,15 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     '--metrics',
     help='Optional comma-separated metrics to recompute (any current-runtime metric). '
     'Defaults to the source run metric snapshot.',
+  )
+  parser.add_argument(
+    '--sample-id',
+    dest='sample_ids',
+    action='append',
+    type=_parse_uuid,
+    default=None,
+    help='Recompute only this sample (repeatable). Each must have a stored trace in the source run. '
+    'Defaults to every traced sample.',
   )
   parser.add_argument(
     '--sample-compute-timeout-seconds',
@@ -572,6 +583,7 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
         selected_metric_names=selected_metric_names,
         rubric_additions=args.rubric_additions,
         report_path=args.report_path,
+        sample_ids=args.sample_ids,
       )
     )
   except Exception:
