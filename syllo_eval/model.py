@@ -152,6 +152,7 @@ class EvaluationRun(BaseModel):
 class EvaluationRunConfig(BaseModel):
   llm_judge_provider: str | None = None
   llm_judge_model: str | None = None
+  llm_judge_models: list[str] | None = None
   orbitals_claim_extractor_model: str | None = None
   max_concurrent_samples: int | None = None
   max_concurrent_tasks: int | None = None

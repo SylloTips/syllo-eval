@@ -181,6 +181,12 @@ A `trace_integration` replaces fetching, normalization, and persistence altogeth
 
 Callers and adapters you inject stay owned by you, and must support concurrent calls.
 
+To send judge calls elsewhere, pass `judge_client_factory`: it receives `settings.llm_judge` and returns an
+`LlmJudgeClient`, which the run builds only when a selected metric needs a judge and closes when it ends. The run's
+`config` records the judge from the client's `provider` and `models` (primary first) as `llm_judge_provider`,
+`llm_judge_model` and `llm_judge_models`; a client without them, or a run without judge metrics, records none.
+`LLM_JUDGE_PROVIDER` still enables the judge metrics.
+
 Imports pick their adapter by name rather than by agent, so no caller or agent configuration is needed. `phoenix` is
 built in; register others with `trace_adapters_by_name={'my-source': MyTraceAdapter()}`.
 

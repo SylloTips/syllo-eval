@@ -592,7 +592,9 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     ]
     orchestrator = MagicMock(create_run=AsyncMock(return_value=_run()))
     service = EvaluationService(
-      settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')), db_manager=cast(DatabaseManager, object())
+      settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')),
+      db_manager=cast(DatabaseManager, object()),
+      judge_client_factory=lambda _: MagicMock(aclose=AsyncMock()),
     )
 
     async def snapshot(rubric_additions: dict[str, str] | None) -> dict[str, Any]:
@@ -601,7 +603,6 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
 
     with (
       patch('syllo_eval.service.UnitOfWork', return_value=_AsyncRepositoryContext(repositories)),
-      patch('syllo_eval.service.build_llm_judge_client', return_value=MagicMock(aclose=AsyncMock())),
       patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock),
       patch('syllo_eval.service.EvaluationOrchestrator', return_value=orchestrator),
     ):
@@ -801,6 +802,10 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
 
   async def test_builtin_judge_resource_closes_after_success(self) -> None:
     judge_client, execution = await self._build_judge_execution()
+    snapshot = cast(dict[str, object], execution.config.config)
+    self.assertEqual(snapshot['llm_judge_provider'], 'llm_manager')
+    self.assertEqual(snapshot['llm_judge_model'], 'primary')
+    self.assertEqual(snapshot['llm_judge_models'], ['primary', 'fallback'])
     await execution.execute_run(_run())
     judge_client.aclose.assert_awaited_once_with()
 
@@ -817,11 +822,9 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
       ),
       db_manager=cast(DatabaseManager, object()),
       trace_integration=MagicMock(),
+      judge_client_factory=(build_judge := MagicMock()),
     )
-    with (
-      patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock),
-      patch('syllo_eval.service.build_llm_judge_client') as build_judge,
-    ):
+    with patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock):
       execution = await service._build_execution_from_plan(
         agent_id=uuid4(),
         dataset_id=uuid4(),
@@ -837,6 +840,7 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(snapshot['max_concurrent_tasks'], 3)
     self.assertEqual(snapshot['sample_trace_timeout_seconds'], 4)
     self.assertEqual(snapshot['sample_compute_timeout_seconds'], 5)
+    self.assertIsNone(snapshot['llm_judge_provider'])
     build_judge.assert_not_called()
     await execution.close()
 
@@ -845,11 +849,9 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     service = EvaluationService(
       settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')),
       db_manager=cast(DatabaseManager, object()),
+      judge_client_factory=lambda _: judge,
     )
-    with (
-      patch('syllo_eval.service.build_llm_judge_client', return_value=judge),
-      patch.object(service, '_build_claim_extractor_client', side_effect=RuntimeError('provider setup failed')),
-    ):
+    with patch.object(service, '_build_claim_extractor_client', side_effect=RuntimeError('provider setup failed')):
       with self.assertRaisesRegex(RuntimeError, 'provider setup failed'):
         await service._build_execution_from_plan(
           agent_id=uuid4(),
@@ -880,17 +882,17 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     judge_client.aclose.assert_awaited_once_with()
 
   async def _build_judge_execution(self) -> tuple[MagicMock, Any]:
-    judge_client = MagicMock()
+    judge_client = MagicMock(provider='llm_manager', models=('primary', 'fallback'))
     judge_client.aclose = AsyncMock()
     orchestrator = MagicMock()
     orchestrator.execute_run = AsyncMock(return_value=_run())
     service = EvaluationService(
       settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')),
       db_manager=cast(DatabaseManager, object()),
+      judge_client_factory=lambda _: judge_client,
     )
 
     with (
-      patch('syllo_eval.service.build_llm_judge_client', return_value=judge_client),
       patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock),
       patch('syllo_eval.service.EvaluationOrchestrator', return_value=orchestrator),
     ):

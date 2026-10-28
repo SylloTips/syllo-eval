@@ -582,7 +582,8 @@ class TestLlmJudgeFactory(unittest.TestCase):
 
     client = build_llm_judge_client(config)
 
-    self.assertIsInstance(client, OpenAILlmJudgeClient)
+    assert isinstance(client, OpenAILlmJudgeClient)
+    self.assertEqual((client.provider, client.models), ('openai', ('gpt-5-mini',)))
 
   def test_factory_builds_gemini_client(self) -> None:
     config = LlmJudgeSettings(
@@ -594,7 +595,8 @@ class TestLlmJudgeFactory(unittest.TestCase):
 
     client = build_llm_judge_client(config)
 
-    self.assertIsInstance(client, GeminiLlmJudgeClient)
+    assert isinstance(client, GeminiLlmJudgeClient)
+    self.assertEqual((client.provider, client.models), ('gemini', ('gemini-3.1-flash-lite',)))
 
 
 class TestBaseLlmJudgeMetric(unittest.IsolatedAsyncioTestCase):
