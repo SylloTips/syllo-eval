@@ -67,7 +67,7 @@ expected output of each step.
 | `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify; `dify-patch-plugins.sh`, which adapts Dify's plugins to GPT models and token counting |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
-| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets |
+| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP verdicts |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup
