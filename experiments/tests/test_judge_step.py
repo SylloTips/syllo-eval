@@ -161,6 +161,13 @@ class JudgeCliTest(unittest.TestCase):
       metrics=['answer_correctness_judge', 'contextual_precision_document_judge', 'contextual_recall_orbitals_claims'],
       max_concurrent_samples=None,
       sample_ids=None,
+      metadata={
+        'step': f'judge:{self.source_run}:main:2',
+        'configuration': 'wixqa/react/gpt',
+        'arm': 'main',
+        'repetition': 2,
+        'judge': {'model': 'gemini-3.8-flash', 'temperature': 1.0, 'thinking_level': None},
+      },
     )
     records = Manifest(self.manifest).records()
     self.assertEqual([record.step for record in records], [f'judge:{self.source_run}:main:2'] * 2)
