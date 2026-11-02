@@ -383,6 +383,7 @@ class BuildCallerTest(unittest.TestCase):
             'temperature': 0.0,
             'timeout_seconds': 300,
             'max_retries': 5,
+            'output_attempts': 3,
             'max_concurrent_requests': 4,
             'output_token_limit': 65536,
           },

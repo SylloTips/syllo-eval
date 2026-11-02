@@ -166,7 +166,7 @@ class JudgeCliTest(unittest.TestCase):
         'configuration': 'wixqa/react/gpt',
         'arm': 'main',
         'repetition': 2,
-        'judge': {'model': 'gemini-3.8-flash', 'temperature': 1.0, 'thinking_level': None},
+        'judge': {'model': 'gemini-3.8-flash', 'temperature': 1.0, 'thinking_level': None, 'output_attempts': 3},
       },
     )
     records = Manifest(self.manifest).records()

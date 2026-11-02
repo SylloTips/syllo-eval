@@ -155,7 +155,9 @@ async def open_judge_client(
   With ``verdict_store``, per-document contextual precision verdicts are reused across the runs of ``repetition``."""
   chat_model = build_chat_model(config, settings)
   client = GeminiLlmJudgeClient(
-    settings.model_copy(update={'model': config.model, 'max_retries': config.max_retries}),
+    settings.model_copy(
+      update={'model': config.model, 'max_retries': config.max_retries, 'output_attempts': config.output_attempts}
+    ),
     max_concurrent_requests=config.max_concurrent_requests,
     chat_model=chat_model,
   )

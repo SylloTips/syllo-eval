@@ -691,7 +691,7 @@ async def _judge(args: argparse.Namespace) -> int:
     step = f'{base_step}:retry-{sum(name.startswith(f"{base_step}:retry-") for name in manifest.latest()) + 1}'
   details: dict[str, Any] = {
     'source_run_id': str(args.source_run),
-    'judge': judge_config.model_dump(include={'model', 'temperature', 'thinking_level'}),
+    'judge': judge_config.model_dump(include={'model', 'temperature', 'thinking_level', 'output_attempts'}),
   }
   run_ids: tuple[UUID, ...] = ()
   try:

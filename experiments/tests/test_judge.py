@@ -52,6 +52,7 @@ def _judge_config(**overrides: Any) -> JudgeConfig:
     'thinking_level': 'low',
     'timeout_seconds': 300,
     'max_retries': 7,
+    'output_attempts': 3,
     'max_concurrent_requests': 3,
     'output_token_limit': 65536,
   }
