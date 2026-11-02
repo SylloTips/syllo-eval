@@ -24,7 +24,16 @@ class NdcgTest(unittest.IsolatedAsyncioTestCase):
     assert result.score is not None
     self.assertAlmostEqual(result.score, 1 / math.log2(3))
     assert result.metadata is not None
-    self.assertEqual(result.metadata['ranked_ids'], ['wrong', 'right'])
+    self.assertEqual(result.metadata['ranked_ids'], ['wrong', 'right', 'right'])
+
+  async def test_duplicates_keep_their_observed_ranks(self):
+    ids = ['a', 'a', *(str(i) for i in range(8)), 'right']
+    target = span(
+      retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id=i) for i in ids])]
+    )
+    metric = NdcgAt10DocumentMetric()
+    self.assertEqual((await metric.compute(target, truth(relevant_ids=['right']))).score, 0)
+    self.assertEqual((await metric.compute(target, truth(relevant_ids=['a']))).score, 1)
 
   async def test_snippet_ids_and_top_ten_cutoff(self):
     target = span(
