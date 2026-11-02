@@ -53,6 +53,7 @@ class GeminiLlmJudgeClient(LangChainLlmJudgeClient):
       chat_model=default_chat_model,
       structured_output_method='json_schema',
       max_tokens_option='max_output_tokens',
+      output_attempts=config.output_attempts,
       close=default_chat_model.async_client.aclose if chat_model is None else None,
     )
 

@@ -46,7 +46,7 @@ def judge_metadata(
   metadata: dict[str, Any] = {'judge_calls': len(responses) + len(failed_usages)}
   if failed_usages:
     metadata['judge_failed_calls'] = len(failed_usages)
-  usage = _aggregate_usage([response.usage for response in responses] + list(failed_usages))
+  usage = aggregate_usage([response.usage for response in responses] + list(failed_usages))
   if usage is not None:
     metadata['judge_usage'] = usage
   if not responses:
@@ -71,7 +71,7 @@ def judge_metadata(
   return metadata
 
 
-def _aggregate_usage(usages: Sequence[dict[str, int] | None]) -> dict[str, int] | None:
+def aggregate_usage(usages: Sequence[dict[str, int] | None]) -> dict[str, int] | None:
   total: dict[str, int] = {}
   for usage in usages:
     for key, value in (usage or {}).items():

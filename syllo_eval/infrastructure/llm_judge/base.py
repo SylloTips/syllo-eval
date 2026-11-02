@@ -8,6 +8,8 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ValidationError
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.judge.base import aggregate_usage
+from syllo_eval.evaluation.judge.failures import output_reached_limit
 from syllo_eval.infrastructure.exceptions import (
   ConfigurationError,
   DataMappingError,
@@ -30,6 +32,7 @@ class LangChainLlmJudgeClient:
     *,
     structured_output_method: Literal['json_mode', 'json_schema'],
     max_tokens_option: str,
+    output_attempts: int,
     close: Callable[[], Awaitable[None]] | None = None,
   ):
     self._provider_name = provider_name
@@ -42,6 +45,7 @@ class LangChainLlmJudgeClient:
     self._chat_model = chat_model
     self._structured_output_method = structured_output_method
     self._max_tokens_option = max_tokens_option
+    self._output_attempts = output_attempts
     self._close = close
 
   @property
@@ -57,41 +61,56 @@ class LangChainLlmJudgeClient:
     return (self._model,)
 
   async def judge(self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
-    async with self._semaphore:
-      result = await self._invoke(request)
+    usages: list[dict[str, int] | None] = []
+    attempts = 0
+    while True:
+      async with self._semaphore:
+        result = await self._invoke(request)
+      attempts += result.get('attempts', 1)
 
-    raw = result['raw']
-    if not isinstance(raw, AIMessage):
-      raise DataMappingError(self._provider_name, 'structured output runnable did not return an AI message')
-    # A response that cannot be used still cost its tokens.
-    usage = self._usage(raw)
-    if result['parsing_error'] is not None:
-      raise JudgeOutputError(
-        self._provider_name, 'failed to parse structured output', result['parsing_error'], usage=usage
+      raw = result['raw']
+      if not isinstance(raw, AIMessage):
+        raise DataMappingError(self._provider_name, 'structured output runnable did not return an AI message')
+      # A response that cannot be used still cost its tokens.
+      usages.append(self._usage(raw))
+      try:
+        output = self._output(request, result, raw)
+      except JudgeOutputError as error:
+        if (
+          len(usages) >= self._output_attempts
+          or raw.additional_kwargs.get('refusal')
+          or output_reached_limit(usages[-1], request.max_output_tokens)
+        ):
+          error.usage = aggregate_usage(usages)
+          raise
+        continue
+
+      return LlmJudgeResponse(
+        provider=self._provider_name,
+        model=raw.response_metadata.get('model_name') or self._model,
+        output=output,
+        response_id=(
+          raw.id
+          or raw.response_metadata.get('id')
+          or raw.additional_kwargs.get('response_id')
+          or raw.additional_kwargs.get('id')
+        ),
+        usage=aggregate_usage(usages),
+        latency_seconds=result.get('latency_seconds'),
+        attempts=attempts,
       )
+
+  def _output(self, request: LlmJudgeRequest[Payload], result: dict[str, Any], raw: AIMessage) -> Payload:
+    if result['parsing_error'] is not None:
+      raise JudgeOutputError(self._provider_name, 'failed to parse structured output', result['parsing_error'])
     if result['parsed'] is None:
       refusal = raw.additional_kwargs.get('refusal')
       reason = f'model refused judge request: {refusal}' if refusal else 'model returned no structured output'
-      raise JudgeOutputError(self._provider_name, reason, usage=usage)
+      raise JudgeOutputError(self._provider_name, reason)
     try:
-      output = request.response_model.model_validate(result['parsed'])
+      return request.response_model.model_validate(result['parsed'])
     except ValidationError as error:
-      raise JudgeOutputError(self._provider_name, 'invalid structured output', error, usage=usage) from error
-
-    return LlmJudgeResponse(
-      provider=self._provider_name,
-      model=raw.response_metadata.get('model_name') or self._model,
-      output=output,
-      response_id=(
-        raw.id
-        or raw.response_metadata.get('id')
-        or raw.additional_kwargs.get('response_id')
-        or raw.additional_kwargs.get('id')
-      ),
-      usage=usage,
-      latency_seconds=result.get('latency_seconds'),
-      attempts=result.get('attempts', 1),
-    )
+      raise JudgeOutputError(self._provider_name, 'invalid structured output', error) from error
 
   async def aclose(self) -> None:
     """Close an owned provider client; injected chat models remain caller-owned."""
