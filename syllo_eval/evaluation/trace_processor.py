@@ -39,7 +39,20 @@ class TraceProcessor:
 def normalize_trace(adapter: TraceAdapter, trace_id: str, records: list[dict[str, Any]]) -> TraceProcessingResult:
   normalized = adapter.normalize(trace_id, records)
   # Validate even when an injected adapter used model_construct or mutated its result.
-  return TraceProcessingResult.model_validate(normalized.model_dump())
+  return TraceProcessingResult.model_validate(_storable(normalized.model_dump()))
+
+
+def _storable(value: Any) -> Any:
+  if isinstance(value, str):
+    return value.replace('\x00', '').encode('utf-8', 'replace').decode('utf-8')
+  if isinstance(value, dict):
+    storable = {_storable(key): _storable(item) for key, item in value.items()}
+    if len(storable) != len(value):
+      raise ValueError('Keys collide once NUL characters and lone surrogates are made storable')
+    return storable
+  if isinstance(value, (list, tuple)):
+    return [_storable(item) for item in value]
+  return value
 
 
 async def persist_trace(uow: TransactionalUnitOfWork, result: TraceProcessingResult) -> TraceProcessingResult:

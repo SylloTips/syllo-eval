@@ -18,6 +18,8 @@ EvaluationService(
 - Imports select an adapter by name from `trace_adapters_by_name`, plus the built-in `phoenix`; the file's `spans`
   reach `normalize` unchanged.
 - Unregistered agents use `PhoenixTraceAdapter`, which decodes telemetry and status but infers no agent-specific semantics.
+- The processor strips NUL characters and replaces lone surrogates with `?` in every string, since PostgreSQL cannot
+  store them, before validation. A trace whose keys collide after this is rejected rather than losing entries.
 - The processor validates the whole bundle and persists it transactionally. Identical re-ingestion is idempotent;
   a changed interpretation needs a new trace identity. Namespace source IDs another provider could reuse.
 - Adapter-emitted custom span types are upserted, so custom metrics can target them.
