@@ -3,7 +3,8 @@
 Experiment services disable the built-in metrics, so they never allocate a judge of their own: built-in metric classes
 and the experiment metrics all receive this client. It pins the model, thinking level, timeout and retries from the
 experiment config, and applies one concurrency limit to every judge call of a run. A request identical to an earlier
-one of the same sample gets its verdict without a new call, reporting no tokens. In the main arm, a per-document
+one of the same sample gets its verdict without a new call; only the first metric to receive a verdict reports its
+tokens, and a call no metric waits for any more is cancelled. In the main arm, a per-document
 contextual precision verdict is also stored and reused by later runs of the same repetition and judge settings, with
 its original usage. ``judge_metrics`` binds each experiment arm's metrics to it.
 """
@@ -13,6 +14,7 @@ import hashlib
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -62,23 +64,42 @@ class ConfiguredTemperatureJudgeClient:
     await self._inner.aclose()
 
 
+@dataclass
+class _SharedCall:
+  task: asyncio.Task[Any]
+  waiters: int = 0
+  charged: bool = False
+
+
 class ReusingJudgeClient:
   def __init__(self, inner: LlmJudgeClient):
     self._inner = inner
 
   async def judge[Payload: BaseModel](self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
-    calls: dict[Any, asyncio.Task[Any]] | None = sample_cache.get(None)
+    calls: dict[Any, _SharedCall] | None = sample_cache.get(None)
     if calls is None:
       return await self._inner.judge(request)
     model = request.response_model
     fields = request.model_dump_json(exclude={'response_model'})
     key = ('judge', hashlib.sha256(f'{model.__module__}.{model.__qualname__}\0{fields}'.encode()).hexdigest())
-    task = calls.get(key)
-    if task is None:
-      task = calls[key] = asyncio.create_task(self._inner.judge(request))
-      task.add_done_callback(lambda done: (done.cancelled() or done.exception()) and calls.pop(key, None))
-      return await asyncio.shield(task)
-    response = await asyncio.shield(task)
+    call = calls.get(key)
+    if call is None or call.task.cancelling():
+      call = calls[key] = _SharedCall(asyncio.create_task(self._inner.judge(request)))
+      call.task.add_done_callback(
+        lambda done: (done.cancelled() or done.exception()) and calls.get(key) is call and calls.pop(key)
+      )
+    call.waiters += 1
+    try:
+      response = await asyncio.shield(call.task)
+    except asyncio.CancelledError:
+      call.waiters -= 1
+      if not call.waiters:
+        call.task.cancel()
+        await asyncio.gather(call.task, return_exceptions=True)
+      raise
+    if not call.charged:
+      call.charged = True
+      return response
     usage = None if response.usage is None else dict.fromkeys(response.usage, 0)
     return response.model_copy(update={'usage': usage, 'latency_seconds': 0.0})
 
