@@ -101,7 +101,7 @@ class BaseNdcgAt10Metric(SpanEvaluationMetric, ABC):
     )
 
   def _score_ranking(self, result: RetrievalResult, relevant_ids: set[str]) -> dict[str, Any]:
-    ranked_ids = list(dict.fromkeys(item.id for item in result.items))
+    ranked_ids = [item.id for item in result.items]
     dcg_at_k, rank_results, matched_at_k = self._discounted_cumulative_gain(ranked_ids, relevant_ids)
     idcg_at_k = self._ideal_discounted_cumulative_gain(len(relevant_ids))
     return {
@@ -137,7 +137,7 @@ class BaseNdcgAt10Metric(SpanEvaluationMetric, ABC):
     matched = 0
     rank_results: list[dict[str, Any]] = []
     for rank, retrieved_id in enumerate(ranked_ids[:TOP_K], 1):
-      gain = int(retrieved_id in relevant_ids)
+      gain = int(retrieved_id in relevant_ids and retrieved_id not in ranked_ids[: rank - 1])
       discount = 1 / math.log2(rank + 1)
       discounted_gain = gain * discount
       dcg += discounted_gain
