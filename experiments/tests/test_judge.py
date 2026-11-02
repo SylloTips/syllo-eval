@@ -1,5 +1,7 @@
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,6 +10,10 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
+  ContextualPrecisionItemJudgePayload,
+  ContextualPrecisionItemJudgment,
+)
 from syllo_eval.evaluation.plan_executor import sample_cache
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.model import MetricComputationStatus
@@ -15,7 +21,7 @@ from syllo_eval.settings import GeminiJudgeSettings
 from ablation_metrics import SEARCH_SPAN_TYPE, GoldClaimsContextualRecall
 from benchmarks.common import Claim
 from config import JudgeConfig
-from judge import ConfiguredTemperatureJudgeClient, ReusingJudgeClient, open_judge_client
+from judge import ConfiguredTemperatureJudgeClient, ReusingJudgeClient, StoredPrecisionJudgeClient, open_judge_client
 from metric_fakes import claims_truth, search_span, truths
 
 
@@ -129,6 +135,68 @@ class ReusingJudgeClientTest(unittest.IsolatedAsyncioTestCase):
     response = await client.judge(_request())
 
     self.assertEqual((inner.calls, response.output), (2, _Payload(value=1)))
+
+
+class StoredPrecisionJudgeClientTest(unittest.IsolatedAsyncioTestCase):
+  async def test_a_precision_verdict_is_reused_across_runs_of_its_scope_with_its_original_usage(self) -> None:
+    precision = LlmJudgeRequest(
+      system_prompt='system', user_prompt='doc', response_model=ContextualPrecisionItemJudgePayload
+    )
+    verdict = LlmJudgeResponse(
+      provider='fake',
+      model='judge',
+      output=ContextualPrecisionItemJudgePayload(
+        judgments=[ContextualPrecisionItemJudgment(retrieved_id='d1', relevant=True, reasoning='r')]
+      ),
+      usage={'input_tokens': 9},
+      latency_seconds=2.0,
+    )
+    with tempfile.TemporaryDirectory() as folder:
+      path = Path(folder) / 'outputs' / 'verdicts.sqlite'
+      first_run = StoredPrecisionJudgeClient(_ScriptedJudge(verdict, _response(1)), path, 'repetition-1')
+      self.assertEqual(await first_run.judge(precision), verdict)
+      await first_run.judge(_request())
+      await first_run.aclose()
+
+      later_inner, retest_inner = _ScriptedJudge(_response(2)), _ScriptedJudge(verdict)
+      later_run = StoredPrecisionJudgeClient(later_inner, path, 'repetition-1')
+      retest = StoredPrecisionJudgeClient(retest_inner, path, 'repetition-2')
+      self.assertEqual(await later_run.judge(precision), verdict)
+      await later_run.judge(_request())
+      await retest.judge(precision)
+      await later_run.aclose()
+      await retest.aclose()
+
+    self.assertEqual((later_inner.calls, retest_inner.calls), (1, 1))
+
+  async def test_runs_that_miss_the_same_verdict_at_once_both_return_the_stored_one(self) -> None:
+    precision = LlmJudgeRequest(
+      system_prompt='system', user_prompt='doc', response_model=ContextualPrecisionItemJudgePayload
+    )
+
+    def verdict(relevant: bool) -> LlmJudgeResponse:
+      judgment = ContextualPrecisionItemJudgment(retrieved_id='d1', relevant=relevant, reasoning='r')
+      return LlmJudgeResponse(
+        provider='fake', model='judge', output=ContextualPrecisionItemJudgePayload(judgments=[judgment])
+      )
+
+    with tempfile.TemporaryDirectory() as folder:
+      path = Path(folder) / 'verdicts.sqlite'
+      first = StoredPrecisionJudgeClient(_ScriptedJudge(verdict(True)), path, 'repetition-1')
+
+      class _SlowerJudge:
+        async def judge(self, request: LlmJudgeRequest) -> LlmJudgeResponse:
+          await first.judge(request)
+          return verdict(False)
+
+        async def aclose(self) -> None:
+          await first.aclose()
+
+      second = StoredPrecisionJudgeClient(_SlowerJudge(), path, 'repetition-1')
+      response = await second.judge(precision)
+      await second.aclose()
+
+    self.assertEqual(response, verdict(True))
 
 
 class ReusedCallsAndPromptCacheTest(unittest.IsolatedAsyncioTestCase):

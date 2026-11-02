@@ -695,7 +695,15 @@ async def _judge(args: argparse.Namespace) -> int:
   }
   run_ids: tuple[UUID, ...] = ()
   try:
-    async with open_database(settings) as db_manager, open_judge_client(judge_config, judge_settings) as judge:
+    async with (
+      open_database(settings) as db_manager,
+      open_judge_client(
+        judge_config,
+        judge_settings,
+        verdict_store=DEFAULT_OUTPUTS / 'judge_verdicts.sqlite' if args.arm == 'main' else None,
+        repetition=args.repetition,
+      ) as judge,
+    ):
       if not await db_manager.health_check():
         raise DatabaseConnectionError('Database health check failed')
       source = await _collection_run(db_manager, config, args.source_run)
