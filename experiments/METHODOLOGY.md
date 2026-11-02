@@ -175,6 +175,12 @@ and a simulated customer take turns until one of them ends the conversation.
   - A document that several searches of a question returned gets the same CP request in each of them. The shared
     judge calls the model once per distinct request of a sample and gives the repeats its verdict, reporting no tokens
     for them, so costs count each distinct request once; the report's judge call counts include the repeats.
+  - The main arm's judge step also reuses CP verdicts across runs. It stores each per-document verdict in
+    `outputs/judge_verdicts.sqlite`, keyed by the request, the judge's model, temperature and thinking level, and the
+    repetition, so a later run of the same repetition (another configuration, a retry, or the full pass after the
+    pilot) gets it without a call. Within a pass, a question and document therefore get one verdict for every
+    configuration, as pooled relevance judgments do, while each retest judges them again. A reused verdict reports the
+    original call's usage and latency, so costs do not depend on the order of the runs.
 - DeepEval and the ablations receive the same units with the same document text.
 - **Answers (AC):** one unit per question.
 - **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, with each call's arguments

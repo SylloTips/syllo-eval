@@ -108,6 +108,7 @@ class JudgeCliTest(unittest.TestCase):
     self.manifest = Path(self._directory.name) / 'manifest.jsonl'
     self.source_run = uuid4()
     self.runs: list[UUID] = []
+    self.judge_kwargs: list[dict[str, Any]] = []
     self.service = MagicMock()
     self.service.__aenter__.return_value = self.service
     self.service.repeat_evaluation = AsyncMock(side_effect=self._repeat)
@@ -130,7 +131,8 @@ class JudgeCliTest(unittest.TestCase):
       yield self.db_manager
 
     @asynccontextmanager
-    async def fake_judge(config: Any, settings: Any) -> AsyncIterator[object]:
+    async def fake_judge(config: Any, settings: Any, **kwargs: Any) -> AsyncIterator[object]:
+      self.judge_kwargs.append(kwargs)
       yield MagicMock()
 
     output = io.StringIO()
@@ -165,6 +167,8 @@ class JudgeCliTest(unittest.TestCase):
     self.assertEqual([record.status for record in records], [StepStatus.STARTED, StepStatus.COMPLETED])
     self.assertEqual(records[-1].details['collection_failures'], 2)
     self.assertEqual(records[-1].details['samples'], 2)
+    self.assertEqual(self.judge_kwargs[-1]['verdict_store'].name, 'judge_verdicts.sqlite')
+    self.assertEqual(self.judge_kwargs[-1]['repetition'], 2)
 
   def test_the_step_completes_with_every_attempt_once_retries_resolve_it(self) -> None:
     base = f'judge:{self.source_run}:sc:1'
@@ -179,6 +183,7 @@ class JudgeCliTest(unittest.TestCase):
     self.assertEqual(list(latest[base].run_ids), self.runs)
     self.assertEqual(latest[base].details['metrics'], ['contextual_precision_document_judge_sc'])
     self.assertEqual(latest[base].details['unresolved'], [])
+    self.assertIsNone(self.judge_kwargs[-1]['verdict_store'])
 
   def test_a_retry_must_name_the_latest_attempt_of_its_own_step(self) -> None:
     self._judge('--arm', 'sc', '--pilot', unresolved=[uuid4()])

@@ -3,14 +3,17 @@
 Experiment services disable the built-in metrics, so they never allocate a judge of their own: built-in metric classes
 and the experiment metrics all receive this client. It pins the model, thinking level, timeout and retries from the
 experiment config, and applies one concurrency limit to every judge call of a run. A request identical to an earlier
-one of the same sample gets its verdict without a new call, reporting no tokens. ``judge_metrics`` binds each
-experiment arm's metrics to it.
+one of the same sample gets its verdict without a new call, reporting no tokens. In the main arm, a per-document
+contextual precision verdict is also stored and reused by later runs of the same repetition and judge settings, with
+its original usage. ``judge_metrics`` binds each experiment arm's metrics to it.
 """
 
 import asyncio
 import hashlib
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -22,6 +25,7 @@ from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge impo
 from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionDocumentJudgeMetric,
+  ContextualPrecisionItemJudgePayload,
 )
 from syllo_eval.evaluation.plan_executor import sample_cache
 from syllo_eval.infrastructure import DatabaseManager
@@ -82,6 +86,33 @@ class ReusingJudgeClient:
     await self._inner.aclose()
 
 
+class StoredPrecisionJudgeClient:
+  def __init__(self, inner: LlmJudgeClient, path: Path, scope: str):
+    self._inner = inner
+    self._scope = scope
+    path.parent.mkdir(parents=True, exist_ok=True)
+    self._db = sqlite3.connect(path, isolation_level=None)
+    self._db.execute('PRAGMA journal_mode=WAL')
+    self._db.execute('CREATE TABLE IF NOT EXISTS verdicts (key TEXT PRIMARY KEY, response TEXT NOT NULL)')
+
+  async def judge[Payload: BaseModel](self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
+    if request.response_model is not ContextualPrecisionItemJudgePayload:
+      return await self._inner.judge(request)
+    fields = request.model_dump_json(exclude={'response_model'})
+    key = hashlib.sha256(f'{self._scope}\0{fields}'.encode()).hexdigest()
+    select = 'SELECT response FROM verdicts WHERE key = ?'
+    row = self._db.execute(select, (key,)).fetchone()
+    if row is None:
+      response = await self._inner.judge(request)
+      self._db.execute('INSERT OR IGNORE INTO verdicts VALUES (?, ?)', (key, response.model_dump_json()))
+      row = self._db.execute(select, (key,)).fetchone()
+    return LlmJudgeResponse[request.response_model].model_validate_json(row[0])  # type: ignore[name-defined]
+
+  async def aclose(self) -> None:
+    self._db.close()
+    await self._inner.aclose()
+
+
 def build_chat_model(config: JudgeConfig, settings: GeminiJudgeSettings) -> ChatGoogleGenerativeAI:
   """The judge model of every framework: the API key comes from ``settings``, the rest from the experiment config."""
   return ChatGoogleGenerativeAI(
@@ -96,17 +127,26 @@ def build_chat_model(config: JudgeConfig, settings: GeminiJudgeSettings) -> Chat
 
 
 @asynccontextmanager
-async def open_judge_client(config: JudgeConfig, settings: GeminiJudgeSettings) -> AsyncIterator[LlmJudgeClient]:
-  """Yield the shared judge. ``settings`` supplies the API key; everything else comes from the experiment config."""
+async def open_judge_client(
+  config: JudgeConfig, settings: GeminiJudgeSettings, verdict_store: Path | None = None, repetition: int = 1
+) -> AsyncIterator[LlmJudgeClient]:
+  """Yield the shared judge. ``settings`` supplies the API key; everything else comes from the experiment config.
+  With ``verdict_store``, per-document contextual precision verdicts are reused across the runs of ``repetition``."""
   chat_model = build_chat_model(config, settings)
   client = GeminiLlmJudgeClient(
     settings.model_copy(update={'model': config.model, 'max_retries': config.max_retries}),
     max_concurrent_requests=config.max_concurrent_requests,
     chat_model=chat_model,
   )
+  judge: LlmJudgeClient = ConfiguredTemperatureJudgeClient(client, config.temperature)
+  if verdict_store is not None:
+    scope = f'{config.model_dump_json(include={"model", "temperature", "thinking_level"})}\0{repetition}'
+    judge = StoredPrecisionJudgeClient(judge, verdict_store, scope)
   try:
-    yield ReusingJudgeClient(ConfiguredTemperatureJudgeClient(client, config.temperature))
+    yield ReusingJudgeClient(judge)
   finally:
+    if isinstance(judge, StoredPrecisionJudgeClient):
+      await judge.aclose()
     # The judge client leaves an injected chat model to its owner.
     await chat_model.async_client.aclose()
 
