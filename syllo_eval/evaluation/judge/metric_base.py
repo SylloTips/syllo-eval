@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from syllo_eval.evaluation.judge.base import LlmJudgeClient, LlmJudgeRequest, judge_metadata
 from syllo_eval.evaluation.judge.batch import judge_batch
@@ -16,6 +16,13 @@ class JudgeScorePayload(BaseModel):
   score: float
   reasoning: str
   metadata: dict[str, Any] | None = None
+
+  @field_validator('score')
+  @classmethod
+  def _unit_score(cls, score: float) -> float:
+    if not 0.0 <= score <= 1.0:
+      raise ValueError('score must be between 0.0 and 1.0')
+    return score
 
 
 class BaseLlmJudgeMetric(SpanEvaluationMetric, ABC):
