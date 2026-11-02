@@ -34,6 +34,7 @@ class OpenAILlmJudgeClient(LangChainLlmJudgeClient):
       # reject the forced tool_choice of function calling. LangChain does not inject the schema, so the base class does.
       structured_output_method='json_mode',
       max_tokens_option='max_tokens',
+      output_attempts=config.output_attempts,
       close=default_chat_model.root_async_client.close if chat_model is None else None,
     )
 

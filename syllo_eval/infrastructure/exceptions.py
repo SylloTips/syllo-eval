@@ -8,7 +8,7 @@ from typing import Any, Optional
 class InfrastructureError(Exception):
   """Base exception for infrastructure-related errors."""
 
-  pass
+  retry_usage: dict[str, int] | None = None
 
 
 class PersistenceError(InfrastructureError):

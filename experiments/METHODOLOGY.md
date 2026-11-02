@@ -353,6 +353,9 @@ scoring of the retrieval metrics; answers get G-Eval's score.
     as wrong in every arm;
   - `invalid_output` is an output that does not parse or validate, or a refusal; an output that does not parse because
     it reached its token limit is `truncated`;
+  - the judge client asks again while an output does not parse or validate, up to `output_attempts` (3) in
+    `configs/models.yaml`, so `invalid_output` means every attempt failed; refusals and outputs at their token limit
+    are not asked again, and each attempt's usage counts with its call;
   - `provider` and `trace_load` are infrastructure failures: the unit is re-run in every arm, not counted.
   - A judge run with such a failure, or with a unit that failed without a recorded class, is incomplete: the manifest
     records its step as failed, with the failed units per metric and class.

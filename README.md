@@ -402,6 +402,7 @@ In Python, you can build `Settings` directly instead.
 | `OPENAI_USE_RESPONSES_API` | `true` | Set to `false` for OpenAI-compatible endpoints without the Responses API |
 | `GOOGLE_API_KEY`, `GEMINI_MODEL` | —, `gemini-3.1-flash-lite` | Gemini judge |
 | `LLM_JUDGE_MAX_CONCURRENT_REQUESTS` | `5` | Concurrent judge requests |
+| `OPENAI_OUTPUT_ATTEMPTS`, `GEMINI_OUTPUT_ATTEMPTS` | `3` | Attempts per judge call while the output does not parse or validate; a refusal or an output at its token limit is not retried, and every attempt's usage is counted |
 | `ORBITALS_API_KEY` | — | Enables the claim-extractor metrics |
 | `EVALUATION_MAX_CONCURRENT_SAMPLES` | `1` | Samples evaluated in parallel |
 | `EVALUATION_MAX_CONCURRENT_TASKS` | `10` | Metric computations in parallel per sample |

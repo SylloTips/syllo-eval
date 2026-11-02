@@ -39,6 +39,8 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(settings.phoenix.request_id_lookup_time_window_seconds, 600.0)
     self.assertEqual(settings.phoenix.request_id_attribute, 'request_id')
     self.assertEqual(settings.llm_judge.gemini.model, 'gemini-3.1-flash-lite')
+    self.assertEqual(settings.llm_judge.gemini.output_attempts, 3)
+    self.assertEqual(settings.llm_judge.openai.output_attempts, 3)
     self.assertEqual(settings.evaluation.max_concurrent_samples, 1)
     self.assertEqual(settings.evaluation.retrieval_span_types, ('agent_root',))
 

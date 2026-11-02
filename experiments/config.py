@@ -36,6 +36,7 @@ class JudgeConfig(_ConfigModel):
   thinking_level: Literal['minimal', 'low', 'medium', 'high'] | None = None
   timeout_seconds: float = Field(gt=0)
   max_retries: int = Field(ge=1)
+  output_attempts: int = Field(ge=1)
   max_concurrent_requests: int = Field(ge=1)
   # Output tokens the judge model can return in one response; it caps the budget of a single-call ablation.
   output_token_limit: int = Field(gt=0)

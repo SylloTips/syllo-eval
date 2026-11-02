@@ -92,6 +92,7 @@ class OpenAIJudgeSettings(EnvSettings):
   model: str = Field(default='gpt-5-mini', min_length=1)
   timeout_seconds: float = Field(default=30.0, gt=0)
   max_retries: int = Field(default=3, ge=1)
+  output_attempts: int = Field(default=3, ge=1)
   use_responses_api: bool = True
 
 
@@ -103,6 +104,7 @@ class GeminiJudgeSettings(EnvSettings):
   model: str = Field(default='gemini-3.1-flash-lite', min_length=1)
   timeout_seconds: float = Field(default=30.0, gt=0)
   max_retries: int = Field(default=3, ge=1)
+  output_attempts: int = Field(default=3, ge=1)
 
 
 class LlmJudgeSettings(EnvSettings):
