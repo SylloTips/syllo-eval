@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.judge.batch import judge_batch
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judge import (
   ContextualPrecisionItemJudgePayload,
   ContextualPrecisionItemJudgment,
@@ -136,6 +137,52 @@ class ReusingJudgeClientTest(unittest.IsolatedAsyncioTestCase):
 
     self.assertEqual((inner.calls, response.output), (2, _Payload(value=1)))
 
+  async def test_a_failed_batch_cancels_the_calls_no_other_unit_waits_for(self) -> None:
+    inner = _GatedJudge()
+    client = ReusingJudgeClient(inner)
+    sample_cache.set({})
+
+    _, failure = await judge_batch([client.judge(_request('bad')), client.judge(_request())])
+
+    self.assertIsNotNone(failure)
+    self.assertEqual(inner.cancelled, 1)
+
+  async def test_a_shared_call_whose_first_unit_left_reports_its_tokens_to_the_next(self) -> None:
+    inner = _GatedJudge()
+    client = ReusingJudgeClient(inner)
+    sample_cache.set({})
+    first, second = asyncio.create_task(client.judge(_request())), asyncio.create_task(client.judge(_request()))
+    await asyncio.sleep(0)
+
+    first.cancel()
+    with self.assertRaises(asyncio.CancelledError):
+      await first
+    inner.release.set()
+    response = await second
+
+    self.assertEqual((inner.calls, inner.cancelled, response.usage), (1, 0, {'input_tokens': 9}))
+
+
+class _GatedJudge:
+  def __init__(self) -> None:
+    self.calls = 0
+    self.cancelled = 0
+    self.release = asyncio.Event()
+
+  async def judge(self, request: LlmJudgeRequest) -> LlmJudgeResponse:
+    self.calls += 1
+    if request.user_prompt == 'bad':
+      raise RuntimeError('bad')
+    try:
+      await self.release.wait()
+    except asyncio.CancelledError:
+      self.cancelled += 1
+      raise
+    return _response(1)
+
+  async def aclose(self) -> None:
+    pass
+
 
 class StoredPrecisionJudgeClientTest(unittest.IsolatedAsyncioTestCase):
   async def test_a_precision_verdict_is_reused_across_runs_of_its_scope_with_its_original_usage(self) -> None:
@@ -259,7 +306,7 @@ class ReusedCallsAndPromptCacheTest(unittest.IsolatedAsyncioTestCase):
       await unit
 
     self.assertEqual(events, ['creation cancelled'])
-    self.assertTrue(all(task.done() for task in calls.values()))
+    self.assertTrue(all(call.task.done() for call in calls.values()))
     ainvoke.assert_not_awaited()
 
 
