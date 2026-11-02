@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from syllo_eval.execution.sample_executor import SampleExecutionResult, SampleExecutor
 from syllo_eval.infrastructure.database import DatabaseManager
@@ -36,6 +36,7 @@ class EvaluationConfig(BaseModel):
   planned_sample_ids: list[UUID] = Field(default_factory=list)
   config: dict[str, object] | None = None
   source_run_id: UUID | None = None
+  metadata: dict[str, JsonValue] | None = None
 
 
 class EvaluationOrchestrator:
@@ -194,6 +195,7 @@ class EvaluationOrchestrator:
           start_time=datetime.now(timezone.utc),
           source_run_id=config.source_run_id,
           config=config.config,
+          metadata=config.metadata,
         )
       )
       await uow.evaluation_run_metrics.create_many(evaluation_run.id, config.selected_metric_names)

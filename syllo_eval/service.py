@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
+from pydantic import JsonValue, TypeAdapter
 from pydantic_settings import SettingsConfigDict
 
 from syllo_eval.evaluation.claim_extractor import ClaimExtractorClient
@@ -400,6 +401,12 @@ class EvaluationService:
       sample_counts=_build_sample_status_counts(total_samples, run_samples, run.status),
     )
 
+  async def update_evaluation_metadata(self, run_id: UUID, metadata: Mapping[str, JsonValue]) -> EvaluationRun:
+    async with UnitOfWork(self._db_manager) as uow:
+      return await uow.evaluation_runs.merge_metadata(
+        run_id, TypeAdapter(dict[str, JsonValue]).validate_python(metadata)
+      )
+
   async def get_evaluation_report(self, run_id: UUID) -> EvaluationReport:
     return await EvaluationReportAggregator(self._db_manager).build(run_id)
 
@@ -439,6 +446,7 @@ class EvaluationService:
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
     rubric_additions: Mapping[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
   ) -> EvaluationRun:
     handle = await self.create_evaluation(
       agent_name=agent_name,
@@ -450,6 +458,7 @@ class EvaluationService:
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
       rubric_additions=rubric_additions,
+      metadata=metadata,
     )
     return await handle.execute()
 
@@ -465,6 +474,7 @@ class EvaluationService:
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
     rubric_additions: Mapping[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
   ) -> EvaluationHandle:
     execution = await self._build_execution(
       agent_name=agent_name,
@@ -476,6 +486,7 @@ class EvaluationService:
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
       rubric_additions=rubric_additions,
+      metadata=metadata,
     )
     try:
       run = await execution.create_run()
@@ -498,6 +509,7 @@ class EvaluationService:
     sample_compute_timeout: float | None = None,
     selected_metric_names: Sequence[str] | None = None,
     rubric_additions: Mapping[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
   ) -> EvaluationHandle:
     """Evaluate exported traces without calling the agent; only samples with a trace are planned."""
     resolved_metric_names = resolve_selected_metric_names(selected_metric_names, self.available_metric_names())
@@ -531,6 +543,7 @@ class EvaluationService:
       sample_compute_timeout=sample_compute_timeout,
       imported_trace_ids=trace_ids_by_sample_id,
       rubric_additions=resolved_rubric_additions,
+      metadata=metadata,
     )
     try:
       run = await execution.create_run()
@@ -550,6 +563,7 @@ class EvaluationService:
     sample_compute_timeout: float | None = None,
     rubric_additions: Mapping[str, str] | None = None,
     sample_ids: Sequence[UUID] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
   ) -> EvaluationHandle:
     """Recompute stored traces, all or only ``sample_ids``; rubric additions default to the source run's."""
     async with UnitOfWork(self._db_manager) as uow:
@@ -585,6 +599,7 @@ class EvaluationService:
       sample_compute_timeout=sample_compute_timeout,
       source_run_id=source_run.id,
       rubric_additions=resolved_rubric_additions,
+      metadata=metadata,
     )
     try:
       run = await execution.create_run()
@@ -606,6 +621,7 @@ class EvaluationService:
     sample_compute_timeout: float | None,
     selected_metric_names: Sequence[str] | None,
     rubric_additions: Mapping[str, str] | None,
+    metadata: Mapping[str, JsonValue] | None,
   ) -> _PreparedEvaluationExecution:
     resolved_metric_names = resolve_selected_metric_names(selected_metric_names, self.available_metric_names())
     resolved_rubric_additions = _resolve_rubric_additions(rubric_additions, resolved_metric_names)
@@ -626,6 +642,7 @@ class EvaluationService:
       agent_call_dispatcher=dispatcher,
       trace_adapter=self._trace_adapters.get(agent_name.strip().lower()),
       rubric_additions=resolved_rubric_additions,
+      metadata=metadata,
     )
 
   def _build_agent_dispatcher(self, agent_name: str) -> AgentCallDispatcher:
@@ -649,6 +666,7 @@ class EvaluationService:
     trace_adapter: TraceAdapter | None = None,
     imported_trace_ids: Mapping[UUID, str] | None = None,
     rubric_additions: Mapping[str, str] | None = None,
+    metadata: Mapping[str, JsonValue] | None = None,
   ) -> _PreparedEvaluationExecution:
     overrides = {
       'max_concurrent_samples': max_concurrent_samples,
@@ -698,6 +716,7 @@ class EvaluationService:
           retrieval_span_types=options.retrieval_span_types,
         ),
         source_run_id=source_run_id,
+        metadata=None if metadata is None else dict(metadata),
       )
       metric_registry = _build_metric_registry(
         db_manager=self._db_manager,

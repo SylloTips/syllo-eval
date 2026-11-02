@@ -69,8 +69,9 @@ class _ServiceStub:
     dataset_id,
     selected_metric_names,
     rubric_additions=None,
+    metadata=None,
   ):
-    del rubric_additions
+    del rubric_additions, metadata
     self.calls.append(
       {
         'agent_name': agent_name,
@@ -89,13 +90,14 @@ class _ServiceStub:
       raise self._error
     return self._started_evaluation
 
-  async def repeat_evaluation(self, *, source_run_id, metrics, rubric_additions=None, sample_ids=None):
+  async def repeat_evaluation(self, *, source_run_id, metrics, rubric_additions=None, sample_ids=None, metadata=None):
     self.repeat_calls.append(
       {
         'source_run_id': source_run_id,
         'metrics': metrics,
         'rubric_additions': rubric_additions,
         'sample_ids': sample_ids,
+        'metadata': metadata,
       }
     )
     if self._error is not None:
@@ -374,6 +376,7 @@ class TestEvaluationApi(unittest.TestCase):
           'metrics': ['answer_correctness_judge'],
           'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
           'sample_ids': [str(sample_id)],
+          'metadata': {'arm': 'main', 'repetition': 1},
         },
       )
 
@@ -388,6 +391,7 @@ class TestEvaluationApi(unittest.TestCase):
           'metrics': ['answer_correctness_judge'],
           'rubric_additions': {'answer_correctness_judge': 'Cite a source.'},
           'sample_ids': [sample_id],
+          'metadata': {'arm': 'main', 'repetition': 1},
         }
       ],
     )
@@ -492,6 +496,7 @@ class TestEvaluationApi(unittest.TestCase):
 
   def test_get_evaluation_status_returns_running_run(self) -> None:
     run = self._build_run()
+    run.metadata = {'arm': 'main'}
     service = _ServiceStub(
       run=run,
       status_snapshot=SimpleNamespace(
@@ -518,6 +523,7 @@ class TestEvaluationApi(unittest.TestCase):
           'completed': 1,
           'failed': 1,
         },
+        'metadata': {'arm': 'main'},
       },
     )
     self.assertEqual(service.get_calls, [run.id])

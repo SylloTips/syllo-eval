@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, status
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 from syllo_eval.service import (
   AgentCallerSelectionError,
@@ -44,6 +44,7 @@ class StartEvaluationRequest(BaseModel):
   dataset_id: UUID
   metrics: list[str] | None = None
   rubric_additions: dict[str, str] | None = None
+  metadata: dict[str, JsonValue] | None = None
 
 
 class ImportEvaluationRequest(StartEvaluationRequest):
@@ -55,6 +56,7 @@ class RepeatEvaluationRequest(BaseModel):
   metrics: list[str] | None = None
   rubric_additions: dict[str, str] | None = None
   sample_ids: list[UUID] | None = None
+  metadata: dict[str, JsonValue] | None = None
 
 
 class StartEvaluationResponse(BaseModel):
@@ -107,6 +109,7 @@ class EvaluationListResponse(BaseModel):
 
 class EvaluationRunStatusResponse(EvaluationStatusResponse):
   sample_counts: EvaluationSampleCountsResponse
+  metadata: dict[str, JsonValue] | None = None
 
 
 class CreateDatasetRequest(BaseModel):
@@ -294,6 +297,7 @@ def create_app(
         dataset_id=request.dataset_id,
         selected_metric_names=request.metrics,
         rubric_additions=request.rubric_additions,
+        metadata=request.metadata,
       )
     except (MetricSelectionError, AgentCallerSelectionError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
@@ -330,6 +334,7 @@ def create_app(
         trace_adapter_name=request.trace_adapter,
         selected_metric_names=request.metrics,
         rubric_additions=request.rubric_additions,
+        metadata=request.metadata,
       )
     except (MetricSelectionError, TraceImportError) as err:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
@@ -362,6 +367,7 @@ def create_app(
         metrics=request.metrics,
         rubric_additions=request.rubric_additions,
         sample_ids=request.sample_ids,
+        metadata=request.metadata,
       )
     except NotFoundError as err:
       raise _build_not_found_http_exception(evaluation_run_id) from err
@@ -406,6 +412,7 @@ def create_app(
         completed=snapshot.sample_counts.completed,
         failed=snapshot.sample_counts.failed,
       ),
+      metadata=snapshot.run.metadata,
     )
 
   @app.get(

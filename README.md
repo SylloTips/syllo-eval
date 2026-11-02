@@ -276,7 +276,10 @@ Without `--metrics`, a fresh run uses every metric available with your configura
 the source run. A repeat recomputes every traced sample of the source run, or only those given with `--sample-id`; its
 plan, totals and coverage then cover just those samples. `--rubric-additions` takes a JSON file mapping selected LLM-judge metrics to extra requirements, for
 example `{"answer_correctness_judge": "The answer must cite the warranty clause."}`; a repeat without it reuses the
-source run's additions. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
+source run's additions. `--metadata` records a JSON object of your own on the run, for example
+`'{"experiment": "baseline"}'`: it is kept apart from the resolved `config`, shown in the run status and the report's
+`run.metadata`, and not inherited by repeats. `EvaluationService.update_evaluation_metadata()` merges top-level keys into
+it later. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
 `PARTIALLY_COMPLETED` runs, and non-zero when the run fails. `run`, `import` and `repeat` also write the report with
 `--report-path`. Run `--help` on any command for all options.
 
@@ -288,12 +291,12 @@ poetry run uvicorn my_eval.app:app --port 8005
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/evaluations` | Start a run in the background (`agent_name`, `agent_version_tag`, `dataset_id`, optional `metrics` and `rubric_additions`) |
+| `POST` | `/evaluations` | Start a run in the background (`agent_name`, `agent_version_tag`, `dataset_id`, optional `metrics`, `rubric_additions` and `metadata`) |
 | `GET` | `/evaluations` | List runs, newest first |
-| `GET` | `/evaluations/{id}` | Run status with per-sample counts |
+| `GET` | `/evaluations/{id}` | Run status with per-sample counts and metadata |
 | `GET` | `/evaluations/{id}/report` | Aggregated report of a finished run |
 | `POST` | `/evaluations/import` | Score exported traces in the background (start fields plus `traces` and optional `trace_adapter`, default `phoenix`) |
-| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run (optional `metrics`, `rubric_additions` and `sample_ids`) |
+| `POST` | `/evaluations/{id}/repeat` | Recompute metrics over the stored traces of a finished run (optional `metrics`, `rubric_additions`, `sample_ids` and `metadata`) |
 | `POST` | `/evaluations/{id}/cancel` | Best-effort cancellation; the run ends as `FAILED` |
 | `POST` | `/datasets` | Import a dataset payload |
 | `GET` | `/datasets` | List datasets |

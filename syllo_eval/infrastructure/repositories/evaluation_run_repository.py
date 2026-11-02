@@ -41,6 +41,8 @@ class EvaluationRunRepository(BaseRepository[EvaluationRun]):
       fields['source_run_id'] = entity.source_run_id
     if entity.config is not None:
       fields['config'] = json.dumps(entity.config)
+    if entity.metadata is not None:
+      fields['metadata'] = json.dumps(entity.metadata)
 
     return fields
 
@@ -94,6 +96,30 @@ class EvaluationRunRepository(BaseRepository[EvaluationRun]):
       raise
     except Exception as e:
       self._handle_db_error(e, f'update_status({run_id}, {status})')
+
+  async def merge_metadata(self, run_id: UUID, metadata: Dict[str, Any]) -> EvaluationRun:
+    try:
+      async with self._get_connection() as conn:
+        query = """
+                    UPDATE evaluation_run
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s
+                    RETURNING *
+                """
+
+        async with conn.cursor(row_factory=class_row(EvaluationRun)) as cur:
+          await cur.execute(query, (json.dumps(metadata), run_id))
+          result = await cur.fetchone()
+
+          if result is None:
+            raise NotFoundError('evaluation_run', run_id)
+
+          return result
+
+    except NotFoundError:
+      raise
+    except Exception as e:
+      self._handle_db_error(e, f'merge_metadata({run_id})')
 
   async def update_status_if_current(
     self,

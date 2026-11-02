@@ -160,7 +160,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       generated_at=generated_at,
     )
 
-    self.assertEqual(report.report_version, '3.0')
+    self.assertEqual(report.report_version, '3.1')
     self.assertEqual(report.generated_at, generated_at)
     self.assertEqual(report.run.samples_processed, 3)
     self.assertEqual(report.run.duration_seconds, 300.0)

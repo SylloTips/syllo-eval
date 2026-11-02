@@ -7,7 +7,7 @@ from math import ceil, floor
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.exceptions import NotFoundError
@@ -25,7 +25,7 @@ from syllo_eval.model import (
   Span,
 )
 
-_REPORT_VERSION = '3.0'
+_REPORT_VERSION = '3.1'
 _TOKEN_USAGE_KEYS = ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens')
 _FAILURE_PHASES = ('agent_call', 'trace_fetch', 'metric_compute', 'unknown')
 _FAILURE_PHASE_SET = set(_FAILURE_PHASES)
@@ -43,6 +43,7 @@ class EvaluationReportRun(BaseModel):
   duration_seconds: float | None
   samples_processed: int
   config: dict[str, Any] | None = None
+  metadata: dict[str, JsonValue] | None = None
 
 
 class EvaluationReportAgent(BaseModel):
@@ -316,6 +317,7 @@ def _compose_report(
       duration_seconds=run_duration,
       samples_processed=len(run_samples),
       config=run.config,
+      metadata=run.metadata,
     ),
     agent=EvaluationReportAgent(id=agent.id, name=agent.name, version_tag=agent.version_tag),
     dataset=EvaluationReportDataset(id=dataset.id, name=dataset.name, total_samples=total_samples),

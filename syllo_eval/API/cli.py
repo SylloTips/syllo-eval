@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from syllo_eval.service import (
   AgentCallerSelectionError,
@@ -87,6 +87,19 @@ def _add_rubric_additions_argument(parser: argparse.ArgumentParser) -> None:
   )
 
 
+def _parse_metadata(value: str) -> dict[str, JsonValue]:
+  try:
+    return TypeAdapter(dict[str, JsonValue]).validate_json(value)
+  except ValidationError as err:
+    raise argparse.ArgumentTypeError(f'Invalid metadata {value}: {err}') from err
+
+
+def _add_metadata_argument(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument(
+    '--metadata', type=_parse_metadata, help='JSON object recorded on the run, e.g. \'{"arm": "main"}\'.'
+  )
+
+
 def build_main_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog=prog, description='Evaluate agents from the traces they leave.')
   parser.add_argument(
@@ -164,6 +177,7 @@ def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     help='If set, write the JSON evaluation report to this path after the run finishes.',
   )
   _add_rubric_additions_argument(parser)
+  _add_metadata_argument(parser)
   return parser
 
 
@@ -182,6 +196,7 @@ async def _run(
   selected_metric_names: Sequence[str],
   report_path: Path | None,
   rubric_additions: dict[str, str] | None,
+  metadata: dict[str, JsonValue] | None = None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
@@ -194,6 +209,7 @@ async def _run(
       sample_compute_timeout=sample_compute_timeout,
       selected_metric_names=selected_metric_names,
       rubric_additions=rubric_additions,
+      metadata=metadata,
     )
     await _write_report(service, run.id, report_path)
     return run
@@ -223,6 +239,7 @@ async def _import(service: EvaluationService, args: argparse.Namespace) -> Evalu
       sample_compute_timeout=args.sample_compute_timeout_seconds,
       selected_metric_names=None if args.metrics is None else args.metrics.split(','),
       rubric_additions=args.rubric_additions,
+      metadata=args.metadata,
     )
     run = await started.execute()
     await _write_report(service, run.id, args.report_path)
@@ -240,6 +257,7 @@ async def _repeat(
   rubric_additions: dict[str, str] | None,
   report_path: Path | None,
   sample_ids: Sequence[UUID] | None = None,
+  metadata: dict[str, JsonValue] | None = None,
 ) -> EvaluationRun:
   try:
     await service.initialize()
@@ -248,6 +266,7 @@ async def _repeat(
       metrics=selected_metric_names,
       rubric_additions=rubric_additions,
       sample_ids=sample_ids,
+      metadata=metadata,
       max_concurrent_tasks=max_concurrent_tasks,
       sample_compute_timeout=sample_compute_timeout,
     )
@@ -356,6 +375,7 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     help='Logging level.',
   )
   _add_rubric_additions_argument(parser)
+  _add_metadata_argument(parser)
   return parser
 
 
@@ -399,6 +419,7 @@ def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   )
   parser.add_argument('--report-path', type=Path, default=None, help='If set, write the JSON report to this path.')
   _add_rubric_additions_argument(parser)
+  _add_metadata_argument(parser)
   parser.add_argument(
     '--log-level',
     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -456,6 +477,7 @@ def _main_run(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -
         selected_metric_names=selected_metric_names,
         report_path=report_path,
         rubric_additions=args.rubric_additions,
+        metadata=args.metadata,
       )
     )
   except AgentCallerSelectionError as err:
@@ -584,6 +606,7 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
         rubric_additions=args.rubric_additions,
         report_path=args.report_path,
         sample_ids=args.sample_ids,
+        metadata=args.metadata,
       )
     )
   except Exception:
