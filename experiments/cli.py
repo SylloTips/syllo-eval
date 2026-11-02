@@ -734,6 +734,13 @@ async def _judge(args: argparse.Namespace) -> int:
           metrics=metric_names,
           max_concurrent_samples=args.max_concurrent_samples,
           sample_ids=sample_ids,
+          metadata={
+            'step': step,
+            'configuration': configuration.id,
+            'arm': args.arm,
+            'repetition': args.repetition,
+            'judge': details['judge'],
+          },
         )
         run_ids = (handle.run.id,)
         # A crash past this point leaves the step started, with the run it made.

@@ -147,6 +147,7 @@ class EvaluationRun(BaseModel):
   end_time: datetime | None = None
   source_run_id: UUID | None = None
   config: dict[str, Any] | None = None
+  metadata: dict[str, JsonValue] | None = None
 
 
 class EvaluationRunConfig(BaseModel):

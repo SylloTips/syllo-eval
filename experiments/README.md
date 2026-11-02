@@ -455,6 +455,8 @@ poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <ju
 - **Samples:** every traced sample, except that ERB `wt` scores the `annotated_samples` of `configs/judge.yaml` and
   `--pilot` scores its `pilot_samples`, both by sample key within the source run's dataset. A sample without a trace
   is a collection failure: it is counted in the manifest, never judged, and left out of those selections.
+- **Run metadata:** each judge run carries the step, configuration, arm, repetition and judge settings as its
+  `metadata`, so the database alone tells the runs of a source run apart.
 - **Manifest:** the step is `judge:<source run>:<arm>:<repetition>`, with `:pilot` or `:retry-<n>` appended for those
   runs, and records the run, the configuration, the metrics, the judge settings, the collection failures, the failed
   units per metric and class, and the unresolved samples.

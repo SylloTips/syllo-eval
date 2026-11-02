@@ -154,6 +154,7 @@ class TestUnitOfWorkIntegration(_UnitOfWorkIntegrationBase):
       dataset_id=dataset.id,
       status=EvaluationStatus.RUNNING,
       start_time=now,
+      metadata={'arm': 'main', 'judge': {'model': 'm1'}},
     )
     trace = Trace(external_id=trace_id, start_time=now, end_time=now + timedelta(seconds=3))
     evaluation_run_sample = EvaluationRunSample(
@@ -435,6 +436,12 @@ class TestUnitOfWorkIntegration(_UnitOfWorkIntegrationBase):
       )
       self.assertEqual(updated_run.status, EvaluationStatus.COMPLETED)
       self.assertEqual(updated_run.end_time, now + timedelta(minutes=5))
+      self.assertEqual(updated_run.metadata, {'arm': 'main', 'judge': {'model': 'm1'}})
+
+      merged_run = await uow.evaluation_runs.merge_metadata(
+        evaluation_run.id, {'judge': {'model': 'm2'}, 'repetition': 1}
+      )
+      self.assertEqual(merged_run.metadata, {'arm': 'main', 'judge': {'model': 'm2'}, 'repetition': 1})
 
       agent_runs = await uow.evaluation_runs.list_by_agent(agent_v1.id)
       self.assertEqual([run.id for run in agent_runs], [evaluation_run.id])
