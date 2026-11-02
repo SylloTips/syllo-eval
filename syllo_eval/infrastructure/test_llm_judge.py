@@ -16,10 +16,16 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.judge.base import judge_metadata
+from syllo_eval.evaluation.judge.failures import JudgeFailureKind, judge_failure_result, mismatch_kind
 from syllo_eval.evaluation.judge.metric_base import BaseLlmJudgeMetric, JudgeScorePayload
 from syllo_eval.evaluation.metrics.test_support import Judge
 from syllo_eval.infrastructure.llm_judge import build_llm_judge_client
-from syllo_eval.infrastructure.exceptions import DataMappingError, JudgeOutputError
+from syllo_eval.infrastructure.exceptions import (
+  DataMappingError,
+  ExternalServiceError,
+  InfrastructureError,
+)
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.infrastructure.llm_judge.openai import OpenAILlmJudgeClient
 from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
@@ -217,7 +223,7 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
           )
 
   async def test_invalid_outputs_are_retried_up_to_the_output_attempts(self) -> None:
-    def result(parsed: dict[str, Any] | None, output_tokens: int = 5, **kwargs: Any) -> dict[str, Any]:
+    def result(parsed: dict[str, Any] | None, output_tokens: int = 40, **kwargs: Any) -> dict[str, Any]:
       usage = {'input_tokens': 10, 'output_tokens': output_tokens, 'total_tokens': 10 + output_tokens}
       return {'raw': AIMessage(content='', usage_metadata=usage, **kwargs), 'parsed': parsed, 'parsing_error': None}
 
@@ -228,25 +234,27 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     chat_model = _FakeChatModel([result(invalid), result({'score': 1, 'reasoning': 'ok'})])
     client = OpenAILlmJudgeClient(config=OpenAIJudgeSettings(), max_concurrent_requests=1, chat_model=chat_model)
     response = await client.judge(request)
-    assert response.usage is not None
-    self.assertEqual(
-      (response.output.score, response.attempts, response.usage['input_tokens'], response.usage['output_tokens']),
-      (1.0, 2, 20, 10),
-    )
+    self.assertEqual((response.output.score, response.attempts), (1.0, 2))
+    self.assertEqual(judge_metadata([response])['judge_usage']['output_tokens'], 80)
+    self.assertEqual(mismatch_kind(response, 60), JudgeFailureKind.MISALIGNED)
 
-    for name, results in [
-      ('exhausted', [result(invalid), result(invalid), result(invalid)]),
-      ('refusal', [result(None, additional_kwargs={'refusal': 'declined'})]),
-      ('truncated', [result(invalid, output_tokens=100)]),
-    ]:
+    cases: list[tuple[str, list[Any], str]] = [
+      ('exhausted', [result(invalid)] * 3, 'invalid_output'),
+      ('refusal', [result(None, additional_kwargs={'refusal': 'declined'})], 'invalid_output'),
+      ('truncated', [result(invalid, output_tokens=100)], 'truncated'),
+      ('provider error', [result(invalid), ExternalServiceError('openai', 'judge', RuntimeError('503'))], 'provider'),
+    ]
+    for name, results, failure in cases:
       with self.subTest(name):
         chat_model = _FakeChatModel(list(results))
         client = OpenAILlmJudgeClient(config=OpenAIJudgeSettings(), max_concurrent_requests=1, chat_model=chat_model)
-        with self.assertRaises(JudgeOutputError) as raised:
+        with self.assertRaises(InfrastructureError) as raised:
           await client.judge(request)
         self.assertEqual(len(chat_model.inputs), len(results))
-        assert raised.exception.usage is not None
-        self.assertEqual(raised.exception.usage['input_tokens'], 10 * len(results))
+        metadata = judge_failure_result(raised.exception, [], max_output_tokens=100).metadata
+        assert metadata is not None
+        self.assertEqual(metadata['failure'], failure)
+        self.assertEqual(metadata['judge_usage']['input_tokens'], 10 * sum(isinstance(item, dict) for item in results))
 
   async def test_client_limits_concurrent_calls(self) -> None:
     entered = asyncio.Event()

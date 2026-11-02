@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from langchain_core.exceptions import ContextOverflowError
 
-from syllo_eval.evaluation.judge.base import LlmJudgeResponse, judge_metadata
+from syllo_eval.evaluation.judge.base import LlmJudgeResponse, aggregate_usage, judge_metadata
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
 from syllo_eval.infrastructure.exceptions import DataMappingError
 from syllo_eval.model import MetricComputationStatus
@@ -70,7 +70,13 @@ def judge_failure_result(
     metadata={
       **(metadata or {}),
       'failure': classify_judge_error(error, max_output_tokens).value,
-      **judge_metadata(responses, failed_usages=[getattr(item, 'usage', None) for item in failed_errors or (error,)]),
+      **judge_metadata(
+        responses,
+        failed_usages=[
+          aggregate_usage([getattr(item, 'usage', None), getattr(item, 'retry_usage', None)])
+          for item in failed_errors or (error,)
+        ],
+      ),
     },
   )
 

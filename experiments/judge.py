@@ -101,7 +101,7 @@ class ReusingJudgeClient:
       call.charged = True
       return response
     usage = None if response.usage is None else dict.fromkeys(response.usage, 0)
-    return response.model_copy(update={'usage': usage, 'latency_seconds': 0.0})
+    return response.model_copy(update={'usage': usage, 'retry_usage': None, 'latency_seconds': 0.0})
 
   async def aclose(self) -> None:
     await self._inner.aclose()

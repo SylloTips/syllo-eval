@@ -21,6 +21,7 @@ class LlmJudgeResponse[Payload: BaseModel](BaseModel):
   output: Payload
   response_id: str | None = None
   usage: dict[str, int] | None = None
+  retry_usage: dict[str, int] | None = None
   # Wall time of the attempt that succeeded, and how many client-level attempts the call took.
   latency_seconds: float | None = Field(default=None, ge=0.0)
   attempts: int = Field(default=1, ge=1)
@@ -46,7 +47,9 @@ def judge_metadata(
   metadata: dict[str, Any] = {'judge_calls': len(responses) + len(failed_usages)}
   if failed_usages:
     metadata['judge_failed_calls'] = len(failed_usages)
-  usage = aggregate_usage([response.usage for response in responses] + list(failed_usages))
+  usage = aggregate_usage(
+    [response.usage for response in responses] + [response.retry_usage for response in responses] + list(failed_usages)
+  )
   if usage is not None:
     metadata['judge_usage'] = usage
   if not responses:

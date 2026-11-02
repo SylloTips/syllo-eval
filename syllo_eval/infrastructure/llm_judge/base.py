@@ -14,6 +14,7 @@ from syllo_eval.infrastructure.exceptions import (
   ConfigurationError,
   DataMappingError,
   ExternalServiceError,
+  InfrastructureError,
   JudgeOutputError,
 )
 
@@ -64,8 +65,12 @@ class LangChainLlmJudgeClient:
     usages: list[dict[str, int] | None] = []
     attempts = 0
     while True:
-      async with self._semaphore:
-        result = await self._invoke(request)
+      try:
+        async with self._semaphore:
+          result = await self._invoke(request)
+      except InfrastructureError as error:
+        error.retry_usage = aggregate_usage(usages)
+        raise
       attempts += result.get('attempts', 1)
 
       raw = result['raw']
@@ -81,7 +86,8 @@ class LangChainLlmJudgeClient:
           or raw.additional_kwargs.get('refusal')
           or output_reached_limit(usages[-1], request.max_output_tokens)
         ):
-          error.usage = aggregate_usage(usages)
+          error.usage = usages[-1]
+          error.retry_usage = aggregate_usage(usages[:-1])
           raise
         continue
 
@@ -95,7 +101,8 @@ class LangChainLlmJudgeClient:
           or raw.additional_kwargs.get('response_id')
           or raw.additional_kwargs.get('id')
         ),
-        usage=aggregate_usage(usages),
+        usage=usages[-1],
+        retry_usage=aggregate_usage(usages[:-1]),
         latency_seconds=result.get('latency_seconds'),
         attempts=attempts,
       )
