@@ -8,6 +8,7 @@ from syllo_eval.evaluation.judge.batch import judge_batch
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse, judge_metadata
 from syllo_eval.evaluation.judge.failures import mismatch_kind
+from syllo_eval.evaluation.judge.prefix import SharedPromptPrefix, shared_prompt_prefix
 from syllo_eval.evaluation.metrics.prompts import render_prompt
 from syllo_eval.evaluation.metrics.contracts import MetricComputationResult, SpanEvaluationMetric
 from syllo_eval.evaluation.metric_support.retrieved_context import (
@@ -97,11 +98,42 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     if not claims:
       return self._build_result(retrieved_items, [], [], [decomposition_result])
 
-    judged = await self.judge_claims(span, retrieved_items, claims, prior_responses=[decomposition_result])
+    judged, prefix = await self._judge_claims_sharing_prefix(
+      span, retrieved_items, claims, prior_responses=[decomposition_result]
+    )
     if isinstance(judged, MetricComputationResult):
-      return judged
+      return self._with_cache_usage(judged, prefix)
     judge_results, judgments = judged
-    return self._build_result(retrieved_items, claims, judgments, [decomposition_result, *judge_results])
+    return self._with_cache_usage(
+      self._build_result(retrieved_items, claims, judgments, [decomposition_result, *judge_results]), prefix
+    )
+
+  async def _judge_claims_sharing_prefix(
+    self,
+    span: Span,
+    retrieved_items: list[RetrievedItem],
+    claims: list[str],
+    *,
+    prior_responses: Sequence[LlmJudgeResponse] = (),
+  ) -> tuple[
+    tuple[list[LlmJudgeResponse], list[ContextualRecallJudgment]] | MetricComputationResult, SharedPromptPrefix
+  ]:
+    user_prefix = self.build_user_prompt(span, retrieved_items, '')
+    async with shared_prompt_prefix(self.build_system_prompt(), user_prefix, len(claims)) as prefix:
+      return await self.judge_claims(span, retrieved_items, claims, prior_responses=prior_responses), prefix
+
+  @staticmethod
+  def _with_cache_usage(result: MetricComputationResult, prefix: SharedPromptPrefix) -> MetricComputationResult:
+    if not prefix.cache_attempted:
+      return result
+    metadata = dict(result.metadata or {})
+    if prefix.cache_creation_input_tokens is not None:
+      metadata['judge_usage'] = {
+        **metadata.get('judge_usage', {}),
+        'cache_creation_input_tokens': prefix.cache_creation_input_tokens,
+      }
+    metadata['judge_cache_seconds'] = round(prefix.cache_seconds, 3)
+    return result.model_copy(update={'metadata': metadata})
 
   async def judge_claims(
     self,

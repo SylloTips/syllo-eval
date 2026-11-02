@@ -105,6 +105,9 @@ class LangChainLlmJudgeClient:
       options[self._max_tokens_option] = request.max_output_tokens
     return options
 
+  def _messages(self, system_prompt: str, user_prompt: str) -> list[tuple[str, str]]:
+    return [('system', system_prompt), ('human', user_prompt)]
+
   async def _invoke(self, request: LlmJudgeRequest) -> dict[str, Any]:
     schema: type[BaseModel] | dict[str, Any] = request.response_model
     system_prompt = request.system_prompt
@@ -126,7 +129,7 @@ class LangChainLlmJudgeClient:
     )
     started = time.monotonic()
     try:
-      result = await runnable.ainvoke([('system', system_prompt), ('human', request.user_prompt)])
+      result = await runnable.ainvoke(self._messages(system_prompt, request.user_prompt))
     except Exception as error:
       raise ExternalServiceError(self._provider_name, 'judge', error) from error
     # Timed per attempt, so retry back-off waits never count as provider latency.

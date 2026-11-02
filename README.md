@@ -362,6 +362,14 @@ client-level attempts, provider latency, and token usage, including cached and r
 reports them. The report sums judge calls and cached input tokens per run and per sample, separately from agent usage.
 A token total is `null` when no call reported that count, so an unreported count is never shown as zero.
 
+With a Gemini judge, contextual recall sends each claim in its own user turn, after a turn holding the system prompt
+and the retrieved context. When a computation judges at least two claims, that first turn goes into a Gemini explicit
+cache, so each claim call reads it from the cache. The cache expires after 10 minutes and is deleted once the
+computation's calls end; a context below Gemini's caching minimum runs uncached. Creating the cache is billed at the
+input price: the computation records it in `judge_usage` as `cache_creation_input_tokens`, outside `input_tokens`, and
+the time spent creating and deleting it as `judge_cache_seconds`. The report sums `cache_creation_input_tokens` with
+the judge usage.
+
 To add your own, subclass `SpanEvaluationMetric` or `SpanGroupEvaluationMetric` from
 `syllo_eval.evaluation.metrics.contracts` and pass instances as `custom_metrics=[...]` to `EvaluationService`.
 `syllo_eval.evaluation.metrics.implementations.demo.response_length` is a minimal example. A metric lists the

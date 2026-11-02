@@ -1,15 +1,22 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
 from syllo_eval.evaluation.plan_executor import sample_cache
+from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
+from syllo_eval.model import MetricComputationStatus
 from syllo_eval.settings import GeminiJudgeSettings
+from ablation_metrics import SEARCH_SPAN_TYPE, GoldClaimsContextualRecall
+from benchmarks.common import Claim
 from config import JudgeConfig
 from judge import ConfiguredTemperatureJudgeClient, ReusingJudgeClient, open_judge_client
+from metric_fakes import claims_truth, search_span, truths
 
 
 class _Payload(BaseModel):
@@ -122,6 +129,70 @@ class ReusingJudgeClientTest(unittest.IsolatedAsyncioTestCase):
     response = await client.judge(_request())
 
     self.assertEqual((inner.calls, response.output), (2, _Payload(value=1)))
+
+
+class ReusedCallsAndPromptCacheTest(unittest.IsolatedAsyncioTestCase):
+  async def test_a_failed_unit_cancels_reused_calls_still_using_the_cache_before_deleting_it(self) -> None:
+    events: list[str] = []
+    claims = (Claim(id='q1-f01', text='Dana approved the budget.'), Claim(id='q1-f02', text='It was approved in May.'))
+
+    async def reply(messages: list[tuple[str, str]]) -> dict[str, Any]:
+      if messages[-1][1] == claims[0].text:
+        raise ValueError('bad request')
+      try:
+        await asyncio.Event().wait()
+      except asyncio.CancelledError:
+        events.append('cancelled')
+        raise
+      return {'raw': AIMessage(content=''), 'parsed': None, 'parsing_error': None}
+
+    chat_model = MagicMock()
+    chat_model.model_copy.return_value.with_structured_output.return_value.ainvoke = AsyncMock(side_effect=reply)
+    chat_model.async_client.caches.create = AsyncMock(
+      return_value=SimpleNamespace(name='cachedContents/c1', usage_metadata=SimpleNamespace(total_token_count=5000))
+    )
+    chat_model.async_client.caches.delete = AsyncMock(side_effect=lambda **_: events.append('deleted'))
+    client = GeminiLlmJudgeClient(GeminiJudgeSettings(api_key='key', model='judge-1'), 4, chat_model=chat_model)
+    metric = GoldClaimsContextualRecall(judge_client=ReusingJudgeClient(client), target_span_types=(SEARCH_SPAN_TYPE,))
+    sample_cache.set({})
+
+    result = await metric.compute(search_span('s', ['d1', 'd2'], stage='retrieved'), truths(claims_truth(*claims)))
+
+    self.assertEqual(result.status, MetricComputationStatus.FAILED)
+    self.assertEqual(events, ['cancelled', 'deleted'])
+
+  async def test_a_unit_cancelled_while_the_cache_is_created_leaves_no_reused_call_running(self) -> None:
+    events: list[str] = []
+    claims = (Claim(id='q1-f01', text='Dana approved the budget.'), Claim(id='q1-f02', text='It was approved in May.'))
+    creating = asyncio.Event()
+
+    async def create(**_: Any) -> Any:
+      creating.set()
+      try:
+        await asyncio.Event().wait()
+      except asyncio.CancelledError:
+        events.append('creation cancelled')
+        raise
+
+    chat_model = MagicMock()
+    ainvoke = chat_model.model_copy.return_value.with_structured_output.return_value.ainvoke = AsyncMock()
+    chat_model.async_client.caches.create = AsyncMock(side_effect=create)
+    client = GeminiLlmJudgeClient(GeminiJudgeSettings(api_key='key', model='judge-1'), 4, chat_model=chat_model)
+    metric = GoldClaimsContextualRecall(judge_client=ReusingJudgeClient(client), target_span_types=(SEARCH_SPAN_TYPE,))
+    calls: dict[Any, Any] = {}
+    sample_cache.set(calls)
+
+    unit = asyncio.create_task(
+      metric.compute(search_span('s', ['d1', 'd2'], stage='retrieved'), truths(claims_truth(*claims)))
+    )
+    await creating.wait()
+    unit.cancel()
+    with self.assertRaises(asyncio.CancelledError):
+      await unit
+
+    self.assertEqual(events, ['creation cancelled'])
+    self.assertTrue(all(task.done() for task in calls.values()))
+    ainvoke.assert_not_awaited()
 
 
 class OpenJudgeClientTest(unittest.IsolatedAsyncioTestCase):

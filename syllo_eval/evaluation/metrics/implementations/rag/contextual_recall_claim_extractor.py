@@ -55,16 +55,21 @@ class _BaseContextualRecallClaimExtractorMetric(BaseContextualRecallJudgeMetric)
         self._build_result(retrieved_items, [], [], []), extraction, claims, excluded_claim_count
       )
 
-    judged = await self.judge_claims(span, retrieved_items, [claim.content for claim in claims])
+    judged, prefix = await self._judge_claims_sharing_prefix(span, retrieved_items, [claim.content for claim in claims])
     if isinstance(judged, MetricComputationResult):
-      return self._enrich_result(judged, extraction, claims, excluded_claim_count, rewrite_reason=False)
+      return self._with_cache_usage(
+        self._enrich_result(judged, extraction, claims, excluded_claim_count, rewrite_reason=False), prefix
+      )
     judge_results, judgments = judged
 
-    return self._enrich_result(
-      self._build_result(retrieved_items, [claim.content for claim in claims], judgments, judge_results),
-      extraction,
-      claims,
-      excluded_claim_count,
+    return self._with_cache_usage(
+      self._enrich_result(
+        self._build_result(retrieved_items, [claim.content for claim in claims], judgments, judge_results),
+        extraction,
+        claims,
+        excluded_claim_count,
+      ),
+      prefix,
     )
 
   @staticmethod

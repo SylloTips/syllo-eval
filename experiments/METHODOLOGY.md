@@ -192,6 +192,11 @@ Claims are stored as ground truth, never re-derived during a run:
 
 With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of Table 1.
 
+Syllo-eval sends every CR call to the Gemini judge in two user turns: the system text and the unit's documents, then
+the claim, with the built-in v1 wording. A unit with at least two claims keeps the first turn in a Gemini explicit
+cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
+call per unit, so they keep their single-turn prompts and no cache.
+
 ## Ablations
 
 Each ablation changes one design choice of the metric it is compared with (`ablation_metrics.py`). The judge, units,
@@ -325,6 +330,10 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   - Syllo-eval's answer prompt must be byte-identical under padding, so it is not re-run.
 - **Cost:** judge calls, input tokens, cached input tokens and latency per sample. They are measured one sample at a
   time, with the same judge concurrency for every framework.
+  - Syllo-eval's CR cost also counts its explicit caches, failed units included: `judge_usage` records the tokens of
+    each cache's creation as `cache_creation_input_tokens`, billed at the input price, and `judge_cache_seconds` the
+    time spent creating and deleting it, outside `judge_latency_seconds`. A cache's storage, at most 10 minutes per
+    unit, is not counted.
 
 ## Failures
 

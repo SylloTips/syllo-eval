@@ -92,6 +92,7 @@ class EvaluationReportTokenUsage(BaseModel):
 
 class EvaluationReportJudgeTokenUsage(EvaluationReportTokenUsage):
   calls: int
+  cache_creation_input_tokens: int | None = None
 
 
 class EvaluationReportTokenUsageSection(BaseModel):
@@ -586,6 +587,11 @@ def _build_token_usage_section(
   usage_spans: Sequence[Span],
   computations: Sequence[MetricComputation],
 ) -> EvaluationReportTokenUsageSection:
+  cache_creations = [
+    tokens
+    for usage in _judge_token_usages(computations)
+    if isinstance(tokens := usage.get('cache_creation_input_tokens'), int)
+  ]
   return EvaluationReportTokenUsageSection(
     agent=_sum_token_usage(_span_token_usages(usage_spans), len({_span_usage_key(span) for span in usage_spans})),
     judge=EvaluationReportJudgeTokenUsage(
@@ -595,6 +601,7 @@ def _build_token_usage_section(
         for computation in computations
         if isinstance(calls := (computation.metadata or {}).get('judge_calls'), int)
       ),
+      cache_creation_input_tokens=sum(cache_creations) if cache_creations else None,
     ),
   )
 
