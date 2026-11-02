@@ -40,11 +40,13 @@ class BaseContextualRecallStoredClaimsMetric(BaseContextualRecallJudgeMetric):
       # Nothing retrieved can support a claim, so recall is 0 without calling the judge.
       return self._build_result(retrieved_items, texts, [], [], claim_ids)
 
-    judged = await self.judge_claims(span, retrieved_items, texts)
+    judged, prefix = await self._judge_claims_sharing_prefix(span, retrieved_items, texts)
     if isinstance(judged, MetricComputationResult):
-      return judged
+      return self._with_cache_usage(judged, prefix)
     judge_results, judgments = judged
-    return self._build_result(retrieved_items, texts, judgments, judge_results, claim_ids)
+    return self._with_cache_usage(
+      self._build_result(retrieved_items, texts, judgments, judge_results, claim_ids), prefix
+    )
 
 
 class ContextualRecallDocumentStoredClaimsMetric(BaseContextualRecallStoredClaimsMetric):

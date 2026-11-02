@@ -294,7 +294,13 @@ class EvaluationReportCompositionTest(unittest.TestCase):
       score=0.9,
       metadata={
         'judge_calls': 3,
-        'judge_usage': {'input_tokens': 20, 'output_tokens': 5, 'total_tokens': 25, 'cached_input_tokens': 12},
+        'judge_usage': {
+          'input_tokens': 20,
+          'output_tokens': 5,
+          'total_tokens': 25,
+          'cached_input_tokens': 12,
+          'cache_creation_input_tokens': 4000,
+        },
       },
     )
     deterministic_computation = MetricComputation(
@@ -334,6 +340,7 @@ class EvaluationReportCompositionTest(unittest.TestCase):
     self.assertEqual(run_tokens.judge.total_tokens, 25)
     self.assertEqual(run_tokens.judge.cached_input_tokens, 12)
     self.assertEqual(run_tokens.judge.calls, 3)
+    self.assertEqual(run_tokens.judge.cache_creation_input_tokens, 4000)
     self.assertEqual(run_tokens.judge.sources_with_data, 1)
     self.assertEqual(run_tokens.judge.sources_total, 2)
 

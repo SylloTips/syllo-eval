@@ -1,12 +1,17 @@
 import asyncio
+import logging
 import random
 import re
+import time
 from typing import Any
 
+from google.genai import types
 from google.genai.errors import APIError
 from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel
 
-from syllo_eval.evaluation.judge import LlmJudgeRequest
+from syllo_eval.evaluation.judge import LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.judge.prefix import SharedPromptPrefix, shared_prefix_of
 from syllo_eval.infrastructure.exceptions import ExternalServiceError
 from syllo_eval.infrastructure.llm_judge.base import LangChainLlmJudgeClient
 from syllo_eval.settings import GeminiJudgeSettings
@@ -14,6 +19,9 @@ from syllo_eval.settings import GeminiJudgeSettings
 _RETRY_HINT_PATTERN = re.compile(r'retry in (\d+(?:\.\d+)?)(ms|s)\b', re.IGNORECASE)
 _RETRYABLE_CODES = frozenset({429, 503, 504})
 _DEFAULT_RETRYABLE_DELAY_SECONDS = 60.0
+_CACHE_TTL = '600s'
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiLlmJudgeClient(LangChainLlmJudgeClient):
@@ -47,6 +55,66 @@ class GeminiLlmJudgeClient(LangChainLlmJudgeClient):
       max_tokens_option='max_output_tokens',
       close=default_chat_model.async_client.aclose if chat_model is None else None,
     )
+
+  async def judge[Payload: BaseModel](self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
+    prefix = shared_prefix_of(request.system_prompt, request.user_prompt)
+    task = asyncio.current_task()
+    if prefix is None or prefix.requests < 2 or task is None:
+      return await super().judge(request)
+    prefix.users.add(task)
+    try:
+      async with prefix.cache_lock:
+        if not prefix.cache_attempted:
+          prefix.cache_attempted = True
+          await self._create_cache(prefix)
+      return await super().judge(request)
+    finally:
+      prefix.users.discard(task)
+
+  async def _create_cache(self, prefix: SharedPromptPrefix) -> None:
+    started = time.monotonic()
+    try:
+      cache = await self._chat_model.async_client.caches.create(
+        model=self.model,
+        config=types.CreateCachedContentConfig(
+          contents=types.Content(
+            role='user', parts=[types.Part(text=prefix.system_prompt), types.Part(text=prefix.user_prefix)]
+          ),
+          ttl=_CACHE_TTL,
+        ),
+      )
+    except Exception as error:
+      if not isinstance(error, APIError) or error.code != 400:
+        logger.warning('Judge calls sharing a prompt prefix run uncached, the cache could not be created: %s', error)
+    else:
+      prefix.cache_name = cache.name
+      prefix.cache_creation_input_tokens = cache.usage_metadata.total_token_count if cache.usage_metadata else None
+      prefix.cache_close = lambda: self._delete_cache(prefix)
+    prefix.cache_seconds += time.monotonic() - started
+
+  async def _delete_cache(self, prefix: SharedPromptPrefix) -> None:
+    started = time.monotonic()
+    try:
+      await self._chat_model.async_client.caches.delete(name=prefix.cache_name)
+    except Exception as error:
+      logger.warning('Cache %s could not be deleted and expires after %s: %s', prefix.cache_name, _CACHE_TTL, error)
+    prefix.cache_seconds += time.monotonic() - started
+
+  def _model_options(self, request: LlmJudgeRequest) -> dict[str, Any]:
+    options = super()._model_options(request)
+    prefix = shared_prefix_of(request.system_prompt, request.user_prompt)
+    if prefix is not None and prefix.cache_name is not None:
+      options['cached_content'] = prefix.cache_name
+    return options
+
+  def _messages(self, system_prompt: str, user_prompt: str) -> list[tuple[str, str]]:
+    prefix = shared_prefix_of(system_prompt, user_prompt)
+    if prefix is None:
+      return super()._messages(system_prompt, user_prompt)
+    suffix = user_prompt[len(prefix.user_prefix) :]
+    if prefix.cache_name is None:
+      return [('system', system_prompt), ('human', prefix.user_prefix), ('human', suffix)]
+    return [('human', suffix)]
 
   async def _invoke(self, request: LlmJudgeRequest) -> Any:
     attempt = 1
