@@ -526,6 +526,9 @@ poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <ju
   never a pilot, and scores its unresolved samples again in a new run, which replaces their whole earlier attempt.
   Every other sample's latest attempt is then resolved, so the step completes when a retry leaves nothing unresolved,
   listing every attempt in order; for each sample, the latest run that scored it holds its results. Every attempt's cost stays recorded.
+- **Rejected outputs:** the step logs to stderr with the run and sample of each line, so every rejected judge output
+  (see the root README) can be traced back to its sample, for example with
+  `docker logs <container> 2>&1 | grep 'Judge output rejected'`.
 - **Requirements:** the database, the converted benchmarks for `--pilot` and ERB `wt`, and `GOOGLE_API_KEY` for the
   shared judge (`configs/models.yaml`). No agent is called.
 

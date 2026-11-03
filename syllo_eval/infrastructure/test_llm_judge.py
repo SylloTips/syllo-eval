@@ -256,6 +256,24 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata['failure'], failure)
         self.assertEqual(metadata['judge_usage']['input_tokens'], 10 * sum(isinstance(item, dict) for item in results))
 
+  async def test_a_rejected_output_is_logged_with_its_raw_text_even_when_a_retry_recovers(self) -> None:
+    text = '{"judgments": [{"retrieved_id": "d1"}]}'
+    rejected = AIMessage(content=text, response_metadata={'finish_reason': 'STOP'})
+    chat_model = _FakeChatModel(
+      [
+        {'raw': rejected, 'parsed': {'score': 'invalid'}, 'parsing_error': None},
+        {'raw': AIMessage(content=''), 'parsed': {'score': 1, 'reasoning': 'ok'}, 'parsing_error': None},
+      ]
+    )
+    client = OpenAILlmJudgeClient(config=OpenAIJudgeSettings(), max_concurrent_requests=1, chat_model=chat_model)
+    with self.assertLogs('syllo_eval.infrastructure.llm_judge.base', 'WARNING') as logs:
+      await client.judge(LlmJudgeRequest(system_prompt='system', user_prompt='user', response_model=JudgeScorePayload))
+
+    (line,) = logs.output
+    logged = json.loads(line.split('Judge output rejected: ', 1)[1])
+    self.assertEqual((logged['attempt'], logged['finish_reason'], logged['text']), (1, 'STOP', text))
+    self.assertIn('invalid structured output', logged['error'])
+
   async def test_client_limits_concurrent_calls(self) -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
