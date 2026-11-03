@@ -50,7 +50,7 @@ class ContextualRecallTest(unittest.IsolatedAsyncioTestCase):
   async def test_failed_decomposition_is_classified_and_keeps_its_usage(self):
     class TruncatedJudge:
       async def judge(self, request):
-        raise JudgeOutputError('judge', 'output does not parse', usage={'output_tokens': 2_000, 'total_tokens': 2_100})
+        raise JudgeOutputError('judge', 'output does not parse', usage={'output_tokens': 8_000, 'total_tokens': 8_100})
 
       async def aclose(self):
         pass
@@ -63,7 +63,7 @@ class ContextualRecallTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None
     self.assertEqual(result.metadata['failure'], 'truncated')
-    self.assertEqual(result.metadata['judge_usage']['total_tokens'], 2_100)
+    self.assertEqual(result.metadata['judge_usage']['total_tokens'], 8_100)
 
   async def test_empty_context_scores_zero_without_judging(self):
     judge = Judge()

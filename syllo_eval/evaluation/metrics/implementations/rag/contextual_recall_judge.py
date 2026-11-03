@@ -73,7 +73,7 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
 
   @property
   def max_output_tokens(self) -> int:
-    return 2_000
+    return 8_000
 
   async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
     ground_truth = ground_truths[self.ground_truth_keys[0]]

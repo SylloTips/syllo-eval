@@ -252,12 +252,12 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.status, MetricComputationStatus.FAILED)
     assert result.metadata is not None and result.raw_output is not None
     self.assertEqual(result.metadata['failure'], 'misaligned')
-    self.assertEqual(result.metadata['max_output_tokens'], 4_000)
+    self.assertEqual(result.metadata['max_output_tokens'], 16_000)
     self.assertEqual(result.metadata['judge_calls'], 1)
     self.assertEqual(len(result.raw_output['judgments']), 1)
 
   async def test_a_short_output_is_truncated_only_once_it_reached_the_unit_budget(self) -> None:
-    for output_tokens, failure in ((3_999, 'misaligned'), (4_000, 'truncated')):
+    for output_tokens, failure in ((15_999, 'misaligned'), (16_000, 'truncated')):
       judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)), output_tokens=output_tokens)
       metric = GoldClaimsContextualRecallSC(target_span_types=SEARCH, judge_client=judge, output_token_limit=LIMIT)
       with self.subTest(output_tokens=output_tokens):
