@@ -10,6 +10,8 @@ configurations:
   - {id: erb/smolagents/deepseek, benchmark: erb, agent: smolagents, model: deepseek}
   - {id: erb/odr/gpt, benchmark: erb, agent: odr, model: gpt}
   - {id: erb/odr/deepseek, benchmark: erb, agent: odr, model: deepseek}
+  - {id: erb/deepagents/gpt, benchmark: erb, agent: deepagents, model: gpt}
+  - {id: erb/deepagents/deepseek, benchmark: erb, agent: deepagents, model: deepseek}
   - {id: erb/react/gpt/f0.25, benchmark: erb, agent: react, model: gpt, degradation: 0.25}
   - {id: erb/react/gpt/f0.5, benchmark: erb, agent: react, model: gpt, degradation: 0.5}
 
@@ -19,6 +21,8 @@ configurations:
   - {id: wixqa/smolagents/deepseek, benchmark: wixqa, agent: smolagents, model: deepseek}
   - {id: wixqa/odr/gpt, benchmark: wixqa, agent: odr, model: gpt}
   - {id: wixqa/odr/deepseek, benchmark: wixqa, agent: odr, model: deepseek}
+  - {id: wixqa/deepagents/gpt, benchmark: wixqa, agent: deepagents, model: gpt}
+  - {id: wixqa/deepagents/deepseek, benchmark: wixqa, agent: deepagents, model: deepseek}
 
   - {id: tau2/llm-agent/gpt/trial-1, benchmark: tau2, agent: tau2-llm-agent, model: gpt, trial: 1}
   - {id: tau2/llm-agent/gpt/trial-2, benchmark: tau2, agent: tau2-llm-agent, model: gpt, trial: 2}

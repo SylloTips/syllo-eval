@@ -100,6 +100,8 @@ Open Deep Research runs unmodified, at commit `1b7d2e8` of `langchain-ai/open_de
     the compression, 10,000 for the report. Every other parameter is the provider's default.
   - Both models are Azure AI Foundry deployments. GPT 6.1 Sol thus runs with its default reasoning, which counts
     toward the limit, and DeepSeek-V4.1-Flash at its default temperature.
+  - GPT 6.1 Sol takes function tools only on the Responses API, to which LangChain sends its calls with tools: the
+    supervisor's and the researchers'. The brief, the compression and the report go to Chat Completions.
 - **Limits:** ODR's defaults: at most 5 researchers at once, 6 supervisor rounds, and 10 model calls per researcher,
   each of which can call several tools at once. Each model call of the brief, the supervisor and the researchers gets 3
   attempts.
@@ -113,14 +115,74 @@ Open Deep Research runs unmodified, at commit `1b7d2e8` of `langchain-ai/open_de
     research;
   - an error that ODR wrote in place of its report;
   - spans that did not reach Phoenix;
-  - a run longer than an hour.
+  - a run longer than 20 minutes.
 
   The agent's own failures count as they happen. A search that the server rejected, such as one with an empty query,
   is a failed call. A researcher's other failures, such as a tool the model made up, end ODR's research as they would
   anyway, and the run is scored. A researcher whose findings ODR could not compress is not a failure either: ODR
   reports what the others found. Any other failure leaves the sample without a trace.
 - **Leftover researchers:** when a researcher fails, ODR leaves the others running; they are stopped when the call
-  returns, so the trace holds only what the run used.
+  returns. A search they had under way returned nothing, and stays in the trace as a failed call. A model call they had
+  under way leaves no span, so its usage is not counted. The searches they completed are the run's, though the report
+  could no longer use them.
+
+## Deep agent runs
+
+The deep agent is the `deep_research` example of LangChain's deepagents, at the commit of its 0.7.34 release
+(`9ea3f19`), run with deepagents 0.7.34 and the settings of `configs/deepagents.yaml` (`agents/deep_agent.py`). Its
+prompts and `think_tool` are vendored under the example's MIT license (`agents/deep_research/`), and wired as its
+`agent.py` does.
+
+- **Agents:** an orchestrator plans with `write_todos`, saves the request to a file, delegates the research to
+  sub-agents through deepagents' `task` tool, and writes the report. Its sub-agents are the example's research agent
+  and deepagents' general-purpose one. Every agent has `search_knowledge_base` in place of the example's web search,
+  the example's `think_tool`, and deepagents' file tools.
+  - The example's own lock pins deepagents 0.6.12. Since 0.7, deepagents appends neither its base prompt nor its
+    tools' usage guidance to the agents' prompts, and gives no agent `write_todos`. The orchestrator gets
+    `write_todos` back, as the example's workflow starts with it; the rest stays as deepagents 0.7.34 has it.
+- **Limits:** the example's: at most 3 sub-agents at once, and 3 delegation rounds, which its prompt gives the
+  orchestrator. deepagents caps a run at 9,999 graph steps, more than an hour allows; a run has an hour.
+- **Prompts:** the example's, with exact replacements, which fail if the vendored prompts change:
+  - the orchestrator researches every request as asked, without clarifying questions, as ODR does here: in a test
+    run, GPT 6.1 Sol answered an ambiguous question with a question;
+  - the researchers' list of tools names `search_knowledge_base` and its ten documents, instead of the web search;
+  - citations name each document's title and id, instead of a URL;
+  - the report is the orchestrator's last message instead of a `/final_report.md` file, so the orchestrator checks the
+    request against the findings before writing the report, not after.
+- **Models:** the configuration's model in every call: the orchestrator's, the sub-agents' and the summaries'.
+  - Every model parameter is the provider's default, as in the Dify agent and the CodeAgent, so that the agents differ
+    only in their framework: GPT 6.1 Sol reasons at its default effort, and DeepSeek-V4.1-Flash does not think.
+  - Both models are Azure AI Foundry deployments. LangChain sends GPT 6.1 Sol's calls with tools to the Responses API,
+    the only one on which it takes them, as for ODR; its summaries go to Chat Completions.
+- **Long contexts:** deepagents' own handling, instead of limits per phase, at thresholds set for these runs.
+  deepagents' defaults would move results above 20,000 tokens, and summarize near the window of the model's profile
+  (1,050,000 tokens for GPT 6.1 Sol), or at 170,000 tokens for a model without one, such as DeepSeek-V4.1-Flash:
+  - the older history is summarized, and the newest 10% of a 272,000-token window kept, once a call's input reaches
+    85% of the window: 231,200 tokens. The window is the same for both models, and the summarized history is saved to
+    the agent's files;
+  - a tool result above 100,000 tokens, at 4 characters a token, moves to the agent's files, and the model gets a
+    preview and the path, to read it with the file tools. No search reaches it: with the ten longest documents of its
+    knowledge base, a search's JSON would have about 372,000 characters in ERB, and 281,000 in WixQA.
+  - The search's span holds its whole result either way, since the result moves only once the search has returned.
+    Reading a moved result with the file tools is not a new search, and stays a tool span.
+- **Answer:** the orchestrator's last message, as text, without the model's reasoning.
+- **Failures:** a run that fails for a transient cause runs again from the start, with a new request id, for at most
+  three runs of the question in all. Its partial trace is never scored. The transient causes:
+  - the search tool unreachable when the agent is built, or a search that got no answer from the server;
+  - a provider's rate limit, outage or connection error, after the client's five retries;
+  - a model call cut off at its output limit or by a content filter: GPT's Responses API then returns nothing, which
+    the agent would take as its answer or as a sub-agent's findings;
+  - a run that ended without an answer;
+  - spans that did not reach Phoenix;
+  - a run longer than an hour.
+
+  Only the deep agent runs a question again for a cut-off call or an empty answer: ODR's runs with either are scored
+  as they are.
+
+  The agent's own failures count as they happen. A search that the server rejected, such as one with an empty query,
+  returns the server's error to the agent, as a failed call. deepagents stops at a model's refusal: a sub-agent's
+  reaches the orchestrator as a notice, and the run is scored; the orchestrator's fails the sample, as any other
+  failure does, without a trace.
 
 ## τ²-bench runs
 
@@ -168,7 +230,9 @@ and a simulated customer take turns until one of them ends the conversation.
     of it, the CodeAgent reads only what its code prints, and ODR writes its report from its researchers' notes. The
     document metrics therefore measure retrieval exposure, not the context the answer used.
   - A search output that is neither the tool's results nor its error message makes the question's evidence
-    unavailable, and the metrics skip it rather than score what is left.
+    unavailable, and the metrics skip it rather than score what is left. ODR's and the deep agent's traces also record
+    the errors that LangChain saw: there, a search that got any error from the server, such as arguments the tool does
+    not take, or that was cancelled under way, is a failed call.
 - **Rankings (CP, NDCG@10):** one search call is one unit, a retrieval diagnostic: the ten documents it returned, in
   rank order. The search span carries the user question. The labels are per question, so a search for part of the
   question cannot reach an NDCG@10 of 1.
@@ -313,9 +377,9 @@ scoring of the retrieval metrics; answers get G-Eval's score.
 ## RQ2 references
 
 - AC is ranked against human grades on the annotated questions, CP against NDCG@10, and CR against set recall.
-- **Kendall τ-b** compares the rankings of the six configurations.
+- **Kendall τ-b** compares the rankings of the eight configurations.
 - **Discriminative power:**
-  - It is the share of the 15 configuration pairs that differ significantly.
+  - It is the share of the 28 configuration pairs that differ significantly.
   - Significance uses a paired bootstrap over questions (B = 10,000) with Holm correction per metric at p < 0.05.
   - It is also computed for the human grades, R and NDCG@10, and for AC on the annotated questions.
 - **Known order:** ReAct/GPT on ERB with f = 0 ≻ 0.25 ≻ 0.5, checked with R and NDCG@10.

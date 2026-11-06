@@ -1,0 +1,16 @@
+# How LangChain's deep agent runs (agents/deep_agent.py): the deep_research example of deepagents, wired as its agent.py
+# does, with the knowledge-base search tool in place of its web search. Every call, the sub-agents' and the summaries'
+# included, uses the configuration's model, at the provider's defaults, as the other agents do.
+
+# The example's limits, which its prompts give the orchestrator: research sub-agents at once, and delegation rounds.
+max_concurrent_research_units: 3
+max_researcher_iterations: 3
+
+# Long contexts. deepagents summarizes the older history, and keeps the newest 10% of this window, once a call's input
+# reaches 85% of it: 231,200 tokens. The same window for both models, far below the context of either (about a million
+# tokens), bounds the cost of a call.
+context_window_tokens: 272000
+# A tool result above this many tokens, at 4 characters a token, goes to the agent's files, and the model gets a preview
+# and the path, to read it with the file tools. No search reaches it: with the ten longest documents of its knowledge
+# base, a search's JSON would have about 372,000 characters in ERB, and 281,000 in WixQA.
+tool_result_eviction_tokens: 100000

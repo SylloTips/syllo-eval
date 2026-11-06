@@ -15,7 +15,7 @@ CONFIG_DIR = EXPERIMENTS_DIR / 'configs'
 DATA_DIR = EXPERIMENTS_DIR / 'data'
 
 Benchmark = Literal['erb', 'wixqa', 'tau2']
-AgentStack = Literal['react', 'smolagents', 'odr', 'tau2-llm-agent']
+AgentStack = Literal['react', 'smolagents', 'odr', 'deepagents', 'tau2-llm-agent']
 
 
 class _ConfigModel(BaseModel):
@@ -113,6 +113,15 @@ class OdrConfig(_ConfigModel):
   mcp_prompt: str = Field(min_length=1)
 
 
+class DeepAgentsConfig(_ConfigModel):
+  """How LangChain's deep agent runs; see ``configs/deepagents.yaml``. Its models run at the providers' defaults."""
+
+  max_concurrent_research_units: int = Field(gt=0)
+  max_researcher_iterations: int = Field(gt=0)
+  context_window_tokens: int = Field(gt=0)
+  tool_result_eviction_tokens: int = Field(gt=0)
+
+
 class Configuration(_ConfigModel):
   id: str = Field(min_length=1)
   benchmark: Benchmark
@@ -170,6 +179,7 @@ class ExperimentConfig(_ConfigModel):
   benchmarks: dict[Benchmark, BenchmarkSource]
   tau2: Tau2Config
   odr: OdrConfig
+  deepagents: DeepAgentsConfig
   judge_samples: JudgeSamplesConfig = JudgeSamplesConfig()
 
   @model_validator(mode='after')
@@ -211,6 +221,7 @@ def load_config(config_dir: Path = CONFIG_DIR) -> ExperimentConfig:
     benchmarks=_read_yaml(config_dir / 'benchmarks.yaml'),
     tau2=_read_yaml(config_dir / 'tau2.yaml'),
     odr=_read_yaml(config_dir / 'odr.yaml'),
+    deepagents=_read_yaml(config_dir / 'deepagents.yaml'),
     judge_samples=_read_yaml(config_dir / 'judge.yaml'),
   )
 

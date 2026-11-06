@@ -68,11 +68,13 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
       'DIFY_SEARCH_URL': 'http://127.0.0.1:8102/mcp',
       'SMOLAGENTS_SEARCH_URL': 'http://127.0.0.1:8103/mcp',
       'ODR_SEARCH_URL': 'http://127.0.0.1:8104',
+      'DEEPAGENTS_SEARCH_URL': 'http://127.0.0.1:8105/mcp',
     }
     configurations = {
       'react': 'erb/react/gpt',
       'smolagents': 'erb/smolagents/gpt',
       'odr': 'erb/odr/gpt',
+      'deepagents': 'erb/deepagents/gpt',
       'tau2-llm-agent': 'tau2/llm-agent/gpt/trial-1',
     }
     with (
@@ -80,6 +82,7 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
       patch('collect.tau2.build_caller'),
       patch('agents.code_agent.build_caller'),
       patch('agents.odr.build_caller'),
+      patch('agents.deep_agent.build_caller'),
     ):
       urls = {
         agent: collect.build_integration(
@@ -99,6 +102,7 @@ class CollectTest(unittest.IsolatedAsyncioTestCase):
         'react': 'http://127.0.0.1:8102/mcp',
         'smolagents': 'http://127.0.0.1:8103/mcp',
         'odr': 'http://127.0.0.1:8104/mcp',
+        'deepagents': 'http://127.0.0.1:8105/mcp',
         'tau2-llm-agent': None,
       },
     )
