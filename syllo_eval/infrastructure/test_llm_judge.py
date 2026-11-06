@@ -299,7 +299,35 @@ class TestOpenAILlmJudgeClient(unittest.IsolatedAsyncioTestCase):
           close.assert_not_awaited()
 
 
+# langchain-core 1.7.5 and later turn a provider's refusal, such as Gemini's safety stop, into a refusal block.
+_REFUSAL_BLOCKS = AIMessage(content=[{'type': 'refusal', 'refusal': ''}]).content_blocks[0]['type'] == 'refusal'
+
+
 class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
+  @unittest.skipUnless(_REFUSAL_BLOCKS, 'this langchain-core reports no refusal blocks')
+  async def test_a_reply_the_safety_filter_stopped_is_a_refusal_and_is_not_asked_again(self) -> None:
+    usage = {'input_tokens': 10, 'output_tokens': 40, 'total_tokens': 50}
+    # The JSON parses, but Gemini stopped the reply for safety: LangChain's parser raises a refusal.
+    raw = AIMessage(
+      content='{"score": 1, "reasoning": "ok"}',
+      usage_metadata=usage,
+      response_metadata={'model_provider': 'google_genai', 'finish_reason': 'SAFETY'},
+    )
+    chat_model = _FakeChatModel([{'raw': raw, 'parsed': None, 'parsing_error': ValueError('refused')}] * 3)
+    client = GeminiLlmJudgeClient(
+      config=GeminiJudgeSettings(api_key='test-gemini-key', model='gemini-2.5-flash', output_attempts=3),
+      max_concurrent_requests=1,
+      chat_model=chat_model,
+    )
+
+    with self.assertRaisesRegex(DataMappingError, 'model refused judge request') as raised:
+      await client.judge(LlmJudgeRequest(system_prompt='system', user_prompt='user', response_model=JudgeScorePayload))
+
+    self.assertEqual(len(chat_model.inputs), 1)
+    metadata = judge_failure_result(raised.exception, []).metadata
+    assert metadata is not None
+    self.assertEqual(metadata['failure'], JudgeFailureKind.INVALID_OUTPUT)
+
   def test_gemini_disables_sdk_retries(self) -> None:
     with patch('syllo_eval.infrastructure.llm_judge.gemini.ChatGoogleGenerativeAI') as chat_model_cls:
       GeminiLlmJudgeClient(
