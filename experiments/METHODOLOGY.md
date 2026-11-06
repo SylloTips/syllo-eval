@@ -278,7 +278,8 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
     rank or given order. The claims are numbered.
   - CP's per-document prompt (v2) shows no rank or retrieval score, so a document returned by several searches gets
     the same request each time. The SC prompt keeps each document's rank, which matches its judgments to documents.
-  - The output budget is the per-item call's 2,000 tokens per item, capped at the judge's output limit of 65,536.
+  - The output budget is the per-item call's budget per item (2,000 tokens per CP document, 8,000 per CR claim),
+    capped at the judge's output limit of 65,536.
   - CP judgments are matched to documents by rank, and CR judgments to claims by position. As in the per-item pass,
     the ids and statements the judge echoes are not checked; mismatches are only counted.
   - A unit fails as misaligned unless its judgments match it one to one: in CP each of the unit's ranks exactly once,
@@ -426,3 +427,6 @@ scoring of the retrieval metrics; answers get G-Eval's score.
 - Each document or claim of a failed CP or CR unit counts as a wrong decision; the computation's span and ground truth
   identify them. A failed AC or PC unit has no decisions, only a missing score.
 - A failed unit counts every judge call it made, with the usage the provider reported, failed calls included.
+- CR's per-claim budget was 2,000 tokens for the WixQA react and smolagents runs of the main pass, repetition 1, and is
+  8,000 afterwards: thinking exhausted 2,000 in about 0.8% of claim calls. Those runs keep 2,000; their one unit that
+  failed every attempt was re-scored with 8,000.
