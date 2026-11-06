@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypeVar
@@ -19,6 +20,8 @@ from syllo_eval.infrastructure.exceptions import (
 )
 
 Payload = TypeVar('Payload', bound=BaseModel)
+
+logger = logging.getLogger(__name__)
 
 
 class LangChainLlmJudgeClient:
@@ -81,6 +84,22 @@ class LangChainLlmJudgeClient:
       try:
         output = self._output(request, result, raw)
       except JudgeOutputError as error:
+        logger.warning(
+          'Judge output rejected: %s',
+          json.dumps(
+            {
+              'provider': self._provider_name,
+              'model': raw.response_metadata.get('model_name') or self._model,
+              'attempt': len(usages),
+              'finish_reason': raw.response_metadata.get('finish_reason'),
+              'max_output_tokens': request.max_output_tokens,
+              'usage': usages[-1],
+              'error': str(error),
+              'text': raw.text,
+            },
+            ensure_ascii=False,
+          ),
+        )
         if (
           len(usages) >= self._output_attempts
           or _refusal(raw) is not None

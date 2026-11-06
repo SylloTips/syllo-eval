@@ -353,7 +353,9 @@ default; set `EVALUATION_RETRIEVAL_SPAN_TYPES` to score other spans, such as one
 A judge failure is a failed computation whose `metadata.failure` says why: `misaligned` (judgments that don't match the
 judged items), `truncated` (the output reached its token limit), `invalid_output`, `context_overflow`, `timeout` or
 `provider`. Failed computations keep the usage of every judge call, the failed one included when the provider reported
-it. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
+it. The built-in judge clients log every output attempt they reject at `WARNING`, including attempts a retry recovers:
+`Judge output rejected:` followed by one JSON object with the provider, model, attempt, finish reason, output token
+limit, usage, error and the full response text. Judge metrics are available only when `LLM_JUDGE_PROVIDER`
 is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
 
 Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are

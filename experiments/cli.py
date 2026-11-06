@@ -21,6 +21,7 @@ from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
 from syllo_eval.infrastructure.exceptions import PersistenceError
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
+from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import (
   EvaluationRunSample,
   EvaluationSampleStatus,
@@ -671,6 +672,7 @@ async def _judge(args: argparse.Namespace) -> int:
   config = load_config(args.config_dir)
   judge_config = config.models.judge
   load_environment()
+  configure_logging(LoggingSettings.from_env())
   settings, judge_settings = Settings(), GeminiJudgeSettings()
   if judge_settings.api_key is None:
     print('The judge needs GOOGLE_API_KEY.', file=sys.stderr)
