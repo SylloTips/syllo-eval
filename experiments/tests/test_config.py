@@ -3,7 +3,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import BenchmarkSource, Configuration, EmbeddingConfig, ExperimentConfig, OdrConfig, Tau2Config, load_config
+from config import (
+  BenchmarkSource,
+  Configuration,
+  EmbeddingConfig,
+  ExperimentConfig,
+  OdrConfig,
+  Tau2Config,
+  load_config,
+)
 
 
 def _models() -> dict[str, Any]:
@@ -90,6 +98,16 @@ def _odr(**overrides: Any) -> dict[str, Any]:
   return {**fields, **overrides}
 
 
+def _deepagents(**overrides: Any) -> dict[str, Any]:
+  fields: dict[str, Any] = {
+    'max_concurrent_research_units': 3,
+    'max_researcher_iterations': 3,
+    'context_window_tokens': 272000,
+    'tool_result_eviction_tokens': 100000,
+  }
+  return {**fields, **overrides}
+
+
 def _config(configurations: list[dict[str, Any]], **overrides: Any) -> dict[str, Any]:
   return {
     'models': _models(),
@@ -97,6 +115,7 @@ def _config(configurations: list[dict[str, Any]], **overrides: Any) -> dict[str,
     'benchmarks': _benchmarks(),
     'tau2': _tau2(),
     'odr': _odr(),
+    'deepagents': _deepagents(),
   } | overrides
 
 
@@ -193,10 +212,10 @@ class ExperimentConfigTest(unittest.TestCase):
     for configuration in config.configurations:
       by_benchmark.setdefault(configuration.benchmark, []).append(configuration)
 
-    # Section 5.1: 3 agents x 2 models on ERB and WixQA, plus two degraded ReAct/GPT runs on ERB;
+    # Section 5.1: 4 agents x 2 models on ERB and WixQA, plus two degraded ReAct/GPT runs on ERB;
     # 2 models x 4 trials on tau2.
-    self.assertEqual(len(by_benchmark['wixqa']), 6)
-    self.assertEqual(len(by_benchmark['erb']), 8)
+    self.assertEqual(len(by_benchmark['wixqa']), 8)
+    self.assertEqual(len(by_benchmark['erb']), 10)
     self.assertEqual(sorted(c.degradation for c in by_benchmark['erb'] if c.degradation), [0.25, 0.5])
     self.assertEqual(len(by_benchmark['tau2']), 8)
     self.assertEqual(config.configuration('erb/react/gpt/f0.5').version_tag, 'gpt-f0.5')

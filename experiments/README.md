@@ -21,9 +21,9 @@ The ablations and the DeepEval baseline also rely on a few library internals:
   usage and retries rate limits as the library's judge client does.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench,
-smolagents, Open Deep Research and Dify adapters read the flattened records that client returns, `attributes.*` keys
-included, after `PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/code_agent.py`, `agents/odr.py`,
-`agents/dify.py`).
+smolagents, Open Deep Research, deep agent and Dify adapters read the flattened records that client returns,
+`attributes.*` keys included, after `PhoenixTraceAdapter` has decoded them (`agents/tau2.py`, `agents/code_agent.py`,
+`agents/langchain_runs.py`, `agents/dify.py`).
 
 The library's test suite does not run this folder's tests, so changes to any of these must keep them passing.
 
@@ -39,9 +39,10 @@ of the trace it assesses. The paper asks three questions:
 | RQ3 | Do the judges stay accurate, and affordable, as inputs grow? | retrieved lists of 5–80 documents; trace-length terciles and padding up to 128k tokens; judge cost | Table 4 |
 
 - **Benchmarks:** EnterpriseRAG-Bench (ERB), WixQA and τ²-bench retail.
-- **Agents:** a Dify ReAct agent, a smolagents CodeAgent and Open Deep Research, plus τ²-bench's own tool-calling agent.
+- **Agents:** a Dify ReAct agent, a smolagents CodeAgent, Open Deep Research and LangChain's deep agent, plus
+  τ²-bench's own tool-calling agent.
 - **Models and configurations:** two agent models; [`configs/configurations.yaml`](configs/configurations.yaml) lists
-  all 22 configurations.
+  all 26 configurations.
 - **Comparisons:** Syllo-eval runs against DeepEval and two ablations, all with the same judge model:
   - Syllo-eval-SC judges all items or claims in a single call;
   - Syllo-eval-WT reads the whole trace instead of the target spans.
@@ -57,7 +58,7 @@ expected output of each step.
 | `configs/` | every parameter of the study; values still red in the paper draft are marked "paper placeholder" |
 | `cli.py`, `config.py`, `manifest.py`, `judge.py`, `service.py` | the CLI, configuration, run manifest, shared judge and evaluation services; this folder is their import root |
 | `benchmarks/` | pinned downloads, converters and import of the three benchmarks |
-| `collect.py`, `run_outputs.py`, `agents/` | collection runs, the files they write, and each agent stack's caller and trace adapter |
+| `collect.py`, `run_outputs.py`, `agents/` | collection runs, the files they write, and each agent stack's caller and trace adapter; `agents/deep_research/` vendors the deep agent's example |
 | `tau2_runtime/` | τ²-bench's run of one task with traces, run in its own environment (see τ²-bench agent) |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
@@ -247,7 +248,9 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
 
   A successful search is a tool output that parses as such an object, and a failed one reads
   `The search failed: <reason>`: the adapters read the text, since the agents' clients do not all keep MCP's error
-  flag. Any other output is unreadable, and makes the question's retrieved evidence unavailable.
+  flag. Any other output is unreadable, and makes the question's retrieved evidence unavailable. ODR's and the deep
+  agent's adapters also read the error that LangChain recorded (`search_span_retrieval`): a search that got any error
+  from the server, such as arguments the tool does not take, or that was cancelled under way, is a failed call.
 - **Determinism:** the same query always returns the same documents. Qdrant ranks the documents both ways, and the
   server cuts and fuses the rankings itself, ordering equal scores by id: Qdrant's own fusion orders ties at random,
   and its cut picks among tied documents by how it stores them.
@@ -275,6 +278,7 @@ poetry run syllo-exp search-server --collection wixqa-d662dc4 --port 8101       
     Chatflow or Workflow Agent node with the ReAct strategy.
 - **smolagents:** the caller connects at `SMOLAGENTS_SEARCH_URL` (see smolagents CodeAgent).
 - **Open Deep Research:** the caller connects at `ODR_SEARCH_URL` (see Open Deep Research).
+- **Deep agent:** the caller connects at `DEEPAGENTS_SEARCH_URL` (see Deep agent).
 
 ## Agents
 
@@ -366,7 +370,8 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
     fails never reaches the server, so a retry repeats no search or embedding; the read timeout is unchanged.
 - **Trace:** the caller's root span `odr.request` holds the `request_id`, the question and the report as text. Every
   search whose output is the search tool's JSON, which LangChain's MCP client returns as text blocks, is a retrieval
-  span with its ten documents; a failed search stays a tool span.
+  span with its ten documents. A search that returned no documents stays a tool span: the server rejected it, or it
+  was cancelled under way.
 - **Runs again:** ODR turns many failures into text or silence, so a failed run can look complete. The caller watches
   the run through LangChain's callbacks, and a question runs again from the start, with a new request id, up to
   `ODR_MAX_ATTEMPTS` attempts (3), `ODR_RETRY_DELAY_SECONDS` (60) apart, when:
@@ -383,10 +388,64 @@ and OpenInference's LangChain instrumentation traces it to Phoenix.
   - a researcher's other failures, such as a tool the model made up, end ODR's research as they would anyway;
   - a researcher whose findings ODR could not compress is only logged, and ODR reports what the others found.
 - **Leftover researchers:** ODR does not stop the other researchers when one fails, so the caller cancels them before
-  the call returns: the trace then holds only what the run used.
+  the call returns. It lets the callbacks that end their runs finish, so every span of the trace keeps its parent. A
+  search they had under way stays in the trace as a failed call; a model call under way leaves no span.
 - **Environment:** ODR reads environment variables named after its settings (`SEARCH_API`, `RESEARCH_MODEL`, and so
   on) before its run config, so the caller refuses to start while any of them is set.
 - **One collection per process:** the replaced model and the instrumentation are process-wide.
+
+### Deep agent
+
+LangChain's deep agent is the `deep_research` example of deepagents: an orchestrator plans with `write_todos`,
+delegates the research to sub-agents through deepagents' `task` tool, and writes the report, which is the answer. It is
+built with `create_deep_agent` in `syllo-exp`'s own process (`agents/deep_agent.py`), with deepagents 0.7.34, and
+OpenInference's LangChain instrumentation traces it to Phoenix.
+
+- **Example:** its prompts and `think_tool`, vendored at the commit of the 0.7.34 release under the example's MIT
+  license (`agents/deep_research/`), and wired as its `agent.py` does: the example's research sub-agent and limits (3
+  sub-agents at once, 3 delegation rounds), and deepagents' defaults otherwise, with its general-purpose sub-agent,
+  except the thresholds of the settings below.
+  - `prompts.py` is byte for byte the example's, which a test checks. The caller edits the prompts with exact
+    replacements, which fail if they no longer apply: the search tool for the web search, document titles and ids for
+    URLs, the report as the last message instead of `/final_report.md`, and no clarifying questions, as ODR asks none.
+  - The example's own lock pins deepagents 0.6.12. deepagents 0.7 dropped its base prompt, its tools' usage guidance
+    and `write_todos` from the defaults; the orchestrator gets `write_todos` back, as the example's workflow starts
+    with it.
+- **Settings:** [`configs/deepagents.yaml`](configs/deepagents.yaml):
+  - the 272,000-token window of both models: deepagents summarizes the older history once a call's input reaches 85%
+    of it (231,200 tokens);
+  - the 100,000 tokens above which a tool result moves to the agent's files.
+- **Model:** the configuration's model in every call, the sub-agents' and the summaries' included, on its Foundry
+  deployment at `AZURE_FOUNDRY_BASE_URL`, through its Azure OpenAI API (version `DEEPAGENTS_AZURE_API_VERSION`), with
+  `AZURE_FOUNDRY_API_KEY`. Every model parameter is the provider's default, as in the Dify agent: the agents differ
+  only in their framework. LangChain sends GPT 6.1 Sol's calls with tools to the Responses API, as for ODR. Each call
+  waits up to `DEEPAGENTS_REQUEST_TIMEOUT_SECONDS` (600), and the client retries a rate limit, an outage or a
+  connection error `DEEPAGENTS_MAX_RETRIES` times (5). The adapter refuses a trace with an LLM call to any other
+  model.
+- **Search:** `DEEPAGENTS_SEARCH_URL`, by default `http://127.0.0.1:8101/mcp`, with the server on the configuration's
+  collection. The caller lists the server's tools when it builds the agent, at its first call; each search opens its
+  own connection, as ODR's do. The tool hands the server's errors, such as an empty query, back to the agent, which
+  would otherwise end the run.
+- **Trace:** the caller's root span `deepagents.request` holds the `request_id`, the question and the answer as text.
+  The sub-agents' spans are under the `task` tool's. Every search, the orchestrator's or a sub-agent's, is a retrieval
+  span with its ten documents; a search that the server rejected stays a tool span.
+  - A tool result moved to the agent's files is moved after the search returns, so its span holds the ten documents.
+    The model gets a preview of the result and its path; reading it there with the file tools leaves tool spans,
+    which are no new searches. The caller logs every result moved, which no search of ERB or WixQA is: their ten
+    longest documents would make about 372,000 and 281,000 characters of JSON.
+- **Runs again:** a question runs again from the start, with a new request id, up to `DEEPAGENTS_MAX_ATTEMPTS`
+  attempts (3), `DEEPAGENTS_RETRY_DELAY_SECONDS` (60) apart, when:
+  - the search tool was unreachable when the agent was built, or a search got no answer from the server;
+  - a provider's rate limit, outage or connection error outlasted the client's retries;
+  - a model call was cut off, at its output limit or by a content filter;
+  - the run ended without an answer;
+  - spans of the run did not reach Phoenix;
+  - the run took longer than `DEEPAGENTS_TIMEOUT_SECONDS` (3600).
+
+  Any other failure fails the sample at once, a refusal of the orchestrator's model included; a sub-agent's refusal
+  reaches the orchestrator as a notice, as deepagents handles it. If the agent writes `/final_report.md` anyway, the
+  caller logs it: the last message is still the answer.
+- **One collection per process:** the instrumentation is process-wide.
 
 ## Metrics
 
@@ -416,7 +475,8 @@ change.
   (`search_tool/search.py`):
   - the tool's results become a `retrieval` span, with the user question as its request and the documents as one
     ranked `selected` document result;
-  - the tool's error message (`The search failed: …`) leaves a tool span;
+  - the tool's error message (`The search failed: …`) leaves a tool span, as, for ODR and the deep agent, any error
+    of the server and a search cancelled under way do;
   - any other output becomes a `retrieval` span whose result is `unavailable`.
 
   `with_retrieved_evidence` then gives the agent root the retrieved evidence: one unranked document result at the
@@ -501,11 +561,12 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/gpt/trial-1 --max-co
   agent on each sample and stores its trace. It computes only the metrics that need no judge: Plan Efficiency on
   τ²-bench, and on ERB and WixQA set precision and set recall of each question's retrieved evidence and NDCG@10 of
   each search. Judge metrics repeat the run later, on its stored traces.
-- **Agents:** every stack has a caller: τ²-bench's agent, the Dify agent, the smolagents CodeAgent and Open Deep
-  Research. A stack without one fails type checking in `collect.build_integration`.
+- **Agents:** every stack has a caller: τ²-bench's agent, the Dify agent, the smolagents CodeAgent, Open Deep Research
+  and the deep agent. A stack without one fails type checking in `collect.build_integration`.
 - **Search server:** before any sample, the collection of an agent that searches reads the settings of the server that
-  the agent calls, at `DIFY_SEARCH_URL`, `SMOLAGENTS_SEARCH_URL` or `ODR_SEARCH_URL`. Unless the server serves the
-  configuration's collection and swap fraction, the step fails with the `search-server` command that (re)starts it.
+  the agent calls, at `DIFY_SEARCH_URL`, `SMOLAGENTS_SEARCH_URL`, `ODR_SEARCH_URL` or `DEEPAGENTS_SEARCH_URL`. Unless
+  the server serves the configuration's collection and swap fraction, the step fails with the `search-server` command
+  that (re)starts it.
 - **Phoenix:** each benchmark has one project, named after its dataset: `erb-69916e3`, `wixqa-d662dc4` and
   `tau2-retail-v1.0.1`.
   - Every agent of a benchmark sends its spans to that project.
@@ -629,7 +690,9 @@ Check which database and Qdrant are configured before running the suite.
 
 `OdrGraphTest` (in `tests/test_odr.py`) runs ODR's graph offline, with a scripted model, against the search server on
 a free local port. It checks that every search reaches the trace with its ten documents, whole and in rank order, and
-that the researchers a failed one leaves running stop with the call.
+that the researchers a failed one leaves running stop with the call. `DeepAgentGraphTest` (in
+`tests/test_deep_agent.py`) runs the deep agent's graph the same way: the searches of the orchestrator and of a
+sub-agent, a rejected search, and a search result moved to the agent's files, whose span still holds the ten documents.
 
 The τ²-bench runtime has its own tests, which run in its environment on the fetched files. They check the spans of a
 simulation offline, with litellm's mock responses:
@@ -648,7 +711,7 @@ The parent project's `poetry run ruff check .` and `poetry run ruff format .` al
    - the main pass and two retests, and the SC and WT ablations (`syllo-exp judge`);
    - the DeepEval baseline (`syllo-exp deepeval`).
 3. **Construct.** RQ3 lists and padded traces are imported as new traces.
-4. **Annotate.** Humans grade 180 answers and verify ERB facts.
+4. **Annotate.** Humans grade 240 answers and verify ERB facts.
 5. **Analyze.** Tables 2–4 and every red placeholder are regenerated from the exports.
 
 A pilot on a small slice gates the full campaign (`benchmarks pilot`, then `collect --pilot`), and `judge --pilot`

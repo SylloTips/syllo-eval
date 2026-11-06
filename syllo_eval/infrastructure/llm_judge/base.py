@@ -83,7 +83,7 @@ class LangChainLlmJudgeClient:
       except JudgeOutputError as error:
         if (
           len(usages) >= self._output_attempts
-          or raw.additional_kwargs.get('refusal')
+          or _refusal(raw) is not None
           or output_reached_limit(usages[-1], request.max_output_tokens)
         ):
           error.usage = usages[-1]
@@ -108,11 +108,14 @@ class LangChainLlmJudgeClient:
       )
 
   def _output(self, request: LlmJudgeRequest[Payload], result: dict[str, Any], raw: AIMessage) -> Payload:
+    refusal = _refusal(raw)
     if result['parsing_error'] is not None:
-      raise JudgeOutputError(self._provider_name, 'failed to parse structured output', result['parsing_error'])
+      reason = f'model refused judge request: {refusal}' if refusal is not None else 'failed to parse structured output'
+      raise JudgeOutputError(self._provider_name, reason, result['parsing_error'])
     if result['parsed'] is None:
-      refusal = raw.additional_kwargs.get('refusal')
-      reason = f'model refused judge request: {refusal}' if refusal else 'model returned no structured output'
+      reason = (
+        f'model refused judge request: {refusal}' if refusal is not None else 'model returned no structured output'
+      )
       raise JudgeOutputError(self._provider_name, reason)
     try:
       return request.response_model.model_validate(result['parsed'])
@@ -179,3 +182,18 @@ class LangChainLlmJudgeClient:
       for key in ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens', 'reasoning_tokens')
       if isinstance(value := usage.get(key), int)
     } or None
+
+
+def _refusal(message: AIMessage) -> str | None:
+  """Why the model refused the request, if it did.
+
+  OpenAI reports a refusal in its own field. From langchain-core 1.7.5, LangChain also turns each provider's report,
+  such as Gemini's safety stop, into a refusal block.
+  """
+  if refusal := message.additional_kwargs.get('refusal'):
+    return str(refusal)
+  for block in message.content_blocks:
+    fields: dict[str, Any] = dict(block)
+    if fields.get('type') == 'refusal':
+      return str(fields.get('refusal') or 'no reason given')
+  return None

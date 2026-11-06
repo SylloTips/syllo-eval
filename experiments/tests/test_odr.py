@@ -2,9 +2,7 @@ import asyncio
 import builtins
 import json
 import os
-import socket
 import unittest
-import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,7 +14,6 @@ import httpx
 import httpx2
 import open_deep_research.deep_researcher as deep_research
 import open_deep_research.utils as odr_utils
-import uvicorn
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -28,31 +25,20 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pydantic import Field, ValidationError
-from sse_starlette.sse import AppStatus
 
 from syllo_eval.model import Sample
 from syllo_eval.settings import PhoenixSettings
 
 from agents.odr import ROOT_SPAN_NAME, OdrCaller, OdrRunError, OdrSettings, OdrTraceAdapter, RunWatch, build_caller
 from config import load_config
-from indexing.embedding import AzureFoundrySettings, Embeddings, InputType
-from indexing.vector_store import StoredPoint
-from search_tool.search import KnowledgeBaseSearch
-from search_tool.server import PATH, TOOL_NAME, build_server
+from indexing.embedding import AzureFoundrySettings
+from search_fakes import DOCUMENTS, SearchServerTestCase, phoenix_records
+from search_tool.server import PATH, TOOL_NAME
 
 MODEL = 'claude-sonnet-5-5'
 QUESTION = 'How long do refunds take?'
 TRACE_ID = 'd' * 32
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
-# Long texts with characters that JSON escapes, so that a cut or a re-encoding would show.
-DOCUMENTS = [
-  {
-    'id': f'doc-{rank:02d}/"ü"',
-    'title': f'Title {rank}: "quoted" — ünïcode',
-    'text': f'Document {rank}.\n\tTabs, "quotes", back\\slashes, {{braces}} and ✓ marks. ' * 300,
-  }
-  for rank in range(10, 0, -1)
-]
 # How a search failed in the live runs when the MCP client got no answer from the server.
 NO_ANSWER = builtins.ExceptionGroup('unhandled errors in a TaskGroup', [httpx.ConnectTimeout('')])
 
@@ -65,13 +51,20 @@ def _search_output(results: Sequence[dict[str, Any]], query: str = 'refund time'
 
 
 def _record(
-  span_id: str, name: str, kind: str, parent: str | None, status: str = 'OK', **attributes: Any
+  span_id: str,
+  name: str,
+  kind: str,
+  parent: str | None,
+  status: str = 'OK',
+  status_message: str = '',
+  **attributes: Any,
 ) -> dict[str, Any]:
   """A span as the Phoenix client returns it: attributes flattened under ``attributes.``."""
   second = len(span_id)
   return {
     'name': name,
     'status_code': status,
+    'status_message': status_message,
     'parent_id': parent,
     'start_time': T0 + timedelta(seconds=second),
     'end_time': T0 + timedelta(seconds=second + 1),
@@ -85,6 +78,12 @@ def _trace(answer: str = '42', model: str = MODEL) -> list[dict[str, Any]]:
   search = {'tool.name': TOOL_NAME, 'input.value': 'refund time'}
   llm: dict[str, Any] = {'llm.model_name': model, 'llm.token_count.prompt': 100}
   failed = json.dumps([{'type': 'text', 'text': 'The search failed: the query is empty', 'id': 'lc_2'}])
+  # How LangChain's tracer records the ToolException that the MCP client raises with the server's error message.
+  # repr quotes the message in single quotes, or in double quotes when it has one, and the traceback follows at once.
+  rejected = "ToolException('The search failed: the query is empty')Traceback (most recent call last):\n  ..."
+  quoted = 'ToolException("The search failed: can\'t embed the query")Traceback (most recent call last):\n  ...'
+  # The MCP server's own answer to arguments the tool does not take.
+  invalid = 'ToolException("Input validation error: \'query\' is a required property")Traceback (most recent call ...'
   return [
     _record('r', ROOT_SPAN_NAME, 'AGENT', None, **{'input.value': QUESTION, 'output.value': answer}),
     _record('graph', 'LangGraph', 'CHAIN', 'r'),
@@ -92,7 +91,11 @@ def _trace(answer: str = '42', model: str = MODEL) -> list[dict[str, Any]]:
     _record('tools', 'researcher_tools', 'CHAIN', 'graph'),
     _record('ok', TOOL_NAME, 'TOOL', 'tools', **search, **{'output.value': _search_output(DOCUMENTS)}),
     _record('fail', TOOL_NAME, 'TOOL', 'tools', **search, **{'output.value': failed}),
-    _record('down', TOOL_NAME, 'TOOL', 'tools', status='ERROR', **search),
+    _record('rejected', TOOL_NAME, 'TOOL', 'tools', status='ERROR', status_message=rejected, **search),
+    _record('quoted', TOOL_NAME, 'TOOL', 'tools', status='ERROR', status_message=quoted, **search),
+    _record('invalid', TOOL_NAME, 'TOOL', 'tools', status='ERROR', status_message=invalid, **search),
+    _record('cancelled', TOOL_NAME, 'TOOL', 'tools', status='ERROR', status_message='CancelledError()', **search),
+    _record('down', TOOL_NAME, 'TOOL', 'tools', status='ERROR', status_message='ExceptionGroup(...)', **search),
     _record('think', 'think_tool', 'TOOL', 'tools', **{'tool.name': 'think_tool', 'output.value': 'Reflection'}),
   ]
 
@@ -120,11 +123,12 @@ class OdrTraceAdapterTest(unittest.TestCase):
     self.assertEqual((evidence.stage, evidence.availability), ('retrieved', 'unavailable'))
     self.assertIn('down', evidence.reason or '')
 
-    self.assertEqual([spans[span_id].span_type for span_id in ('fail', 'think')], ['tool'] * 2)
+    failed_calls = ('fail', 'rejected', 'quoted', 'invalid', 'cancelled', 'think')
+    self.assertEqual([spans[span_id].span_type for span_id in failed_calls], ['tool'] * 6)
     [unreadable] = spans['down'].semantics.retrieval
     self.assertEqual((spans['down'].span_type, unreadable.availability), ('retrieval', 'unavailable'))
     self.assertEqual(spans['llm'].semantics.usage.input_tokens, 100)  # type: ignore[union-attr]
-    self.assertEqual(result.trace.adapter, 'odr:2')
+    self.assertEqual(result.trace.adapter, 'odr:3')
 
   def test_a_call_to_another_model_is_refused(self) -> None:
     for model in ('gpt-4.1', f'{MODEL}-mini', f'{MODEL}-2026'):
@@ -133,7 +137,7 @@ class OdrTraceAdapterTest(unittest.TestCase):
 
   def test_a_dated_version_of_the_model_is_the_model(self) -> None:
     result = OdrTraceAdapter(MODEL).normalize(TRACE_ID, _trace(model=f'{MODEL}-2026-09-29'))
-    self.assertEqual(result.trace.adapter, 'odr:2')
+    self.assertEqual(result.trace.adapter, 'odr:3')
 
   def test_a_trace_without_the_callers_root_is_refused(self) -> None:
     records = _trace()[1:]
@@ -208,6 +212,8 @@ class RunWatchTest(unittest.TestCase):
     watch = RunWatch()
     # The server's answer to a search it rejected.
     _failed_search(watch, ToolException('The search failed: the query is empty'))
+    # A search cancelled with its run, as at the run's timeout, which reports itself.
+    _failed_search(watch, asyncio.CancelledError())
     # A tool the model made up.
     _failed_run(watch, 'researcher_tools', KeyError('tavily_search'))
     # A request the provider refused, such as one over the context window.
@@ -273,7 +279,7 @@ class SearchToolsTest(unittest.IsolatedAsyncioTestCase):
   @patch.dict('agents.odr._search_tools', clear=True)
   async def test_the_search_tool_is_discovered_once_per_server_and_connects_with_retries(self) -> None:
     config = {'configurable': {'mcp_config': {'url': 'http://127.0.0.1:8101', 'tools': [TOOL_NAME]}}}
-    with patch('agents.odr.MultiServerMCPClient') as client:
+    with patch('agents.langchain_runs.MultiServerMCPClient') as client:
       client.return_value.get_tools = AsyncMock(return_value=_tools(TOOL_NAME, 'other'))
       first = await odr_utils.load_mcp_tools(config, set())
       second = await odr_utils.load_mcp_tools(config, set())
@@ -459,7 +465,7 @@ class BuildCallerTest(unittest.TestCase):
     self.settings = OdrSettings(search_url='http://127.0.0.1:8101', azure_api_version='2025-04-01-preview')
     original = deep_research.configurable_model
     self.addCleanup(setattr, deep_research, 'configurable_model', original)
-    instrumentor, model = patch('agents.odr.LangChainInstrumentor'), patch('agents.odr.init_chat_model')
+    instrumentor, model = patch('agents.langchain_runs.LangChainInstrumentor'), patch('agents.odr.init_chat_model')
     self.instrumentor, self.init_chat_model = instrumentor.start(), model.start()
     self.addCleanup(instrumentor.stop)
     self.addCleanup(model.stop)
@@ -566,86 +572,13 @@ class ScriptedModel(BaseChatModel):
     return ChatResult(generations=[ChatGeneration(message=AIMessage(content='', tool_calls=tool_calls))])
 
 
-class LongIndex:
-  """Ranks the documents in their order; a search for something slow waits until ``release`` is set."""
-
-  def __init__(self, release: asyncio.Event):
-    self._release = release
-
-  async def search(self, vector: Sequence[float], query: str, limit: int) -> list[StoredPoint]:
-    if 'slow' in query:
-      await self._release.wait()
-    return [
-      StoredPoint(
-        id=f'p{n}', payload={'document_id': document['id'], 'title': document['title'], 'text': document['text']}
-      )
-      for n, document in enumerate(DOCUMENTS[:limit])
-    ]
-
-  async def retrieve(self, ids: Sequence[str]) -> list[StoredPoint]:
-    raise AssertionError('no swaps')
-
-
-class FakeEmbedder:
-  async def embed(self, texts: Sequence[str], input_type: InputType) -> Embeddings:
-    return Embeddings(vectors=[[0.25, 0.75]], input_tokens=3)
-
-
-def _phoenix_records(spans: Sequence[ReadableSpan]) -> list[dict[str, Any]]:
-  """Exported spans as the Phoenix client returns them: attributes flattened under ``attributes.``."""
-  records = []
-  for span in spans:
-    assert span.context is not None and span.start_time is not None and span.end_time is not None
-    records.append(
-      {
-        'name': span.name,
-        'status_code': span.status.status_code.name,
-        'parent_id': format(span.parent.span_id, '016x') if span.parent else None,
-        'start_time': datetime.fromtimestamp(span.start_time / 1e9, timezone.utc),
-        'end_time': datetime.fromtimestamp(span.end_time / 1e9, timezone.utc),
-        'context.span_id': format(span.context.span_id, '016x'),
-        **{f'attributes.{key}': value for key, value in (span.attributes or {}).items()},
-      }
-    )
-  return records
-
-
-class OdrGraphTest(unittest.IsolatedAsyncioTestCase):
+class OdrGraphTest(SearchServerTestCase):
   """ODR's own graph, with a scripted model, searching through the real search server."""
 
   async def asyncSetUp(self) -> None:
-    # The MCP server leaves a stream of each request to the garbage collector (mcp 1.12.4).
-    self.enterContext(warnings.catch_warnings())
-    warnings.filterwarnings('ignore', 'Unclosed <MemoryObject', ResourceWarning)
-    # The graph's first run is slow to start, which the test loop's debug mode would report.
-    asyncio.get_running_loop().slow_callback_duration = 5
-    # sse-starlette 2.1 keeps one exit event per process, bound to the first event loop that waits on it: a server in
-    # a later test's loop would fail every streamed response, and its MCP clients would wait for good.
-    AppStatus.should_exit_event = None
-    with socket.socket() as probe:
-      probe.bind(('127.0.0.1', 0))
-      port = probe.getsockname()[1]
-    release = asyncio.Event()
-    search = KnowledgeBaseSearch(LongIndex(release), FakeEmbedder())
-    app = build_server(search, {'collection': 'kb-test'}).http_app(path=PATH, stateless_http=True)
-    config = uvicorn.Config(app, host='127.0.0.1', port=port, ws='none', log_level='warning', access_log=False)
-    server = uvicorn.Server(config)
-    serving = asyncio.create_task(server.serve())
-    self.addAsyncCleanup(self._stop, server, serving)
-    # Before the server stops, which waits for the searches it is serving.
-    self.addCleanup(release.set)
-    while not server.started:
-      if serving.done():
-        serving.result()
-      await asyncio.sleep(0.01)
-    self.url = f'http://127.0.0.1:{port}'
+    await super().asyncSetUp()
     original = deep_research.configurable_model
     self.addCleanup(setattr, deep_research, 'configurable_model', original)
-
-  @staticmethod
-  async def _stop(server: uvicorn.Server, serving: asyncio.Task[None]) -> None:
-    server.should_exit = True
-    await serving
 
   def _caller(self, model: ScriptedModel, max_attempts: int = 1) -> tuple[OdrCaller, InMemorySpanExporter]:
     deep_research.configurable_model = model
@@ -680,7 +613,7 @@ class OdrGraphTest(unittest.IsolatedAsyncioTestCase):
     [root] = [span for span in spans if span.parent is None]
     self.assertEqual((root.attributes or {})['request_id'], request_id)
     assert root.context is not None
-    result = OdrTraceAdapter('scripted-model').normalize(format(root.context.trace_id, '032x'), _phoenix_records(spans))
+    result = OdrTraceAdapter('scripted-model').normalize(format(root.context.trace_id, '032x'), phoenix_records(spans))
     searches = [span for span in result.spans if span.span_type == 'retrieval']
     self.assertEqual(len(searches), 2)
     for search in searches:
@@ -710,9 +643,14 @@ class OdrGraphTest(unittest.IsolatedAsyncioTestCase):
     [root] = [span for span in spans if span.parent is None]
     self.assertEqual((root.attributes or {})['request_id'], request_id)
     assert root.context is not None
-    result = OdrTraceAdapter('scripted-model').normalize(format(root.context.trace_id, '032x'), _phoenix_records(spans))
+    result = OdrTraceAdapter('scripted-model').normalize(format(root.context.trace_id, '032x'), phoenix_records(spans))
     self.assertEqual([span for span in result.spans if span.span_type == 'retrieval'], [])
     self.assertIn('researcher_tools', {span.name for span in result.spans if span.status == 'error'})
+    # The search under way when the call returned: cancelled, it returned nothing, and its evidence is whole.
+    [search] = [span for span in result.spans if span.name == TOOL_NAME]
+    self.assertEqual((search.span_type, search.status), ('tool', 'error'))
+    [root_span] = [span for span in result.spans if span.parent_span_id is None]
+    self.assertEqual([evidence.availability for evidence in root_span.semantics.retrieval], ['available'])
 
   async def test_a_researcher_that_failed_for_its_provider_runs_the_question_again(self) -> None:
     # Every attempt ODR makes at the first researcher call: the researcher fails, and ODR ends its research.

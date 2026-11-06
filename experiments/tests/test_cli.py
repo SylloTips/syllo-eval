@@ -70,7 +70,7 @@ class CliTest(unittest.TestCase):
     self.assertEqual(status, 0)
     self.assertIn('erb/react/gpt/f0.25', output)
     self.assertIn('version=deepseek-trial4', output)
-    self.assertIn('22 configurations', output)
+    self.assertIn('26 configurations', output)
 
   def test_steps_shows_the_latest_state_of_each_step(self) -> None:
     with tempfile.TemporaryDirectory() as directory:

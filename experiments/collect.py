@@ -83,6 +83,16 @@ def build_integration(
       adapter=odr.OdrTraceAdapter(config.models.agents[configuration.model].model),
       search_url=odr_settings.mcp_url,
     )
+  if agent == 'deepagents':
+    # deepagents and its MCP client are slow to import, and only the deep agent's collections need them.
+    from agents import deep_agent
+
+    deep_agent_settings = deep_agent.DeepAgentSettings()
+    return AgentIntegration(
+      caller=deep_agent.build_caller(configuration, config, phoenix=phoenix, settings=deep_agent_settings),
+      adapter=deep_agent.DeepAgentTraceAdapter(config.models.agents[configuration.model].model),
+      search_url=deep_agent_settings.search_url,
+    )
   if agent == 'react':
     dify_settings = dify.DifySettings()
     return AgentIntegration(

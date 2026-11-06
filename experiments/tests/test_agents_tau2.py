@@ -438,6 +438,12 @@ class BuildCallerTest(unittest.TestCase):
           'final_report_model_max_tokens': 10000,
           'mcp_prompt': 'Search with search_knowledge_base.',
         },
+        'deepagents': {
+          'max_concurrent_research_units': 3,
+          'max_researcher_iterations': 3,
+          'context_window_tokens': 272000,
+          'tool_result_eviction_tokens': 100000,
+        },
       }
     )
     self.configuration = self.config.configurations[0]

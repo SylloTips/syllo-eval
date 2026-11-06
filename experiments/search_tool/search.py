@@ -17,6 +17,7 @@ the search failed, so that the traces can be checked against it.
 import json
 import logging
 import random
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,10 @@ from indexing.vector_store import StoredPoint, VectorStoreError
 RESULTS = 10
 TRUNCATION_MARK = ' [truncated]'
 FAILURE_PREFIX = 'The search failed: '
+# The status that LangChain's tracer gives the span of a search that returned no documents: one whose tool raised the
+# server's error, which LangChain's MCP client raises as a ToolException and only for an error the server returned, or
+# one cancelled under way, as a run's leftover tasks are when the call returns.
+_FAILED_STATUS = re.compile(r'(?:ToolException|CancelledError)\(')
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +83,41 @@ def search_retrieval(output: JsonValue) -> RetrievalResult | None:
     return RetrievalResult(
       kind='document', stage='selected', availability='unavailable', reason='the output is not the search results'
     )
+
+
+def search_output_text(output: JsonValue) -> JsonValue:
+  """A LangChain search span's output as the tool wrote it.
+
+  LangChain's MCP client splits the tool's text into text blocks. The tools of an agent built with LangChain's
+  ``create_agent`` return a whole tool message, whose content holds the blocks, or the error of a search that the
+  server rejected.
+  """
+  if isinstance(output, dict):
+    data = output.get('data')
+    if output.get('type') == 'tool' and isinstance(data, dict):
+      output = data.get('content')
+  if isinstance(output, list):
+    texts = [block.get('text') for block in output if isinstance(block, dict) and block.get('type') == 'text']
+    return ''.join(text for text in texts if isinstance(text, str))
+  return output
+
+
+def search_span_retrieval(span: Span) -> RetrievalResult | None:
+  """The retrieval of a LangChain agent's search span, or None for a search that returned no documents.
+
+  Such a search got an error from the server, such as an empty query or arguments the tool does not take, or was
+  cancelled under way. The tool either returned the error, as a tool message with an error status or as the server's
+  failure message, or raised it, which the span's status then holds.
+  """
+  output = span.output_data
+  if isinstance(output, dict) and output.get('type') == 'tool':
+    data = output.get('data')
+    if isinstance(data, dict) and data.get('status') == 'error':
+      return None
+  status = (span.metadata or {}).get('phoenix.status_message')
+  if span.status == 'error' and isinstance(status, str) and _FAILED_STATUS.match(status):
+    return None
+  return search_retrieval(search_output_text(output))
 
 
 def with_retrieved_evidence(spans: Sequence[Span], unreadable: Sequence[str] = ()) -> list[Span]:
