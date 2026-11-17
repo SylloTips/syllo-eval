@@ -605,7 +605,8 @@ async def _collect(args: argparse.Namespace) -> int:
 
 async def _score_with_deepeval(args: argparse.Namespace) -> int:
   """Repeat the source run with the selected DeepEval metrics; the manifest records the step and the run it made."""
-  judge_config = load_config(args.config_dir).models.judge
+  config = load_config(args.config_dir)
+  judge_config = config.models.judge
   load_environment()
   settings, judge_settings = Settings(), GeminiJudgeSettings()
   if judge_settings.api_key is None:
@@ -621,6 +622,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
       # The service's own check raises a bare RuntimeError; this one is recorded like any other database error.
       if not await db_manager.health_check():
         raise DatabaseConnectionError('Database health check failed')
+      configuration = (await _collection_run(db_manager, config, args.source_run)).configuration
       metrics = [deepeval_metrics(judge, output_token_limit=judge_config.output_token_limit)[key] for key in keys]
       details['metrics'] = [metric.name for metric in metrics]
       async with build_service(settings, db_manager, metrics=metrics) as service:
@@ -628,6 +630,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
           source_run_id=args.source_run,
           metrics=[metric.name for metric in metrics],
           max_concurrent_samples=args.max_concurrent_samples,
+          metadata={'step': step, 'configuration': configuration.id, 'arm': 'deepeval', 'repetition': 1},
         )
         run_ids = (handle.run.id,)
         # A crash past this point leaves the step started, with the run it made.

@@ -541,6 +541,7 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
 
 - **What it does:** it repeats a collection run on its stored traces with the selected DeepEval metrics. The new run's
   report counts DeepEval's judge calls and tokens as it counts Syllo-eval's.
+- **Run metadata:** the step, configuration, arm `deepeval` and repetition 1, as a judge run carries them.
 - **Manifest:** the step is `deepeval:<source run>:<metrics>`, with the new run's id, the metric names, the DeepEval
   version and the failed units per metric and failure class.
 - **Completion:** the step completes when the run does and every failed unit failed with an outcome of the judge,
