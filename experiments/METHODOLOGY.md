@@ -88,6 +88,9 @@ per call.
 
 ## Open Deep Research runs
 
+The deep agent (next section) replaces Open Deep Research in the paper. The Open Deep Research runs are kept and
+documented here, but the paper does not report them.
+
 Open Deep Research runs unmodified, at commit `1b7d2e8` of `langchain-ai/open_deep_research`, with the settings of
 `configs/odr.yaml` (`agents/odr.py`).
 
@@ -378,9 +381,10 @@ scoring of the retrieval metrics; answers get G-Eval's score.
 ## RQ2 references
 
 - AC is ranked against human grades on the annotated questions, CP against NDCG@10, and CR against set recall.
-- **Kendall τ-b** compares the rankings of the eight configurations.
+- **Kendall τ-b** compares the rankings of the six configurations: ReAct, smolagents and the deep agent, each with
+  both models.
 - **Discriminative power:**
-  - It is the share of the 28 configuration pairs that differ significantly.
+  - It is the share of the 15 configuration pairs that differ significantly.
   - Significance uses a paired bootstrap over questions (B = 10,000) with Holm correction per metric at p < 0.05.
   - It is also computed for the human grades, R and NDCG@10, and for AC on the annotated questions.
 - **Known order:** ReAct/GPT on ERB with f = 0 ≻ 0.25 ≻ 0.5, checked with R and NDCG@10.
