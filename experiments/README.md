@@ -706,6 +706,12 @@ write.
   `unjudged` count reports those decisions. A unit failed with an outcome of the judge counts each fact of its ground
   truth as a wrong decision. Its rows have the shape of `relevance`'s, with supported and unsupported facts in place of
   gold and other documents.
+- `plans` (RQ1 Plans; `--arms`: `main`, `wt`) compares Plan Correctness with τ²-bench's reward, read with its action
+  checks from `outputs/tau2/<collection run>/rewards.jsonl` (each sample's latest attempt). Per run, per agent model
+  and pooled, it gives the AUROC of Plan Correctness and of a deterministic baseline, 1 − the normalized edit distance
+  between the executed tool calls (name and arguments) and the expected plan, on the trajectories Plan Correctness
+  scored. It also counts the rewarded trajectories that fail τ²-bench's action check, which deviate from the reference,
+  with both metrics' mean on them.
 - `scores` (Table 3) gives each run's configuration scores (`--arms`: `main`, `sc`, `wt`, `deepeval`), the mean of its
   per-question scores, as METHODOLOGY's *Aggregation* defines them, with the number of questions behind each; R and
   NDCG@10 come from the source run. The run report's score statistics pool every computation instead, so they weigh a

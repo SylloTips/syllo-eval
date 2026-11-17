@@ -9,6 +9,7 @@ import signal
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import UUID
@@ -32,7 +33,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
-from analysis import attribution, relevance, scores
+from analysis import attribution, plans, relevance, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -70,6 +71,12 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     attribution.table,
     attribution.ARMS,
     'RQ1 Fact Support: contextual recall decisions on the ERB gold facts against the retrieval of their gold document.',
+  ),
+  'plans': (
+    partial(plans.plans, rewards_dir=DEFAULT_OUTPUTS / 'tau2'),
+    plans.table,
+    plans.ARMS,
+    'RQ1 Plans: AUROC of Plan Correctness and of edit-distance matching against the tau2-bench reward.',
   ),
   'scores': (
     scores.scores,
@@ -230,8 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
   analyses = analyze.add_subparsers(dest='analysis', required=True)
   for name, (_, _, arms, description) in _ANALYSES.items():
     command = analyses.add_parser(name, help=description, description=description)
+    default_arms = [arm for arm in ('main', 'sc') if arm in arms]
     command.add_argument(
-      '--arms', nargs='+', choices=arms, default=['main', 'sc'], help='Arms to analyze (default: main sc).'
+      '--arms',
+      nargs='+',
+      choices=arms,
+      default=default_arms,
+      help=f'Arms to analyze (default: {" ".join(default_arms)}).',
     )
     command.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
     command.add_argument(

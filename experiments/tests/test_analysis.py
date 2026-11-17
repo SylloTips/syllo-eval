@@ -13,7 +13,11 @@ from syllo_eval.model import (
   MetricTargetingMode,
 )
 
-from analysis import attribution
+import json
+import tempfile
+from pathlib import Path
+
+from analysis import attribution, plans
 from analysis.relevance import Decision, decisions, summary
 from analysis.runs import judge_runs, latest_attempts, rounded
 from analysis.scores import question_scores
@@ -324,3 +328,46 @@ class FactSupportDecisionsTest(unittest.TestCase):
       )
     with self.assertRaisesRegex(ValueError, 'no retrieved evidence'):
       attribution.decisions([self._recall(self.missed_gold, [('f', True)])], self.sample_ids, {}, self.gold, {})
+
+
+class PlansTest(unittest.TestCase):
+  def test_matching_is_one_minus_the_normalized_edit_distance(self) -> None:
+    find, cancel = plans.call('find', {'id': 1}), plans.call('cancel', {'id': 1, 'why': 'x'})
+    self.assertEqual(plans.matching([find, cancel], [find, cancel]), 1.0)
+    self.assertEqual(plans.matching([], []), 1.0)
+    self.assertEqual(plans.matching([find, plans.call('cancel', {'why': 'x', 'id': 2})], [find, cancel]), 0.5)
+    self.assertEqual(plans.matching([find, find, cancel], [cancel]), 1 - 2 / 3)
+
+  def test_auroc_counts_ties_as_half(self) -> None:
+    self.assertEqual(plans.auroc([(1.0, True), (0.0, False)]), 1.0)
+    self.assertEqual(plans.auroc([(0.7, True), (0.7, False), (1.0, True)]), 0.75)
+    self.assertIsNone(plans.auroc([(1.0, True)]))
+
+  def test_deviating_successes_are_rewarded_trajectories_that_fail_the_action_check(self) -> None:
+    trajectories = [
+      plans.Trajectory(1.0, 0.2, True, False),
+      plans.Trajectory(0.7, 0.4, True, False),
+      plans.Trajectory(1.0, 1.0, True, True),
+      plans.Trajectory(0.0, 0.1, False, False),
+    ]
+
+    result = plans.summary(trajectories)
+
+    self.assertEqual((result['deviating'], result['deviating_pc']), (2, 0.85))
+    self.assertAlmostEqual(result['deviating_matching'], 0.3)
+
+  def test_rewards_come_from_each_sample_s_latest_attempt(self) -> None:
+    sample = uuid4()
+    lines = [
+      {'sample_id': str(sample), 'attempt': 1, 'reward': 0.0, 'reward_info': {'action_checks': []}},
+      {
+        'sample_id': str(sample),
+        'attempt': 2,
+        'reward': 1.0,
+        'reward_info': {'action_checks': [{'action_match': True}, {'action_match': False}]},
+      },
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / 'rewards.jsonl'
+      path.write_text('\n'.join(json.dumps(line) for line in lines))
+      self.assertEqual(plans.read_rewards(path), {sample: (True, False)})
