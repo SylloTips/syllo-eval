@@ -16,6 +16,7 @@ from syllo_eval.model import (
 from analysis import attribution
 from analysis.relevance import Decision, decisions, summary
 from analysis.runs import judge_runs, latest_attempts, rounded
+from analysis.scores import question_scores
 from config import Configuration
 
 CONFIGURATIONS = [
@@ -187,6 +188,67 @@ def _unit(
     error_message=skip,
     metadata={'failure': failure} if failure else None,
   )
+
+
+class QuestionScoresTest(unittest.TestCase):
+  LABELS = {'cp': 'CP', 'cr': 'CR', 'ac': 'AC', 'pc': 'PC', 'ndcg': 'NDCG@10'}
+
+  def _scores(self, units: dict[str, list[tuple[str, dict[str, Any]]]], gold: dict[str, frozenset[str]]) -> dict:
+    run_samples = {name: uuid4() for name in units}
+    computations = [
+      _unit(run_samples[name], metric, **kwargs) for name, group in units.items() for metric, kwargs in group
+    ]
+    found = question_scores(
+      computations,
+      {rs: rs for rs in run_samples.values()},
+      self.LABELS,
+      {run_samples[name]: labels for name, labels in gold.items()},
+    )
+    names = {rs: name for name, rs in run_samples.items()}
+    return {label: {names[sample]: score for sample, score in by_sample.items()} for label, by_sample in found.items()}
+
+  def test_each_question_weighs_the_same_whatever_its_number_of_searches(self) -> None:
+    found = self._scores(
+      {
+        'one': [('cp', {'score': 0.9}), ('ndcg', {'score': 0.6})],
+        'many': [('cp', {'score': 0.1})] * 4 + [('ndcg', {'score': 0.2}), ('ndcg', {'score': 0.4})],
+      },
+      {'one': frozenset({'g'}), 'many': frozenset({'g'})},
+    )
+
+    self.assertEqual(found['CP'], {'one': 0.9, 'many': 0.1})
+    self.assertAlmostEqual(found['NDCG@10']['many'], 0.3)
+
+  def test_skips_score_zero_or_leave_the_question_out_as_the_methodology_says(self) -> None:
+    no_search = 'No spans found for target span type "retrieval".'
+    found = self._scores(
+      {
+        'no_search': [('cp', {'skip': no_search}), ('ndcg', {'skip': no_search}), ('cr', {'score': 0.0})],
+        'no_gold': [('cp', {'skip': no_search}), ('ndcg', {'skip': no_search})],
+        'unreadable': [
+          ('cp', {'score': 0.8}),
+          ('cr', {'skip': 'Document retrieval unavailable: unreadable search outputs: x'}),
+        ],
+        'no_answer': [('ac', {'skip': 'Trace does not provide an answer.'})],
+        'no_plan': [('pc', {'skip': 'Missing required ground truth: expected_plan.'})],
+        'failed': [
+          ('cp', {'score': 1.0}),
+          ('cp', {'failure': 'misaligned'}),
+          ('ac', {'failure': 'context_overflow'}),
+        ],
+      },
+      {name: frozenset({'g'}) for name in ('no_search', 'unreadable', 'failed')},
+    )
+
+    self.assertEqual(found['CP'], {'no_search': 0.0, 'no_gold': 0.0, 'failed': 0.5})
+    self.assertEqual(found['NDCG@10'], {'no_search': 0.0})
+    self.assertEqual(found['CR'], {'no_search': 0.0})
+    self.assertEqual(found['AC'], {'no_answer': 0.0})
+    self.assertNotIn('PC', found)
+
+  def test_an_infrastructure_failure_stops_the_analysis(self) -> None:
+    with self.assertRaisesRegex(ValueError, 'score it again'):
+      self._scores({'q': [('cr', {'failure': 'provider'})]}, {})
 
 
 class RoundedTest(unittest.TestCase):

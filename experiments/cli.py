@@ -32,7 +32,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
-from analysis import attribution, relevance
+from analysis import attribution, relevance, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -70,6 +70,12 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     attribution.table,
     attribution.ARMS,
     'RQ1 Fact Support: contextual recall decisions on the ERB gold facts against the retrieval of their gold document.',
+  ),
+  'scores': (
+    scores.scores,
+    scores.table,
+    scores.ARMS,
+    "Table 3: each run's configuration scores, the mean of its per-question scores.",
   ),
 }
 _BENCHMARK_STEPS = {

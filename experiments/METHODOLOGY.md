@@ -348,6 +348,9 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   - A question without a successful search has an observed empty evidence, on which CR and R score 0. The planner
     skips its CP and NDCG@10, which the analysis sets to 0 too. A question whose evidence is unavailable is not scored
     on any retrieval metric: it is a coverage gap, not a 0.
+  - A question without gold documents (ten ERB questions) has no R and no NDCG@10, even without a search; CP still
+    scores it.
+  - A question without an answer scores 0 on AC.
   - An agent failure that persists after retries is a collection failure: the question has no trace, so it is
     excluded from every metric and reported separately per configuration, never as a judge score.
 - **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's

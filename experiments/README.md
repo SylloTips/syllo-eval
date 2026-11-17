@@ -706,6 +706,10 @@ write.
   `unjudged` count reports those decisions. A unit failed with an outcome of the judge counts each fact of its ground
   truth as a wrong decision. Its rows have the shape of `relevance`'s, with supported and unsupported facts in place of
   gold and other documents.
+- `scores` (Table 3) gives each run's configuration scores (`--arms`: `main`, `sc`, `wt`, `deepeval`), the mean of its
+  per-question scores, as METHODOLOGY's *Aggregation* defines them, with the number of questions behind each; R and
+  NDCG@10 come from the source run. The run report's score statistics pool every computation instead, so they weigh a
+  question by its number of searches and are not these scores. Printed values round half up, as the paper does.
 
 ## Verification
 
