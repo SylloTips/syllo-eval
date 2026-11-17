@@ -15,7 +15,6 @@ from uuid import UUID
 import httpx
 import psycopg
 
-from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
@@ -50,25 +49,13 @@ from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, o
 from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
 from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
-from judge import ARMS, judge_metrics, open_judge_client
+from judge import ARMS, JUDGE_OUTCOMES, judge_metrics, open_judge_client
 from manifest import Manifest, StepStatus
 from run_outputs import RunOutputs
 from service import build_service, open_database
 
 DEFAULT_OUTPUTS = Path(__file__).resolve().parent / 'outputs'
 DEFAULT_MANIFEST = DEFAULT_OUTPUTS / 'manifest.jsonl'
-# Failures that are outcomes of the judge: the unit counts as wrong (METHODOLOGY.md, Failures). Any other failed unit,
-# such as one with a provider error, is unscored and must run again, so a judge step that has one is not complete.
-_JUDGE_OUTCOMES = frozenset(
-  kind.value
-  for kind in (
-    JudgeFailureKind.MISALIGNED,
-    JudgeFailureKind.TRUNCATED,
-    JudgeFailureKind.INVALID_OUTPUT,
-    JudgeFailureKind.CONTEXT_OVERFLOW,
-    JudgeFailureKind.TIMEOUT,
-  )
-)
 _BENCHMARK_STEPS = {
   'fetch': 'Download the pinned benchmark files, verifying their size and SHA-256.',
   'convert': 'Convert the pinned files into syllo-eval datasets and check them.',
@@ -651,7 +638,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
     _record_failure(manifest, step, 'deepeval', error, run_ids=run_ids, details=details)
     return 1
   unscored = sum(
-    count for kinds in failed_units.values() for kind, count in kinds.items() if kind not in _JUDGE_OUTCOMES
+    count for kinds in failed_units.values() for kind, count in kinds.items() if kind not in JUDGE_OUTCOMES
   )
   complete = run.status is EvaluationStatus.COMPLETED and not unscored
   details.update(run_status=run.status.value, failed_units=failed_units)
@@ -884,7 +871,7 @@ def unresolved_samples(
   for computation in computations:
     resolved[(sample_ids[computation.evaluation_run_sample_id], computation.metric)].append(
       computation.status is not MetricComputationStatus.FAILED
-      or (computation.metadata or {}).get('failure') in _JUDGE_OUTCOMES
+      or (computation.metadata or {}).get('failure') in JUDGE_OUTCOMES
     )
   return [
     sample_id

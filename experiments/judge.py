@@ -22,6 +22,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
 from syllo_eval.evaluation.judge import LlmJudgeClient, LlmJudgeRequest, LlmJudgeResponse
+from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.evaluation.metrics.implementations.answer.correctness_judge import AnswerCorrectnessJudgeMetric
 from syllo_eval.evaluation.metrics.implementations.plan.correctness_judge import PlanCorrectnessJudgeMetric
@@ -48,6 +49,18 @@ from config import Benchmark, JudgeConfig
 
 Arm = Literal['main', 'sc', 'wt']
 ARMS: tuple[Arm, ...] = ('main', 'sc', 'wt')
+# Failures that are outcomes of the judge: the unit counts as wrong (METHODOLOGY.md, Failures). Any other failed unit,
+# such as one with a provider error, is unscored and must run again, so a judge step that has one is not complete.
+JUDGE_OUTCOMES = frozenset(
+  kind.value
+  for kind in (
+    JudgeFailureKind.MISALIGNED,
+    JudgeFailureKind.TRUNCATED,
+    JudgeFailureKind.INVALID_OUTPUT,
+    JudgeFailureKind.CONTEXT_OVERFLOW,
+    JudgeFailureKind.TIMEOUT,
+  )
+)
 
 
 class ConfiguredTemperatureJudgeClient:
