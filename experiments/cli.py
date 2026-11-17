@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import faulthandler
+import json
 import logging
 import signal
 import sys
@@ -31,6 +32,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
+from analysis import attribution, relevance
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -56,6 +58,20 @@ from service import build_service, open_database
 
 DEFAULT_OUTPUTS = Path(__file__).resolve().parent / 'outputs'
 DEFAULT_MANIFEST = DEFAULT_OUTPUTS / 'manifest.jsonl'
+_ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
+  'relevance': (
+    relevance.relevance,
+    relevance.decision_table,
+    relevance.ARMS,
+    'RQ1 Relevance: contextual precision decisions against the gold documents.',
+  ),
+  'attribution': (
+    attribution.attribution,
+    attribution.table,
+    attribution.ARMS,
+    'RQ1 Fact Support: contextual recall decisions on the ERB gold facts against the retrieval of their gold document.',
+  ),
+}
 _BENCHMARK_STEPS = {
   'fetch': 'Download the pinned benchmark files, verifying their size and SHA-256.',
   'convert': 'Convert the pinned files into syllo-eval datasets and check them.',
@@ -203,6 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
   search.add_argument('--host', default='127.0.0.1', help='Interface to listen on (default: 127.0.0.1).')
   search.add_argument('--port', type=_positive_int, default=8000, help='Port to listen on (default: 8000).')
   search.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+
+  analyze = commands.add_parser('analyze', help='Compute a results table from the stored judge runs (read-only).')
+  analyses = analyze.add_subparsers(dest='analysis', required=True)
+  for name, (_, _, arms, description) in _ANALYSES.items():
+    command = analyses.add_parser(name, help=description, description=description)
+    command.add_argument(
+      '--arms', nargs='+', choices=arms, default=['main', 'sc'], help='Arms to analyze (default: main sc).'
+    )
+    command.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+    command.add_argument(
+      '--output', type=Path, default=DEFAULT_OUTPUTS / 'analysis' / f'{name}.json', help='JSON file of the rows.'
+    )
   return parser
 
 
@@ -254,6 +282,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_score_with_deepeval(args))
   elif args.command == 'judge':
     return asyncio.run(_judge(args))
+  elif args.command == 'analyze':
+    return asyncio.run(_analyze(args))
+  return 0
+
+
+async def _analyze(args: argparse.Namespace) -> int:
+  compute, table, *_ = _ANALYSES[args.analysis]
+  config = load_config(args.config_dir)
+  load_environment()
+  try:
+    async with open_database(Settings()) as db_manager:
+      rows = await compute(db_manager, config.configurations, args.arms)
+  except (ValueError, PersistenceError, psycopg.Error) as error:
+    print(f'analyze: failed: {type(error).__name__}: {error}', file=sys.stderr)
+    return 1
+  args.output.parent.mkdir(parents=True, exist_ok=True)
+  args.output.write_text(json.dumps(rows, indent=2) + '\n')
+  print('\n'.join(table(rows)))
+  print(f'Rows written to {args.output}')
   return 0
 
 
