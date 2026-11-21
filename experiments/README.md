@@ -507,6 +507,7 @@ change.
 
 ```bash
 poetry run syllo-exp judge --source-run <collection run id> --arm main --repetition 1   # 2 and 3 are the retests
+poetry run syllo-exp judge --source-run <collection run id> --arm main --repetition 2 --recall-only
 poetry run syllo-exp judge --source-run <collection run id> --arm sc --pilot
 poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <judge run id>
 ```
@@ -525,8 +526,11 @@ poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <ju
   is a collection failure: it is counted in the manifest, never judged, and left out of those selections.
 - **Run metadata:** each judge run carries the step, configuration, arm, repetition and judge settings as its
   `metadata`, so the database alone tells the runs of a source run apart.
-- **Manifest:** the step is `judge:<source run>:<arm>:<repetition>`, with `:pilot` or `:retry-<n>` appended for those
-  runs, and records the run, the configuration, the metrics, the judge settings, the collection failures, the failed
+- **Recall only:** `--recall-only` scores only the arm's contextual recall, as its own step with its own retries. The
+  analysis joins it to the arm's other runs of the same repetition, so a retest of recall reuses the stored scores of
+  the other metrics.
+- **Manifest:** the step is `judge:<source run>:<arm>:<repetition>`, with `:recall` appended for `--recall-only` and
+  `:pilot` or `:retry-<n>` for those runs, and records the run, the configuration, the metrics, the judge settings, the collection failures, the failed
   units per metric and class, and the unresolved samples.
 - **Completion:** a sample is unresolved until it completes and each of its metrics has an outcome: an interrupted
   sample can hold only part of its computations, and a computation failed without an outcome of the judge

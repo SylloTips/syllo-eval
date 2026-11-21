@@ -232,6 +232,29 @@ class JudgeCliTest(unittest.TestCase):
     self.assertNotIn(f'judge:{self.source_run}:sc:1', latest)
     self.assertEqual(latest[f'judge:{self.source_run}:main:1'].status, StepStatus.FAILED)
 
+  def test_a_recall_only_pass_is_its_own_step_with_its_own_retries(self) -> None:
+    self._judge('--arm', 'main', '--repetition', '2', unresolved=[uuid4()])
+    self._judge('--arm', 'main', '--repetition', '2', '--recall-only', unresolved=[uuid4()])
+    full_run, recall_run = self.runs
+
+    self.assertEqual(
+      self.service.repeat_evaluation.await_args.kwargs['metrics'],
+      ['contextual_recall_orbitals_claims_siblings_question'],
+    )
+    self.assertEqual(
+      self._judge('--arm', 'main', '--repetition', '2', '--recall-only', '--retry', str(full_run), unresolved=[])[0], 2
+    )
+    status, output = self._judge(
+      '--arm', 'main', '--repetition', '2', '--recall-only', '--retry', str(recall_run), unresolved=[]
+    )
+
+    self.assertEqual(status, 0, output)
+    latest = Manifest(self.manifest).latest()
+    step = f'judge:{self.source_run}:main:2'
+    self.assertEqual(latest[step].status, StepStatus.FAILED)
+    self.assertEqual(list(latest[f'{step}:recall'].run_ids), [recall_run, self.runs[-1]])
+    self.assertEqual(latest[f'{step}:recall'].status, StepStatus.COMPLETED)
+
   def test_refuses_repetitions_outside_the_main_arm(self) -> None:
     status, _ = self._judge('--arm', 'wt', '--repetition', '2', unresolved=[])
     self.assertEqual(status, 2)
