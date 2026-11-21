@@ -821,10 +821,15 @@ class EvaluationService:
       # The span types the built-in retrieval metrics scored; custom metrics declare their own.
       'retrieval_span_types': list(retrieval_span_types) if self._include_builtin_metrics else None,
       'prompt_versions': {
-        metric_class.metric_name: version
-        for metric_class in (BUILTIN_METRICS if self._include_builtin_metrics else ())
-        if metric_class.metric_name in selected_metric_names
-        and (version := getattr(metric_class, 'prompt_version', None)) is not None
+        name: version
+        for name, version in (
+          *(
+            (metric_class.metric_name, getattr(metric_class, 'prompt_version', None))
+            for metric_class in (BUILTIN_METRICS if self._include_builtin_metrics else ())
+          ),
+          *((metric.name, getattr(metric, 'prompt_version', None)) for metric in self._custom_metrics),
+        )
+        if name in selected_metric_names and version is not None
       },
       'rubric_additions': dict(rubric_additions),
     }

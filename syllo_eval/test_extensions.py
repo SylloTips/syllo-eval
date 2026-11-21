@@ -580,6 +580,7 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     repositories.evaluation_run_metrics.list_metrics.return_value = [
       'answer_correctness_judge',
       'plan_correctness_judge',
+      'custom_metric',
     ]
     repositories.evaluation_run_samples.list_by_evaluation_run.return_value = [
       EvaluationRunSample(
@@ -591,10 +592,15 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
       )
     ]
     orchestrator = MagicMock(create_run=AsyncMock(return_value=_run()))
+
+    class Versioned(_CustomMetric):
+      prompt_version = 'v3'
+
     service = EvaluationService(
       settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')),
       db_manager=cast(DatabaseManager, object()),
       judge_client_factory=lambda _: MagicMock(aclose=AsyncMock()),
+      custom_metrics=[Versioned()],
     )
 
     async def snapshot(rubric_additions: dict[str, str] | None) -> dict[str, Any]:
@@ -608,7 +614,10 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     ):
       inherited = await snapshot(None)
       self.assertEqual(inherited['rubric_additions'], {'answer_correctness_judge': 'Cite a source.'})
-      self.assertEqual(inherited['prompt_versions'], {'answer_correctness_judge': 'v2', 'plan_correctness_judge': 'v2'})
+      self.assertEqual(
+        inherited['prompt_versions'],
+        {'answer_correctness_judge': 'v2', 'plan_correctness_judge': 'v2', 'custom_metric': 'v3'},
+      )
       replaced = await snapshot({' Plan_Correctness_Judge ': ' Be strict. '})
       self.assertEqual(replaced['rubric_additions'], {'plan_correctness_judge': 'Be strict.'})
       self.assertEqual((await snapshot({}))['rubric_additions'], {})
