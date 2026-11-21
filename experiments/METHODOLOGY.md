@@ -265,8 +265,11 @@ Claims are stored as ground truth, never re-derived during a run:
 
 With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of Table 1.
 
-Syllo-eval sends every CR call to the Gemini judge in two user turns: the system text and the unit's documents, then
-the claim, with the built-in v1 wording. A unit with at least two claims keeps the first turn in a Gemini explicit
+Syllo-eval sends every CR call to the Gemini judge in two user turns: the system text, which ends with the question,
+then the unit's documents and all its claims, numbered; then the number and text of the claim to judge. This is the
+built-in prompt v2. The first main pass scored CR with v1, which gave each call neither the question nor the other
+claims; v2 aligns CR better with set recall, so every reported CR uses it, and the v1 scores are kept only as a
+record of the change. A unit with at least two claims keeps the first turn in a Gemini explicit
 cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
 call per unit, so they keep their single-turn prompts and no cache.
 

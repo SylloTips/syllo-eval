@@ -53,6 +53,8 @@ def judge_runs(
   for run in runs:
     metadata = run.metadata or {}
     arm, step, source = metadata.get('arm'), metadata.get('step'), run.source_run_id
+    if arm == 'crgs':
+      arm = 'main'
     if source is None or not isinstance(arm, str) or arm not in arms:
       continue
     if isinstance(step, str) and step.endswith(':pilot'):

@@ -84,6 +84,14 @@ class JudgeRunsTest(unittest.TestCase):
 
     self.assertEqual((found.run_ids, found.source_run_id), ((first.id, retry.id), SOURCE))
 
+  def test_crgs_runs_are_the_main_arm_s_first_recall_v2_pass(self) -> None:
+    main = _run({'arm': 'main', 'configuration': 'erb/react/gpt', 'repetition': 1})
+    crgs = _run({'arm': 'crgs', 'configuration': 'erb/react/gpt', 'repetition': 1}, minutes=5)
+
+    (found,) = judge_runs([crgs, main], CONFIGURATIONS, {'main'})
+
+    self.assertEqual((found.arm, found.run_ids), ('main', (main.id, crgs.id)))
+
   def test_runs_of_one_step_on_different_source_runs_are_an_error(self) -> None:
     metadata = {'arm': 'main', 'configuration': 'erb/react/gpt', 'repetition': 2}
     with self.assertRaisesRegex(ValueError, 'several source runs'):
@@ -311,7 +319,7 @@ class FactSupportDecisionsTest(unittest.TestCase):
   def _recall(
     self, sample: UUID, verdicts: list[tuple[str, bool]] | None, failure: str | None = None
   ) -> MetricComputation:
-    computation = _unit(self.run_samples[sample], 'contextual_recall_gold_claims', failure=failure)
+    computation = _unit(self.run_samples[sample], 'contextual_recall_gold_claims_siblings_question', failure=failure)
     if verdicts is not None:
       computation.metadata = {
         'statement_results': [{'claim_id': claim, 'attributable': accepted} for claim, accepted in verdicts]
@@ -356,7 +364,9 @@ class FactSupportDecisionsTest(unittest.TestCase):
     )
 
   def test_skips_leave_the_question_out_and_other_failures_stop_the_analysis(self) -> None:
-    skipped = _unit(self.run_samples[self.missed_gold], 'contextual_recall_gold_claims', skip='Missing ground truth')
+    skipped = _unit(
+      self.run_samples[self.missed_gold], 'contextual_recall_gold_claims_siblings_question', skip='Missing ground truth'
+    )
     self.assertEqual(attribution.decisions([skipped], self.sample_ids, {}, self.gold, {}), [])
     with self.assertRaisesRegex(ValueError, 'score it again'):
       attribution.decisions(

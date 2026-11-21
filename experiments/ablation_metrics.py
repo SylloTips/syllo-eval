@@ -98,7 +98,8 @@ class GoldClaimsContextualRecall(ContextualRecallDocumentStoredClaimsMetric):
   """The built-in stored-claims recall over the ERB gold claims (RQ1 attribution), on the retrieved evidence."""
 
   claims_key = ERB_GOLD_CLAIMS_KEY
-  metric_name = 'contextual_recall_gold_claims'
+  prompt_version = 'v2'
+  metric_name = 'contextual_recall_gold_claims_siblings_question'
   metric_description = (
     'Contextual recall over the ERB gold claims, on the retrieved evidence; one judge call per claim.'
   )
@@ -119,7 +120,8 @@ class RetrievedSetRecall(SetRecallDocumentMetric):
 
 class OrbitalsClaimsContextualRecall(GoldClaimsContextualRecall):
   claims_key = ORBITALS_CLAIMS_KEY
-  metric_name = 'contextual_recall_orbitals_claims'
+  prompt_version = 'v2'
+  metric_name = 'contextual_recall_orbitals_claims_siblings_question'
   metric_description = (
     'Contextual recall over the Orbitals claims of the WixQA expected answer; one judge call per claim.'
   )

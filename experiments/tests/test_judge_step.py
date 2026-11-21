@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -18,6 +18,8 @@ from cli import main, unresolved_samples
 from config import JudgeSamplesConfig, load_config
 from judge import judge_metrics
 from manifest import Manifest, StepStatus
+from service import build_service
+from syllo_eval.settings import Settings
 
 
 class JudgeMetricsTest(unittest.TestCase):
@@ -26,12 +28,12 @@ class JudgeMetricsTest(unittest.TestCase):
       ('erb', 'main'): [
         'answer_correctness_judge',
         'contextual_precision_document_judge',
-        'contextual_recall_gold_claims',
+        'contextual_recall_gold_claims_siblings_question',
       ],
       ('wixqa', 'main'): [
         'answer_correctness_judge',
         'contextual_precision_document_judge',
-        'contextual_recall_orbitals_claims',
+        'contextual_recall_orbitals_claims_siblings_question',
       ],
       ('tau2', 'main'): ['plan_correctness_judge'],
       ('erb', 'sc'): ['contextual_precision_document_judge_sc', 'contextual_recall_gold_claims_sc'],
@@ -45,6 +47,22 @@ class JudgeMetricsTest(unittest.TestCase):
       with self.subTest(benchmark=benchmark, arm=arm):
         metrics = judge_metrics(benchmark, arm, judge=MagicMock(), db_manager=MagicMock(), output_token_limit=100)  # type: ignore[arg-type]
         self.assertEqual([metric.name for metric in metrics], names)
+
+  def test_main_runs_record_recall_prompt_v2(self) -> None:
+    for benchmark in ('erb', 'wixqa'):
+      metrics = judge_metrics(benchmark, 'main', judge=MagicMock(), db_manager=MagicMock(), output_token_limit=100)  # type: ignore[arg-type]
+      snapshot = build_service(Settings(), MagicMock(), metrics=metrics)._build_run_config_snapshot(
+        judge_client=None,
+        selected_metric_names=[metric.name for metric in metrics],
+        rubric_additions={},
+        max_concurrent_samples=1,
+        max_concurrent_tasks=1,
+        sample_trace_timeout=None,
+        sample_compute_timeout=None,
+        retrieval_span_types=(),
+      )
+      with self.subTest(benchmark=benchmark):
+        self.assertEqual(cast(dict[str, str], snapshot['prompt_versions'])[metrics[-1].name], 'v2')
 
 
 class UnresolvedSamplesTest(unittest.TestCase):
@@ -158,7 +176,11 @@ class JudgeCliTest(unittest.TestCase):
     self.assertEqual(status, 0, output)
     self.service.repeat_evaluation.assert_awaited_once_with(
       source_run_id=self.source_run,
-      metrics=['answer_correctness_judge', 'contextual_precision_document_judge', 'contextual_recall_orbitals_claims'],
+      metrics=[
+        'answer_correctness_judge',
+        'contextual_precision_document_judge',
+        'contextual_recall_orbitals_claims_siblings_question',
+      ],
       max_concurrent_samples=None,
       sample_ids=None,
       metadata={

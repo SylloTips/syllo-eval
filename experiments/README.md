@@ -464,14 +464,14 @@ change.
 |---|---|---|---|
 | `contextual_precision_document_judge` (built-in) | one search call | one per document | |
 | `contextual_precision_document_judge_sc` | one search call | one | `contextual_precision_document_judge` |
-| `contextual_recall_gold_claims` | one question | one per gold claim | |
-| `contextual_recall_gold_claims_sc` | one question | one | `contextual_recall_gold_claims` |
+| `contextual_recall_gold_claims_siblings_question` | one question | one per gold claim | |
+| `contextual_recall_gold_claims_sc` | one question | one | `contextual_recall_gold_claims_siblings_question` |
 | `answer_correctness_judge` (built-in) | one question | one | |
 | `answer_correctness_judge_wt` | one question | one | `answer_correctness_judge` |
 | `plan_correctness_judge` (built-in) | one τ²-bench trajectory | one | |
 | `plan_correctness_judge_wt` | one τ²-bench trajectory | one | `plan_correctness_judge` |
 | `deepeval_contextual_precision` | one search call | one | `contextual_precision_document_judge` |
-| `deepeval_contextual_recall_gold_claims` | one question | one | `contextual_recall_gold_claims` |
+| `deepeval_contextual_recall_gold_claims` | one question | one | `contextual_recall_gold_claims_siblings_question` |
 | `deepeval_answer_correctness` | one question | one | `answer_correctness_judge` |
 
 - **Retrieval units:** each agent's adapter reads every search output with `search_retrieval`
@@ -486,12 +486,17 @@ change.
   `retrieved` stage, holding each document of the question's searches once, in order of first appearance. It is
   empty when no search succeeded, and `unavailable` when a search output could not be read. Contextual precision and
   NDCG@10 are built with `target_span_types=(SEARCH_SPAN_TYPE,)`, so each search call is one unit.
-  `contextual_recall_gold_claims`, `set_precision_retrieved_document` and `set_recall_retrieved_document` read the
-  root's `retrieved` stage, so each question is one unit; the built-in metrics read `selected` and skip the root.
-- **Claims:** `contextual_recall_gold_claims` is the built-in stored-claims recall reading `expected_claims_gold`: it
-  never decomposes the expected answer, so a unit makes one judge call per claim; it serves RQ1 attribution and RQ2.
-  Recall over `expected_claims_verified` (RQ3) is the same subclass with another key, once those claims are imported.
-  On WixQA, `contextual_recall_orbitals_claims` is that subclass reading `expected_claims_orbitals`.
+  `contextual_recall_gold_claims_siblings_question`, `set_precision_retrieved_document` and
+  `set_recall_retrieved_document` read the root's `retrieved` stage, so each question is one unit; the built-in
+  metrics read `selected` and skip the root.
+- **Claims:** `contextual_recall_gold_claims_siblings_question` is the built-in stored-claims recall reading
+  `expected_claims_gold`: it never decomposes the expected answer, so a unit makes one judge call per claim; it serves
+  RQ1 attribution and RQ2. Recall over `expected_claims_verified` (RQ3) is the same subclass with another key, once
+  those claims are imported. On WixQA, `contextual_recall_orbitals_claims_siblings_question` is that subclass reading
+  `expected_claims_orbitals`. Both use the library's recall prompt v2, which gives each call the question and every
+  claim of the unit; their names say so, because the main runs made before v2 scored `contextual_recall_gold_claims`
+  and `contextual_recall_orbitals_claims` with v1, which the analysis no longer reads. The first v2 pass ran as the
+  arm `crgs`, before v2 was the library's default; the analysis reads those runs as the `main` arm.
   DeepEval's recall over `expected_claims_verified` is likewise its gold-claims metric with that key.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
