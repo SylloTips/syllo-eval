@@ -465,7 +465,7 @@ change.
 | `contextual_precision_document_judge` (built-in) | one search call | one per document | |
 | `contextual_precision_document_judge_sc` | one search call | one | `contextual_precision_document_judge` |
 | `contextual_recall_gold_claims_siblings_question` | one question | one per gold claim | |
-| `contextual_recall_gold_claims_sc` | one question | one | `contextual_recall_gold_claims_siblings_question` |
+| `contextual_recall_gold_claims_sc_question` | one question | one | `contextual_recall_gold_claims_siblings_question` |
 | `answer_correctness_judge` (built-in) | one question | one | |
 | `answer_correctness_judge_wt` | one question | one | `answer_correctness_judge` |
 | `plan_correctness_judge` (built-in) | one τ²-bench trajectory | one | |

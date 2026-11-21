@@ -36,7 +36,7 @@ class JudgeMetricsTest(unittest.TestCase):
         'contextual_recall_orbitals_claims_siblings_question',
       ],
       ('tau2', 'main'): ['plan_correctness_judge'],
-      ('erb', 'sc'): ['contextual_precision_document_judge_sc', 'contextual_recall_gold_claims_sc'],
+      ('erb', 'sc'): ['contextual_precision_document_judge_sc', 'contextual_recall_gold_claims_sc_question'],
       ('wixqa', 'sc'): ['contextual_precision_document_judge_sc'],
       ('tau2', 'sc'): [],
       ('erb', 'wt'): ['answer_correctness_judge_wt'],

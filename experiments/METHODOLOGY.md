@@ -281,7 +281,9 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
 
 - **Syllo-eval-SC** judges all the documents of a ranking (CP) or all the claims of a unit (CR) in one call:
   - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
-    rank or given order. The claims are numbered.
+    rank or given order. The claims are numbered. Like CR v2, the CR prompt ends its system text with the question
+    (`contextual_recall_gold_claims_sc_question`); the SC scores made before it, without the question, are kept only
+    as a record.
   - CP's per-document prompt (v2) shows no rank or retrieval score, so a document returned by several searches gets
     the same request each time. The SC prompt keeps each document's rank, which matches its judgments to documents.
   - The output budget is the per-item call's budget per item (2,000 tokens per CP document, 8,000 per CR claim),
