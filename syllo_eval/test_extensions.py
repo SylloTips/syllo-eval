@@ -581,6 +581,7 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
       'answer_correctness_judge',
       'plan_correctness_judge',
       'custom_metric',
+      'inheriting_metric',
     ]
     repositories.evaluation_run_samples.list_by_evaluation_run.return_value = [
       EvaluationRunSample(
@@ -596,11 +597,16 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     class Versioned(_CustomMetric):
       prompt_version = 'v3'
 
+    class Inheriting(Versioned):
+      @property
+      def name(self) -> str:
+        return 'inheriting_metric'
+
     service = EvaluationService(
       settings=Settings(llm_judge=LlmJudgeSettings(provider='openai')),
       db_manager=cast(DatabaseManager, object()),
       judge_client_factory=lambda _: MagicMock(aclose=AsyncMock()),
-      custom_metrics=[Versioned()],
+      custom_metrics=[Versioned(), Inheriting()],
     )
 
     async def snapshot(rubric_additions: dict[str, str] | None) -> dict[str, Any]:

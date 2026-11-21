@@ -827,7 +827,7 @@ class EvaluationService:
             (metric_class.metric_name, getattr(metric_class, 'prompt_version', None))
             for metric_class in (BUILTIN_METRICS if self._include_builtin_metrics else ())
           ),
-          *((metric.name, getattr(metric, 'prompt_version', None)) for metric in self._custom_metrics),
+          *((metric.name, vars(type(metric)).get('prompt_version')) for metric in self._custom_metrics),
         )
         if name in selected_metric_names and version is not None
       },

@@ -360,7 +360,8 @@ is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
 
 Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are
 appended to a judge's system prompt under a header saying they can only make grading stricter; the built-in rubric and
-any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version.
+any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version; a custom metric's version only when
+its own class sets `prompt_version`.
 
 Each computed metric records its `latency_seconds` in its metadata; judge metrics also record their judge calls,
 client-level attempts, provider latency, and token usage, including cached and reasoning tokens when the provider
