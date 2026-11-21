@@ -491,13 +491,11 @@ change.
   metrics read `selected` and skip the root.
 - **Claims:** `contextual_recall_gold_claims_siblings_question` is the built-in stored-claims recall reading
   `expected_claims_gold`: it never decomposes the expected answer, so a unit makes one judge call per claim; it serves
-  RQ1 attribution and RQ2. Recall over `expected_claims_verified` (RQ3) is the same subclass with another key, once
-  those claims are imported. On WixQA, `contextual_recall_orbitals_claims_siblings_question` is that subclass reading
+  RQ1 attribution and RQ2. On WixQA, `contextual_recall_orbitals_claims_siblings_question` is that subclass reading
   `expected_claims_orbitals`. Both use the library's recall prompt v2, which gives each call the question and every
   claim of the unit; their names say so, because the main runs made before v2 scored `contextual_recall_gold_claims`
   and `contextual_recall_orbitals_claims` with v1, which the analysis no longer reads. The first v2 pass ran as the
   arm `crgs`, before v2 was the library's default; the analysis reads those runs as the `main` arm.
-  DeepEval's recall over `expected_claims_verified` is likewise its gold-claims metric with that key.
 - **Construction:** single-call metrics take the judge's `output_token_limit` from `configs/models.yaml`. Whole-trace
   metrics take a span loader; a run passes `stored_span_loader(db_manager)` with the step's pool.
 - **Failures:** a failed unit records its cause in `metadata['failure']` (the library's classes, plus `trace_load` for
@@ -530,8 +528,8 @@ poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <ju
   analysis joins it to the arm's other runs of the same repetition, so a retest of recall reuses the stored scores of
   the other metrics.
 - **Manifest:** the step is `judge:<source run>:<arm>:<repetition>`, with `:recall` appended for `--recall-only` and
-  `:pilot` or `:retry-<n>` for those runs, and records the run, the configuration, the metrics, the judge settings, the collection failures, the failed
-  units per metric and class, and the unresolved samples.
+  `:pilot` or `:retry-<n>` for those runs, and records the run, the configuration, the metrics, the judge settings,
+  the collection failures, the failed units per metric and class, and the unresolved samples.
 - **Completion:** a sample is unresolved until it completes and each of its metrics has an outcome: an interrupted
   sample can hold only part of its computations, and a computation failed without an outcome of the judge
   ([`METHODOLOGY.md`](METHODOLOGY.md), Failures) is none. `--retry <judge run>` takes the latest attempt of the same step,

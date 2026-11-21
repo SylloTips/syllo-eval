@@ -260,7 +260,6 @@ Claims are stored as ground truth, never re-derived during a run:
 | Key | Content | Used by |
 |---|---|---|
 | `expected_claims_gold` | ERB answer facts, for Basic and Semantic questions (single gold document) | RQ1 attribution, RQ2 CR on ERB |
-| `expected_claims_verified` | ERB facts an annotator found in the gold document, as truncated by the search tool | RQ3 CR |
 | `expected_claims_orbitals` | each WixQA expected answer decomposed once by Orbitals' `claim-extractor-pro-2605`, from the question and the answer, with the description of the WixQA assistant in `configs/models.yaml`, without the claims it types as unverifiable | WixQA CR |
 
 With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of Table 1.
