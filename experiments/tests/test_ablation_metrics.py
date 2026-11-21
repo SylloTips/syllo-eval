@@ -240,6 +240,9 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     built_in_user = _paragraphs(built_in.build_user_prompt(items, [claim.text for claim in CLAIMS], 1))
     self.assertEqual(user[1], built_in_user[1])
     self.assertEqual(user[2], 'Statements:\n1. Dana approved the budget.\n2. It was approved in May.')
+    self.assertTrue(
+      ablation.build_single_call_system_prompt('Who approved it?').endswith('Question:\nWho approved it?')
+    )
 
   async def test_a_wrong_judgment_count_fails_the_unit_and_lists_its_claims(self) -> None:
     judge = ScriptedJudge(recall_judgments((CLAIMS[0].text, True)))

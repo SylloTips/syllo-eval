@@ -260,13 +260,15 @@ Claims are stored as ground truth, never re-derived during a run:
 | Key | Content | Used by |
 |---|---|---|
 | `expected_claims_gold` | ERB answer facts, for Basic and Semantic questions (single gold document) | RQ1 attribution, RQ2 CR on ERB |
-| `expected_claims_verified` | ERB facts an annotator found in the gold document, as truncated by the search tool | RQ3 CR |
 | `expected_claims_orbitals` | each WixQA expected answer decomposed once by Orbitals' `claim-extractor-pro-2605`, from the question and the answer, with the description of the WixQA assistant in `configs/models.yaml`, without the claims it types as unverifiable | WixQA CR |
 
 With stored claims, CR makes one judge call per claim, not the |C| + 1 calls of Table 1.
 
-Syllo-eval sends every CR call to the Gemini judge in two user turns: the system text and the unit's documents, then
-the claim, with the built-in v1 wording. A unit with at least two claims keeps the first turn in a Gemini explicit
+Syllo-eval sends every CR call to the Gemini judge in two user turns: the system text, which ends with the question,
+then the unit's documents and all its claims, numbered; then the number and text of the claim to judge. This is the
+built-in prompt v2. The first main pass scored CR with v1, which gave each call neither the question nor the other
+claims; v2 aligns CR better with set recall, so every reported CR uses it, and the v1 scores are kept only as a
+record of the change. A unit with at least two claims keeps the first turn in a Gemini explicit
 cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
 call per unit, so they keep their single-turn prompts and no cache.
 
@@ -278,7 +280,9 @@ rendered trace's size; a failed SC unit: its output budget and, for CP, its rank
 
 - **Syllo-eval-SC** judges all the documents of a ranking (CP) or all the claims of a unit (CR) in one call:
   - The prompts are the built-in v1 prompts turned to the plural: each document or statement gets one judgment, in
-    rank or given order. The claims are numbered.
+    rank or given order. The claims are numbered. Like CR v2, the CR prompt ends its system text with the question
+    (`contextual_recall_gold_claims_sc_question`); the SC scores made before it, without the question, are kept only
+    as a record.
   - CP's per-document prompt (v2) shows no rank or retrieval score, so a document returned by several searches gets
     the same request each time. The SC prompt keeps each document's rank, which matches its judgments to documents.
   - The output budget is the per-item call's budget per item (2,000 tokens per CP document, 8,000 per CR claim),

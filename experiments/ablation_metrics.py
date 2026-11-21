@@ -98,7 +98,8 @@ class GoldClaimsContextualRecall(ContextualRecallDocumentStoredClaimsMetric):
   """The built-in stored-claims recall over the ERB gold claims (RQ1 attribution), on the retrieved evidence."""
 
   claims_key = ERB_GOLD_CLAIMS_KEY
-  metric_name = 'contextual_recall_gold_claims'
+  prompt_version = 'v2'
+  metric_name = 'contextual_recall_gold_claims_siblings_question'
   metric_description = (
     'Contextual recall over the ERB gold claims, on the retrieved evidence; one judge call per claim.'
   )
@@ -119,7 +120,8 @@ class RetrievedSetRecall(SetRecallDocumentMetric):
 
 class OrbitalsClaimsContextualRecall(GoldClaimsContextualRecall):
   claims_key = ORBITALS_CLAIMS_KEY
-  metric_name = 'contextual_recall_orbitals_claims'
+  prompt_version = 'v2'
+  metric_name = 'contextual_recall_orbitals_claims_siblings_question'
   metric_description = (
     'Contextual recall over the Orbitals claims of the WixQA expected answer; one judge call per claim.'
   )
@@ -223,7 +225,8 @@ class GoldClaimsContextualRecallSC(GoldClaimsContextualRecall):
   Judgments are matched to claims by position; a wrong count fails the unit.
   """
 
-  metric_name = 'contextual_recall_gold_claims_sc'
+  prompt_version = 'v2'
+  metric_name = 'contextual_recall_gold_claims_sc_question'
   metric_description = 'Syllo-eval-SC: contextual recall over the ERB gold claims, judging all claims in one call.'
 
   def __init__(
@@ -250,7 +253,7 @@ class GoldClaimsContextualRecallSC(GoldClaimsContextualRecall):
       [
         self._judge_client.judge(
           LlmJudgeRequest(
-            system_prompt=self.build_single_call_system_prompt(),
+            system_prompt=self.build_single_call_system_prompt(span.semantics.request),
             user_prompt=self.build_single_call_user_prompt(retrieved_items, claims),
             response_model=ContextualRecallJudgePayload,
             temperature=0.0,
@@ -277,9 +280,9 @@ class GoldClaimsContextualRecallSC(GoldClaimsContextualRecall):
       )
     return responses, list(judgments)
 
-  def build_single_call_system_prompt(self) -> str:
+  def build_single_call_system_prompt(self, question: str | None = None) -> str:
     return render_ablation_prompt(
-      'contextual_recall_sc_system.md', variant=self.variant, rubric_addition=self._rubric_addition
+      'contextual_recall_sc_system.md', variant=self.variant, rubric_addition=self._rubric_addition, question=question
     )
 
   def build_single_call_user_prompt(self, retrieved_items: list[RetrievedItem], claims: list[str]) -> str:

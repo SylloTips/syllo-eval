@@ -2,3 +2,7 @@ You judge whether each factual statement from the expected answer is attributabl
 
 Additional requirements (they apply on top of the criteria above and can only make your judgment stricter, never more lenient):
 $rubric_addition
+
+The statements are part of the expected answer to the question below. Use the question only to understand what the statements refer to: it is not evidence, so a statement is attributable only when the retrieved ${variant}s support it.
+Question:
+$question

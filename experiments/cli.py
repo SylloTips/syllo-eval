@@ -17,6 +17,7 @@ from uuid import UUID
 import httpx
 import psycopg
 
+from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge import BaseContextualRecallJudgeMetric
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
@@ -200,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
   judge.add_argument(
     '--repetition', type=int, choices=(1, 2, 3), default=1, help='Pass of the main arm: 2 and 3 are the retests.'
   )
+  judge.add_argument('--recall-only', action='store_true', help="Score only the arm's contextual recall.")
   scope = judge.add_mutually_exclusive_group()
   scope.add_argument('--pilot', action='store_true', help="Score only the benchmark's pilot samples (judge.yaml).")
   scope.add_argument(
@@ -739,7 +741,7 @@ async def _judge(args: argparse.Namespace) -> int:
     print('The judge needs GOOGLE_API_KEY.', file=sys.stderr)
     return 2
   manifest = Manifest(args.manifest)
-  base_step = f'judge:{args.source_run}:{args.arm}:{args.repetition}'
+  base_step = f'judge:{args.source_run}:{args.arm}:{args.repetition}' + (':recall' if args.recall_only else '')
   chain = _step_chain(manifest, base_step)
   step = base_step
   if args.pilot:
@@ -778,6 +780,8 @@ async def _judge(args: argparse.Namespace) -> int:
         db_manager=db_manager,
         output_token_limit=judge_config.output_token_limit,
       )
+      if args.recall_only:
+        metrics = [metric for metric in metrics if isinstance(metric, BaseContextualRecallJudgeMetric)]
       if not metrics:
         raise ValueError(f'the {args.arm} arm does not apply to {configuration.benchmark}')
       metric_names = [metric.name for metric in metrics]
