@@ -52,8 +52,11 @@ class GeminiSharedPromptPrefixTest(unittest.IsolatedAsyncioTestCase):
     self.target = span(
       retrieval=[RetrievalResult(stage='selected', kind='document', items=[RetrievalItem(id='d', content='Text.')])]
     )
-    self.system = self.metric.build_system_prompt()
-    self.prefix = self.metric.build_user_prompt(self.target, extract_retrieved_items(self.target, 'document'), '')
+    self.system = self.metric.build_system_prompt('Question')
+    self.items = extract_retrieved_items(self.target, 'document')
+    texts = [claim['text'] for claim in CLAIMS]
+    self.prefix = self.metric.build_user_prompt(self.items, texts)
+    self.suffixes = [self.metric.build_user_prompt(self.items, texts, number)[len(self.prefix) :] for number in (1, 2)]
 
   def sent(self) -> list[list[tuple[str, str]]]:
     return [call.args[0] for call in self.ainvoke.call_args_list]
@@ -68,7 +71,7 @@ class GeminiSharedPromptPrefixTest(unittest.IsolatedAsyncioTestCase):
     self.caches.create.assert_awaited_once()
     contents = self.caches.create.call_args.kwargs['config'].contents
     self.assertEqual((contents.role, [part.text for part in contents.parts]), ('user', [self.system, self.prefix]))
-    self.assertCountEqual(self.sent(), [[('human', claim['text'])] for claim in CLAIMS])
+    self.assertCountEqual(self.sent(), [[('human', suffix)] for suffix in self.suffixes])
     self.assertEqual(self.cached_content(), ['cachedContents/c1'] * 2)
     self.caches.delete.assert_awaited_once_with(name='cachedContents/c1')
     assert result.metadata is not None
@@ -80,7 +83,9 @@ class GeminiSharedPromptPrefixTest(unittest.IsolatedAsyncioTestCase):
     result = await self.metric.compute(self.target, claims_truth(CLAIMS[0]))
 
     self.caches.create.assert_not_awaited()
-    self.assertEqual(self.sent(), [[('system', self.system), ('human', self.prefix), ('human', CLAIMS[0]['text'])]])
+    prefix = self.metric.build_user_prompt(self.items, [CLAIMS[0]['text']])
+    suffix = self.metric.build_user_prompt(self.items, [CLAIMS[0]['text']], 1)[len(prefix) :]
+    self.assertEqual(self.sent(), [[('system', self.system), ('human', prefix), ('human', suffix)]])
     self.assertEqual(self.cached_content(), [None])
     assert result.metadata is not None
     self.assertNotIn('judge_cache_seconds', result.metadata)
@@ -97,7 +102,7 @@ class GeminiSharedPromptPrefixTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.score, 1.0)
         self.assertCountEqual(
           self.sent(),
-          [[('system', self.system), ('human', self.prefix), ('human', claim['text'])] for claim in CLAIMS],
+          [[('system', self.system), ('human', self.prefix), ('human', suffix)] for suffix in self.suffixes],
         )
         self.assertEqual(self.cached_content(), [None, None])
         self.caches.delete.assert_not_awaited()

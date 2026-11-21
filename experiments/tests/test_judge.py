@@ -253,7 +253,7 @@ class ReusedCallsAndPromptCacheTest(unittest.IsolatedAsyncioTestCase):
     claims = (Claim(id='q1-f01', text='Dana approved the budget.'), Claim(id='q1-f02', text='It was approved in May.'))
 
     async def reply(messages: list[tuple[str, str]]) -> dict[str, Any]:
-      if messages[-1][1] == claims[0].text:
+      if messages[-1][1].endswith(claims[0].text):
         raise ValueError('bad request')
       try:
         await asyncio.Event().wait()
