@@ -47,7 +47,7 @@ def decisions(
   return found
 
 
-async def _run_decisions(
+async def run_decisions(
   db_manager: DatabaseManager, run: JudgeRun, gold: Mapping[UUID, frozenset[str]]
 ) -> list[Decision]:
   computations, sample_ids = await load_attempts(db_manager, run.run_ids, CR_METRICS)
@@ -71,7 +71,7 @@ async def attribution(
   runs = judge_runs(await finished_runs(db_manager), configurations, arms)
   gold = await gold_documents(db_manager)
   runs = [run for run in runs if run.reported and run.configuration.benchmark == 'erb']
-  return await decision_rows(runs, lambda run: _run_decisions(db_manager, run, gold))
+  return await decision_rows(runs, lambda run: run_decisions(db_manager, run, gold))
 
 
 table = partial(decision_table, gold='Supported', other='Unsupported', unjudged='Without judge')

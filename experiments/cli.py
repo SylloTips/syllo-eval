@@ -33,7 +33,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
-from analysis import attribution, plans, relevance, scores
+from analysis import attribution, plans, relevance, retest, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -77,6 +77,12 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     plans.table,
     plans.ARMS,
     'RQ1 Plans: AUROC of Plan Correctness and of edit-distance matching against the tau2-bench reward.',
+  ),
+  'retest': (
+    retest.retest,
+    retest.table,
+    retest.ARMS,
+    'RQ1 Retest: mean pairwise agreement of the three main passes, κ for decisions and ρ for scores.',
   ),
   'scores': (
     scores.scores,

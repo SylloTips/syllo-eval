@@ -21,6 +21,7 @@ from ablation_metrics import (
 from analysis.relevance import CP_METRICS
 from analysis.runs import (
   REPORTED_AGENTS,
+  JudgeRun,
   finished_runs,
   gold_documents,
   judge_runs,
@@ -107,6 +108,18 @@ def summary(scores: Mapping[str, Mapping[UUID, float]]) -> dict[str, Any]:
   }
 
 
+async def run_scores(
+  db_manager: DatabaseManager, run: JudgeRun, gold: Mapping[UUID, frozenset[str]]
+) -> dict[str, dict[UUID, float]]:
+  computations, sample_ids = await load_attempts(db_manager, run.run_ids, LABELS)
+  judged = set(sample_ids.values())
+  source, source_sample_ids = await load_attempts(db_manager, (run.source_run_id,), SOURCE_LABELS)
+  source = [c for c in source if source_sample_ids[c.evaluation_run_sample_id] in judged]
+  return question_scores(
+    [*computations, *source], {**sample_ids, **source_sample_ids}, {**LABELS, **SOURCE_LABELS}, gold
+  )
+
+
 async def scores(
   db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str]
 ) -> list[dict[str, Any]]:
@@ -115,20 +128,13 @@ async def scores(
   for run in judge_runs(await finished_runs(db_manager), configurations, arms):
     if run.configuration.benchmark != 'tau2' and run.configuration.agent not in REPORTED_AGENTS:
       continue
-    computations, sample_ids = await load_attempts(db_manager, run.run_ids, LABELS)
-    judged = set(sample_ids.values())
-    source, source_sample_ids = await load_attempts(db_manager, (run.source_run_id,), SOURCE_LABELS)
-    source = [c for c in source if source_sample_ids[c.evaluation_run_sample_id] in judged]
-    run_scores = question_scores(
-      [*computations, *source], {**sample_ids, **source_sample_ids}, {**LABELS, **SOURCE_LABELS}, gold
-    )
     rows.append(
       {
         'configuration': run.configuration.id,
         'arm': run.arm,
         'repetition': run.repetition,
         'run_ids': [str(run_id) for run_id in run.run_ids],
-        **summary(run_scores),
+        **summary(await run_scores(db_manager, run, gold)),
       }
     )
   return rows

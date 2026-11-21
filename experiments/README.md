@@ -712,6 +712,10 @@ write.
   between the executed tool calls (name and arguments) and the expected plan, on the trajectories Plan Correctness
   scored. It also counts the rewarded trajectories that fail τ²-bench's action check, which deviate from the reference,
   with both metrics' mean on them.
+- `retest` (RQ1 Retest; `--arms`: `main`) compares the three passes of the main arm, pair by pair (1-2, 1-3, 2-3),
+  over the items both passes have: Cohen's κ on the `relevance` and `attribution` decisions, Spearman's ρ on the
+  per-question CP, CR, AC and PC scores of `scores`, pooled per benchmark over the six configurations (and τ²-bench's
+  for PC). A `mean` row per benchmark and measure averages the three pairs once all three are in.
 - `scores` (Table 3) gives each run's configuration scores (`--arms`: `main`, `sc`, `wt`, `deepeval`), the mean of its
   per-question scores, as METHODOLOGY's *Aggregation* defines them, with the number of questions behind each; R and
   NDCG@10 come from the source run. The run report's score statistics pool every computation instead, so they weigh a

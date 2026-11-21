@@ -19,6 +19,7 @@ from pathlib import Path
 
 from analysis import attribution, plans
 from analysis.relevance import Decision, decisions, summary
+from analysis.retest import retest_rows
 from analysis.runs import judge_runs, latest_attempts, rounded
 from analysis.scores import question_scores
 from config import Configuration
@@ -253,6 +254,35 @@ class QuestionScoresTest(unittest.TestCase):
   def test_an_infrastructure_failure_stops_the_analysis(self) -> None:
     with self.assertRaisesRegex(ValueError, 'score it again'):
       self._scores({'q': [('cr', {'failure': 'provider'})]}, {})
+
+
+class RetestTest(unittest.TestCase):
+  def test_pairs_the_same_items_across_passes_and_averages_only_complete_triples(self) -> None:
+    first = {('erb/react/gpt', SOURCE, claim): accepted for claim, accepted in zip('abcd', (True, False, True, False))}
+    third = {**dict(zip(first, (True, False, False, True))), ('erb/react/gpt', SOURCE, 'e'): True}
+    values: dict[tuple[str, str, int], dict[Any, Any]] = {
+      ('erb', 'Attribution', 1): first,
+      ('erb', 'Attribution', 2): first,
+      ('erb', 'Attribution', 3): third,
+      ('erb', 'CR', 1): {'x': 0.1, 'y': 0.5, 'z': 0.9},
+      ('erb', 'CR', 2): {'x': 0.2, 'y': 0.6, 'z': 1.0},
+    }
+
+    rows = [
+      (row['measure'], row['statistic'], row['pair'], row['items'], rounded(row['agreement']))
+      for row in retest_rows(values)
+    ]
+
+    self.assertEqual(
+      rows,
+      [
+        ('Attribution', 'κ', '1-2', 4, '1.000'),
+        ('Attribution', 'κ', '1-3', 4, '0.000'),
+        ('Attribution', 'κ', '2-3', 4, '0.000'),
+        ('Attribution', 'κ', 'mean', 4, '0.333'),
+        ('CR', 'ρ', '1-2', 3, '1.000'),
+      ],
+    )
 
 
 class RoundedTest(unittest.TestCase):
