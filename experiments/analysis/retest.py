@@ -1,6 +1,6 @@
 from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
-from statistics import correlation, mean
+from statistics import StatisticsError, correlation, mean
 from typing import Any
 
 from syllo_eval.infrastructure import DatabaseManager
@@ -21,7 +21,10 @@ def agreement(measure: str, first: Mapping[Any, Any], second: Mapping[Any, Any])
   keys = first.keys() & second.keys()
   if measure in DECISIONS:
     return cohen_kappa([(first[key], second[key]) for key in keys]), len(keys)
-  return correlation([first[key] for key in keys], [second[key] for key in keys], method='ranked'), len(keys)
+  try:
+    return correlation([first[key] for key in keys], [second[key] for key in keys], method='ranked'), len(keys)
+  except StatisticsError:
+    return None, len(keys)
 
 
 def retest_rows(values: Mapping[tuple[str, str, int], Mapping[Any, Any]]) -> list[dict[str, Any]]:
@@ -44,7 +47,7 @@ def retest_rows(values: Mapping[tuple[str, str, int], Mapping[Any, Any]]) -> lis
           'measure': measure,
           'statistic': statistic,
           'pair': 'mean',
-          'items': min(n for _, _, n in pairs),
+          'items': None,
           'agreement': mean(value for _, value, _ in pairs if value is not None),
         }
       )
@@ -81,8 +84,8 @@ async def retest(
 def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
   lines = ['| Benchmark | Measure | Statistic | Pair | Items | Agreement |', '|---|---|---|---|--:|--:|']
   lines.extend(
-    f'| {row["benchmark"]} | {row["measure"]} | {row["statistic"]} | {row["pair"]} | {row["items"]} | '
-    f'{rounded(row["agreement"])} |'
+    f'| {row["benchmark"]} | {row["measure"]} | {row["statistic"]} | {row["pair"]} | '
+    f'{"–" if row["items"] is None else row["items"]} | {rounded(row["agreement"])} |'
     for row in rows
   )
   return lines
