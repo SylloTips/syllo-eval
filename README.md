@@ -360,16 +360,17 @@ is set, and claim-extractor metrics only when `ORBITALS_API_KEY` is also set.
 
 Judge prompts are versioned templates in `syllo_eval/evaluation/metrics/prompts/<prompt>/v<N>/`. Rubric additions are
 appended to a judge's system prompt under a header saying they can only make grading stricter; the built-in rubric and
-any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version.
+any per-sample `rubric` still apply. The report's `run.config` records the additions and each judge's prompt version; a custom metric's version only when
+its own class sets `prompt_version`.
 
 Each computed metric records its `latency_seconds` in its metadata; judge metrics also record their judge calls,
 client-level attempts, provider latency, and token usage, including cached and reasoning tokens when the provider
 reports them. The report sums judge calls and cached input tokens per run and per sample, separately from agent usage.
 A token total is `null` when no call reported that count, so an unreported count is never shown as zero.
 
-With a Gemini judge, contextual recall sends each claim in its own user turn, after a turn holding the system prompt
-and the retrieved context. When a computation judges at least two claims, that first turn goes into a Gemini explicit
-cache, so each claim call reads it from the cache. The cache expires after 10 minutes and is deleted once the
+With a Gemini judge, contextual recall names the claim to judge in its own user turn, after a turn holding the system
+prompt, the retrieved context and every claim of the computation. When a computation judges at least two claims, that
+first turn goes into a Gemini explicit cache, so each claim call reads it from the cache. The cache expires after 10 minutes and is deleted once the
 computation's calls end; a context below Gemini's caching minimum runs uncached. Creating the cache is billed at the
 input price: the computation records it in `judge_usage` as `cache_creation_input_tokens`, outside `input_tokens`, and
 the time spent creating and deleting it as `judge_cache_seconds`. The report sums `cache_creation_input_tokens` with

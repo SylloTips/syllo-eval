@@ -237,9 +237,7 @@ class GoldClaimsContextualRecallSCTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn(definition, system[0])
     self.assertEqual(system[1:], built_in_system[1:])
     user = _paragraphs(ablation.build_single_call_user_prompt(items, [claim.text for claim in CLAIMS]))
-    built_in_user = _paragraphs(
-      built_in.build_user_prompt(search_span('s', ['d1'], stage='retrieved'), items, CLAIMS[0].text)
-    )
+    built_in_user = _paragraphs(built_in.build_user_prompt(items, [claim.text for claim in CLAIMS], 1))
     self.assertEqual(user[1], built_in_user[1])
     self.assertEqual(user[2], 'Statements:\n1. Dana approved the budget.\n2. It was approved in May.')
 

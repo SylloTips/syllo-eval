@@ -51,10 +51,17 @@ class ContextualRecallStoredClaimsTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(result.metadata['judge_calls'], 2)
     built_in = ContextualRecallDocumentJudgeMetric(judge_client=judge)
     items = extract_retrieved_items(target, 'document')
+    texts = [claim['text'] for claim in CLAIMS['claims']]
     self.assertEqual(
       [request.user_prompt for request in judge.requests],
-      [built_in.build_user_prompt(target, items, claim['text']) for claim in CLAIMS['claims']],
+      [built_in.build_user_prompt(items, texts, number) for number in (1, 2)],
     )
+    self.assertTrue(
+      judge.requests[1].user_prompt.endswith(
+        '1. Dana approved it.\n2. In May.\n\nStatement to judge (number 2):\nIn May.'
+      )
+    )
+    self.assertTrue(judge.requests[1].system_prompt.endswith('Question:\nQuestion'))
 
   async def test_nothing_retrieved_scores_zero_without_judging(self):
     judge = Judge()

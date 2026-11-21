@@ -39,7 +39,7 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   """Scores whether expected-answer statements are supported by retrieved context."""
 
   variant: str = ''
-  prompt_version = 'v1'
+  prompt_version = 'v2'
   retrieval_stage: str = 'selected'
   requires_judge_client = True
   accepts_target_span_types = True
@@ -118,8 +118,10 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
   ) -> tuple[
     tuple[list[LlmJudgeResponse], list[ContextualRecallJudgment]] | MetricComputationResult, SharedPromptPrefix
   ]:
-    user_prefix = self.build_user_prompt(span, retrieved_items, '')
-    async with shared_prompt_prefix(self.build_system_prompt(), user_prefix, len(claims)) as prefix:
+    user_prefix = self.build_user_prompt(retrieved_items, claims)
+    async with shared_prompt_prefix(
+      self.build_system_prompt(span.semantics.request), user_prefix, len(claims)
+    ) as prefix:
       return await self.judge_claims(span, retrieved_items, claims, prior_responses=prior_responses), prefix
 
   @staticmethod
@@ -149,7 +151,7 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     ``prior_responses``. Override to judge claims another way; scoring and result metadata stay the same.
     """
     judge_results, failure = await judge_batch(
-      (self._judge_claim(span, retrieved_items, claim) for claim in claims),
+      (self._judge_claim(span, retrieved_items, claims, number) for number in range(1, len(claims) + 1)),
       prior_responses=prior_responses,
       max_output_tokens=self.max_output_tokens,
     )
@@ -173,17 +175,24 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
       expected_answer=ground_truth.ground_truth_value['expected_output'],
     )
 
-  def build_system_prompt(self) -> str:
+  def build_system_prompt(self, question: str | None = None) -> str:
     return render_prompt(
-      f'contextual_recall/{self.prompt_version}/system.md', variant=self.variant, rubric_addition=self._rubric_addition
+      f'contextual_recall/{self.prompt_version}/system.md',
+      variant=self.variant,
+      rubric_addition=self._rubric_addition,
+      question=question,
     )
 
-  def build_user_prompt(self, span: Span, retrieved_items: list[RetrievedItem], claim: str) -> str:
+  def build_user_prompt(
+    self, retrieved_items: list[RetrievedItem], claims: list[str], number: int | None = None
+  ) -> str:
     return render_prompt(
       f'contextual_recall/{self.prompt_version}/user.md',
       variant=self.variant,
       items='\n\n'.join(item.render_for_prompt(rank) for rank, item in enumerate(retrieved_items, 1)),
-      claim=claim,
+      claims='\n'.join(f'{index}. {claim}' for index, claim in enumerate(claims, 1)),
+      number=None if number is None else str(number),
+      claim=None if number is None else claims[number - 1],
     )
 
   async def _decompose_claims(self, ground_truth: GroundTruth) -> LlmJudgeResponse[ContextualRecallClaims]:
@@ -201,12 +210,13 @@ class BaseContextualRecallJudgeMetric(SpanEvaluationMetric):
     self,
     span: Span,
     retrieved_items: list[RetrievedItem],
-    claim: str,
+    claims: list[str],
+    number: int,
   ) -> LlmJudgeResponse[ContextualRecallJudgePayload]:
     return await self._judge_client.judge(
       LlmJudgeRequest(
-        system_prompt=self.build_system_prompt(),
-        user_prompt=self.build_user_prompt(span, retrieved_items, claim),
+        system_prompt=self.build_system_prompt(span.semantics.request),
+        user_prompt=self.build_user_prompt(retrieved_items, claims, number),
         response_model=ContextualRecallJudgePayload,
         temperature=0.0,
         max_output_tokens=self.max_output_tokens,
