@@ -3,11 +3,13 @@
 import argparse
 import asyncio
 import faulthandler
+import json
 import logging
 import signal
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import UUID
@@ -15,7 +17,6 @@ from uuid import UUID
 import httpx
 import psycopg
 
-from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ConnectionError as DatabaseConnectionError
@@ -32,6 +33,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
+from analysis import attribution, plans, relevance, retest, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -50,25 +52,45 @@ from deepeval_baseline import DEEPEVAL_VERSION, METRIC_KEYS, deepeval_metrics, o
 from indexing import pipeline as index_pipeline
 from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, open_embedding_client
 from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
-from judge import ARMS, judge_metrics, open_judge_client
+from judge import ARMS, JUDGE_OUTCOMES, judge_metrics, open_judge_client
 from manifest import Manifest, StepStatus
 from run_outputs import RunOutputs
 from service import build_service, open_database
 
 DEFAULT_OUTPUTS = Path(__file__).resolve().parent / 'outputs'
 DEFAULT_MANIFEST = DEFAULT_OUTPUTS / 'manifest.jsonl'
-# Failures that are outcomes of the judge: the unit counts as wrong (METHODOLOGY.md, Failures). Any other failed unit,
-# such as one with a provider error, is unscored and must run again, so a judge step that has one is not complete.
-_JUDGE_OUTCOMES = frozenset(
-  kind.value
-  for kind in (
-    JudgeFailureKind.MISALIGNED,
-    JudgeFailureKind.TRUNCATED,
-    JudgeFailureKind.INVALID_OUTPUT,
-    JudgeFailureKind.CONTEXT_OVERFLOW,
-    JudgeFailureKind.TIMEOUT,
-  )
-)
+_ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
+  'relevance': (
+    relevance.relevance,
+    relevance.decision_table,
+    relevance.ARMS,
+    'RQ1 Relevance: contextual precision decisions against the gold documents.',
+  ),
+  'attribution': (
+    attribution.attribution,
+    attribution.table,
+    attribution.ARMS,
+    'RQ1 Fact Support: contextual recall decisions on the ERB gold facts against the retrieval of their gold document.',
+  ),
+  'plans': (
+    partial(plans.plans, rewards_dir=DEFAULT_OUTPUTS / 'tau2'),
+    plans.table,
+    plans.ARMS,
+    'RQ1 Plans: AUROC of Plan Correctness and of edit-distance matching against the tau2-bench reward.',
+  ),
+  'retest': (
+    retest.retest,
+    retest.table,
+    retest.ARMS,
+    'RQ1 Retest: mean pairwise agreement of the three main passes, κ for decisions and ρ for scores.',
+  ),
+  'scores': (
+    scores.scores,
+    scores.table,
+    scores.ARMS,
+    "Table 3: each run's configuration scores, the mean of its per-question scores.",
+  ),
+}
 _BENCHMARK_STEPS = {
   'fetch': 'Download the pinned benchmark files, verifying their size and SHA-256.',
   'convert': 'Convert the pinned files into syllo-eval datasets and check them.',
@@ -216,6 +238,23 @@ def build_parser() -> argparse.ArgumentParser:
   search.add_argument('--host', default='127.0.0.1', help='Interface to listen on (default: 127.0.0.1).')
   search.add_argument('--port', type=_positive_int, default=8000, help='Port to listen on (default: 8000).')
   search.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+
+  analyze = commands.add_parser('analyze', help='Compute a results table from the stored judge runs (read-only).')
+  analyses = analyze.add_subparsers(dest='analysis', required=True)
+  for name, (_, _, arms, description) in _ANALYSES.items():
+    command = analyses.add_parser(name, help=description, description=description)
+    default_arms = [arm for arm in ('main', 'sc') if arm in arms]
+    command.add_argument(
+      '--arms',
+      nargs='+',
+      choices=arms,
+      default=default_arms,
+      help=f'Arms to analyze (default: {" ".join(default_arms)}).',
+    )
+    command.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+    command.add_argument(
+      '--output', type=Path, default=DEFAULT_OUTPUTS / 'analysis' / f'{name}.json', help='JSON file of the rows.'
+    )
   return parser
 
 
@@ -267,6 +306,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_score_with_deepeval(args))
   elif args.command == 'judge':
     return asyncio.run(_judge(args))
+  elif args.command == 'analyze':
+    return asyncio.run(_analyze(args))
+  return 0
+
+
+async def _analyze(args: argparse.Namespace) -> int:
+  compute, table, *_ = _ANALYSES[args.analysis]
+  config = load_config(args.config_dir)
+  load_environment()
+  try:
+    async with open_database(Settings()) as db_manager:
+      rows = await compute(db_manager, config.configurations, args.arms)
+  except (ValueError, PersistenceError, psycopg.Error) as error:
+    print(f'analyze: failed: {type(error).__name__}: {error}', file=sys.stderr)
+    return 1
+  args.output.parent.mkdir(parents=True, exist_ok=True)
+  args.output.write_text(json.dumps(rows, indent=2) + '\n')
+  print('\n'.join(table(rows)))
+  print(f'Rows written to {args.output}')
   return 0
 
 
@@ -618,7 +676,8 @@ async def _collect(args: argparse.Namespace) -> int:
 
 async def _score_with_deepeval(args: argparse.Namespace) -> int:
   """Repeat the source run with the selected DeepEval metrics; the manifest records the step and the run it made."""
-  judge_config = load_config(args.config_dir).models.judge
+  config = load_config(args.config_dir)
+  judge_config = config.models.judge
   load_environment()
   settings, judge_settings = Settings(), GeminiJudgeSettings()
   if judge_settings.api_key is None:
@@ -634,6 +693,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
       # The service's own check raises a bare RuntimeError; this one is recorded like any other database error.
       if not await db_manager.health_check():
         raise DatabaseConnectionError('Database health check failed')
+      configuration = (await _collection_run(db_manager, config, args.source_run)).configuration
       metrics = [deepeval_metrics(judge, output_token_limit=judge_config.output_token_limit)[key] for key in keys]
       details['metrics'] = [metric.name for metric in metrics]
       async with build_service(settings, db_manager, metrics=metrics) as service:
@@ -641,6 +701,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
           source_run_id=args.source_run,
           metrics=[metric.name for metric in metrics],
           max_concurrent_samples=args.max_concurrent_samples,
+          metadata={'step': step, 'configuration': configuration.id, 'arm': 'deepeval', 'repetition': 1},
         )
         run_ids = (handle.run.id,)
         # A crash past this point leaves the step started, with the run it made.
@@ -651,7 +712,7 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
     _record_failure(manifest, step, 'deepeval', error, run_ids=run_ids, details=details)
     return 1
   unscored = sum(
-    count for kinds in failed_units.values() for kind, count in kinds.items() if kind not in _JUDGE_OUTCOMES
+    count for kinds in failed_units.values() for kind, count in kinds.items() if kind not in JUDGE_OUTCOMES
   )
   complete = run.status is EvaluationStatus.COMPLETED and not unscored
   details.update(run_status=run.status.value, failed_units=failed_units)
@@ -884,7 +945,7 @@ def unresolved_samples(
   for computation in computations:
     resolved[(sample_ids[computation.evaluation_run_sample_id], computation.metric)].append(
       computation.status is not MetricComputationStatus.FAILED
-      or (computation.metadata or {}).get('failure') in _JUDGE_OUTCOMES
+      or (computation.metadata or {}).get('failure') in JUDGE_OUTCOMES
     )
   return [
     sample_id

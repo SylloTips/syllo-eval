@@ -6,15 +6,17 @@ callers, trace clients, adapters and custom metrics.
 
 It also uses the library's persistence layer, the `UnitOfWork` repositories in `syllo_eval.infrastructure`, for
 ground truths under its own keys, which the dataset format cannot carry (`benchmarks/common.py`), and for the stored
-traces that the whole-trace ablation reads (`ablation_metrics.py`) and the failures a judge run recorded (`cli.py`).
-It relies on `datasets.get_by_name`, `samples.list_by_dataset`, `ground_truths.list_by_key`, `ground_truths.bulk_create`,
-`spans.list_by_trace` and `metric_computations.list_by_evaluation_run`.
+traces that the whole-trace ablation reads (`ablation_metrics.py`), the failures a judge run recorded (`cli.py`) and
+the judge runs the analysis reads (`analysis/`). It relies on `datasets.get_by_name`, `samples.list_by_dataset`,
+`ground_truths.list_by_key`, `ground_truths.bulk_create`, `spans.list_by_trace`, `evaluation_runs.list_runs`,
+`evaluation_run_samples.list_by_evaluation_run` and `metric_computations.list_by_evaluation_run`. The analysis also
+reads the start time of search spans with SQL, which no repository returns.
 
 The ablations and the DeepEval baseline also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
 - the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
-  render prompts, traces and test cases;
+  render prompts, traces and test cases, and `normalize_relevant_ids`, with which the analysis reads gold documents;
 - the built-in v1 prompt templates that `prompts/` edits (v2 for Plan and Answer Correctness): a new built-in
   prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
@@ -67,6 +69,7 @@ expected output of each step.
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
 | `scripts/` | `index-benchmark.sh`, which launches the indexing of one knowledge base; `setup-tau2.sh`, which creates the τ²-bench environment; `dify.sh`, which runs Dify; `dify-patch-plugins.sh`, which adapts Dify's plugins to GPT models and token counting |
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
+| `analysis/` | the results tables, computed from the stored judge runs (see Analysis) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
 | `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP verdicts |
 | `data/` | gitignored: benchmark downloads and search indexes |
@@ -541,6 +544,7 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
 
 - **What it does:** it repeats a collection run on its stored traces with the selected DeepEval metrics. The new run's
   report counts DeepEval's judge calls and tokens as it counts Syllo-eval's.
+- **Run metadata:** the step, configuration, arm `deepeval` and repetition 1, as a judge run carries them.
 - **Manifest:** the step is `deepeval:<source run>:<metrics>`, with the new run's id, the metric names, the DeepEval
   version and the failed units per metric and failure class.
 - **Completion:** the step completes when the run does and every failed unit failed with an outcome of the judge,
@@ -674,6 +678,48 @@ poetry run syllo-exp collect --configuration tau2/llm-agent/gpt/trial-1 --max-co
   These start a new simulation, with a new request id, up to `TAU2_MAX_ATTEMPTS` attempts (3), `TAU2_RETRY_DELAY_SECONDS`
   apart (60). Any other failure fails the sample at once. A cancelled call stops its process, which still exports the
   spans it has.
+
+## Analysis
+
+`syllo-exp analyze <table>` computes a results table from the completed judge runs, prints it and writes its rows to
+`outputs/analysis/<table>.json`. It reads the finished runs by the `configuration`, `arm` and `repetition` that the
+`judge` and `deepeval` steps record in each run's metadata, leaving out pilots and the Open Deep Research runs, which
+the paper does not report. The runs of one configuration, arm and
+repetition (a first attempt, its retries, or several DeepEval runs) form a chain: each sample counts in the latest run
+that completed it with the analyzed metric, as for a judge step's retries. A chain over two source runs stops the
+analysis. It only reads: run it with `PGOPTIONS='-c default_transaction_read_only=on'`, so the database refuses any
+write.
+
+- `relevance` (RQ1 Relevance) compares the contextual precision decisions of the selected arms (`--arms`: `main`,
+  `sc`, `deepeval`; default `main sc`) with the gold documents, as METHODOLOGY's *RQ1 references* define them:
+  - one decision per configuration, question and document, from the document's first search in time order;
+  - a unit failed with an outcome of the judge counts each document of its ranking, read from the NDCG@10 of the
+    source run, as a wrong decision; any other failure stops the analysis;
+  - questions without gold documents, τ²-bench and degraded runs are left out.
+
+  It reports, per run, the questions, the gold and other documents with the share of each that the judge accepts, and
+  Cohen's κ. A `<benchmark>/reported` row per arm and repetition pools the six configurations.
+- `attribution` (RQ1 Fact Support) compares the contextual recall decisions on ERB's gold facts (Basic and Semantic
+  questions; `--arms`: `main`, `sc`, `deepeval`) with whether each fact's gold document is in the trace's retrieved
+  evidence, read from the source run's set recall: one decision per configuration, question and fact. A fact of a
+  trace that retrieved nothing is unsupported and rejected without a judge call, as contextual recall scores it 0; the
+  `unjudged` count reports those decisions. A unit failed with an outcome of the judge counts each fact of its ground
+  truth as a wrong decision. Its rows have the shape of `relevance`'s, with supported and unsupported facts in place of
+  gold and other documents.
+- `plans` (RQ1 Plans; `--arms`: `main`, `wt`) compares Plan Correctness with τ²-bench's reward, read with its action
+  checks from `outputs/tau2/<collection run>/rewards.jsonl` (each sample's latest attempt). Per run, per agent model
+  and pooled, it gives the AUROC of Plan Correctness and of a deterministic baseline, 1 − the normalized edit distance
+  between the executed tool calls (name and arguments) and the expected plan, on the trajectories Plan Correctness
+  scored. It also counts the rewarded trajectories that fail τ²-bench's action check, which deviate from the reference,
+  with both metrics' mean on them.
+- `retest` (RQ1 Retest; `--arms`: `main`) compares the three passes of the main arm, pair by pair (1-2, 1-3, 2-3),
+  over the items both passes have: Cohen's κ on the `relevance` and `attribution` decisions, Spearman's ρ on the
+  per-question CP, CR, AC and PC scores of `scores`, pooled per benchmark over the six configurations (and τ²-bench's
+  for PC). A `mean` row per benchmark and measure averages the three pairs once all three are in.
+- `scores` (Table 3) gives each run's configuration scores (`--arms`: `main`, `sc`, `wt`, `deepeval`), the mean of its
+  per-question scores, as METHODOLOGY's *Aggregation* defines them, with the number of questions behind each; R and
+  NDCG@10 come from the source run. The run report's score statistics pool every computation instead, so they weigh a
+  question by its number of searches and are not these scores. Printed values round half up, as the paper does.
 
 ## Verification
 

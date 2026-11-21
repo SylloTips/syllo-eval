@@ -496,6 +496,7 @@ class DeepEvalCliTest(unittest.TestCase):
     # The computations the finished run persisted, as the CLI reads them back.
     self.computations: list[SimpleNamespace] = []
     self.environment = {'GOOGLE_API_KEY': 'test-key'}
+    self.configuration = SimpleNamespace(id='wixqa/react/gpt')
 
   def tearDown(self) -> None:
     self._directory.cleanup()
@@ -528,6 +529,7 @@ class DeepEvalCliTest(unittest.TestCase):
       patch('cli.deepeval_metrics', return_value=self.metrics) as deepeval_metrics,
       patch('cli.build_service', self.build_service),
       patch('cli.UnitOfWork', return_value=uow),
+      patch('cli._collection_run', AsyncMock(return_value=SimpleNamespace(configuration=self.configuration))),
     ):
       # GeminiJudgeSettings reads the key under either name.
       for name in ('GOOGLE_API_KEY', 'GEMINI_API_KEY'):
@@ -551,6 +553,12 @@ class DeepEvalCliTest(unittest.TestCase):
       source_run_id=self.source_run,
       metrics=['deepeval_precision', 'deepeval_answer'],
       max_concurrent_samples=1,
+      metadata={
+        'step': f'deepeval:{self.source_run}:precision+answer',
+        'configuration': 'wixqa/react/gpt',
+        'arm': 'deepeval',
+        'repetition': 1,
+      },
     )
     self.assertEqual(
       self.build_service.call_args.kwargs['metrics'], [self.metrics['precision'], self.metrics['answer']]

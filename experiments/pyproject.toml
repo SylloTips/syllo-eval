@@ -8,6 +8,7 @@ readme = "README.md"
 # The modules live directly in this folder, which is the import root.
 packages = [
   {include = "ablation_metrics.py"},
+  {include = "analysis"},
   {include = "agents"},
   {include = "benchmarks"},
   {include = "cli.py"},
