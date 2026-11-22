@@ -27,6 +27,7 @@ def order_rows(
       }
       if all(mean is None for mean in means.values()):
         continue
+      first, last = means[fractions[configuration][0]], means[fractions[configuration][-1]]
       rows.append(
         {
           'configuration': configuration,
@@ -40,6 +41,7 @@ def order_rows(
           'tau_b': None
           if None in means.values()
           else kendall_tau_b([mean for mean in means.values() if mean is not None], [-fraction for fraction in means]),
+          'drop': (last - first) / first if first and last is not None else None,
         }
       )
   return rows
@@ -84,14 +86,14 @@ def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
           *([''] if lines else []),
           '| Configuration | Arm | Rep | Metric | '
           + ' | '.join(f'f = {fraction:g}' for fraction in header)
-          + ' | τ-b |',
-          '|---|---|--:|---|' + '--:|' * len(header) + '--:|',
+          + f' | τ-b | Drop at f = {header[-1]:g} |',
+          '|---|---|--:|---|' + '--:|' * len(header) + '--:|--:|',
         ]
       )
     cells = ['–' if row['means'][f] is None else f'{rounded(row["means"][f])} ({row["questions"][f]})' for f in header]
     lines.append(
       f'| {row["configuration"]} | {row["arm"]} | {row["repetition"]} | {row["metric"]} | '
       + ' | '.join(cells)
-      + f' | {rounded(row["tau_b"])} |'
+      + f' | {rounded(row["tau_b"])} | {"–" if row["drop"] is None else f"{row["drop"]:.1%}"} |'
     )
   return lines

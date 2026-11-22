@@ -742,9 +742,10 @@ write.
   than two shared questions has no p, and leaves the metric's power empty.
 - `known-order` (RQ2 Known order; `--arms`: `main`, `sc`, `deepeval`) compares each degraded configuration's base
   (ReAct/GPT on ERB) with its degraded runs, for each arm and repetition that has them: the `scores` of each metric
-  at f = 0, 0.25 and 0.5, and Kendall τ-b against the known order f = 0 ≻ 0.25 ≻ 0.5. R and NDCG@10 check that the
-  swap took effect: below τ-b = 1, the degraded runs must be collected again. They are read on every question of the
-  collection run, not only on those the judge run completed, so the check does not depend on the judge's coverage.
+  at f = 0, 0.25 and 0.5, Kendall τ-b against the known order f = 0 ≻ 0.25 ≻ 0.5, and the relative drop from f = 0 to
+  f = 0.5, which compares how much the retrieval metrics and AC fall. R and NDCG@10 check that the swap took effect:
+  below τ-b = 1, the degraded runs must be collected again. They are read on every question of the collection run,
+  not only on those the judge run completed, so the check does not depend on the judge's coverage.
 
 ## Verification
 

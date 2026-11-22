@@ -367,7 +367,8 @@ class KnownOrderTest(unittest.TestCase):
     rows = {row['metric']: row for row in order_rows(runs, {'erb/react/gpt': [0.0, 0.25, 0.5]})}
 
     self.assertEqual(rows['R']['tau_b'], 1.0)
-    self.assertEqual((rows['AC']['means'][0.5], rows['AC']['tau_b']), (None, None))
+    self.assertAlmostEqual(rows['R']['drop'], -2 / 3)
+    self.assertEqual((rows['AC']['means'][0.5], rows['AC']['tau_b'], rows['AC']['drop']), (None, None, None))
 
 
 class RetestTest(unittest.TestCase):
