@@ -14,6 +14,7 @@ EXPERIMENTS_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = EXPERIMENTS_DIR / 'configs'
 DATA_DIR = EXPERIMENTS_DIR / 'data'
 
+PILOT_SUFFIX = '-pilot'
 Benchmark = Literal['erb', 'wixqa', 'tau2']
 AgentStack = Literal['react', 'smolagents', 'odr', 'deepagents', 'tau2-llm-agent']
 
@@ -164,6 +165,12 @@ class BenchmarkSource(_ConfigModel):
   # Files are fetched from f'{base_url}/{path}'; the URL must name a full commit, so the bytes can never change.
   base_url: str = Field(pattern=r'^https://\S+/[0-9a-f]{40}$')
   files: dict[str, PinnedFile] = Field(min_length=1)
+
+  @model_validator(mode='after')
+  def _check_dataset_name(self) -> 'BenchmarkSource':
+    if self.dataset_name.endswith(PILOT_SUFFIX):
+      raise ValueError(f'dataset_name ends in {PILOT_SUFFIX!r}, which names pilot datasets')
+    return self
 
 
 class JudgeSamplesConfig(_ConfigModel):

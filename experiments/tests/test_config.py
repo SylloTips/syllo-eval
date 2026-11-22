@@ -201,6 +201,7 @@ class ExperimentConfigTest(unittest.TestCase):
       'short hash': {'files': {'questions': {'path': 'questions.jsonl', 'size': 10, 'sha256': 'b' * 63}}},
       'empty file': {'files': {'questions': {'path': 'questions.jsonl', 'size': 0, 'sha256': 'b' * 64}}},
       'no files': {'files': {}},
+      'pilot name': {'dataset_name': 'kb-pilot'},
     }
     for case, overrides in invalid.items():
       with self.subTest(case=case), self.assertRaises(ValidationError):

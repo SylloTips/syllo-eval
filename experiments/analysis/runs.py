@@ -16,7 +16,7 @@ from syllo_eval.model import (
   MetricComputation,
 )
 
-from config import Configuration
+from config import PILOT_SUFFIX, Configuration
 from judge import JUDGE_OUTCOMES
 
 REPORTED_AGENTS = frozenset({'react', 'smolagents', 'deepagents'})
@@ -41,7 +41,14 @@ async def finished_runs(db_manager: DatabaseManager) -> list[EvaluationRun]:
   async with UnitOfWork(db_manager) as uow:
     while page := await uow.evaluation_runs.list_runs(limit=_PAGE_SIZE, offset=len(runs)):
       runs.extend(page)
-  return [run for run in runs if run.status is not EvaluationStatus.RUNNING]
+  async with db_manager.get_async_connection() as conn:
+    cursor = await conn.execute('SELECT id FROM dataset WHERE name LIKE %s', (f'%{PILOT_SUFFIX}',))
+    pilots = {dataset_id for (dataset_id,) in await cursor.fetchall()}
+  return reportable_runs(runs, pilots)
+
+
+def reportable_runs(runs: Sequence[EvaluationRun], pilot_datasets: Collection[UUID]) -> list[EvaluationRun]:
+  return [run for run in runs if run.status is not EvaluationStatus.RUNNING and run.dataset_id not in pilot_datasets]
 
 
 def judge_runs(

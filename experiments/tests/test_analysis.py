@@ -20,7 +20,7 @@ from pathlib import Path
 from analysis import attribution, plans
 from analysis.relevance import Decision, decisions, summary
 from analysis.retest import retest_rows
-from analysis.runs import judge_runs, latest_attempts, rounded
+from analysis.runs import judge_runs, latest_attempts, reportable_runs, rounded
 from analysis.scores import question_scores
 from analysis.scores import summary as score_summary
 from config import Configuration
@@ -75,6 +75,21 @@ class JudgeRunsTest(unittest.TestCase):
 
     self.assertEqual([run.run_ids for run in found], [(react.id,), (react_sc.id,), (odr.id,)])
     self.assertEqual([run.reported for run in found], [True, True, False])
+
+  def test_runs_on_a_pilot_dataset_are_left_out(self) -> None:
+    pilot_dataset = uuid4()
+    pilot_collection = _run(None)
+    pilot_collection.source_run_id, pilot_collection.dataset_id = None, pilot_dataset
+    metadata = {'arm': 'deepeval', 'configuration': 'erb/react/gpt', 'repetition': 1}
+    on_pilot = _run(metadata, source=pilot_collection.id)
+    on_pilot.dataset_id = pilot_dataset
+    full = _run(metadata)
+
+    (found,) = judge_runs(
+      reportable_runs([pilot_collection, on_pilot, full], {pilot_dataset}), CONFIGURATIONS, {'deepeval'}
+    )
+
+    self.assertEqual(found.run_ids, (full.id,))
 
   def test_retries_join_their_step_in_start_order(self) -> None:
     metadata = {'arm': 'main', 'configuration': 'erb/react/gpt', 'repetition': 2}
