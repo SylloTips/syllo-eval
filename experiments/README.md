@@ -725,8 +725,10 @@ write.
   for PC). A `mean` row per benchmark and measure averages the three pairs once all three are in.
 - `scores` (Table 3) gives each run's configuration scores (`--arms`: `main`, `sc`, `wt`, `deepeval`), the mean of its
   per-question scores, as METHODOLOGY's *Aggregation* defines them, with the number of questions behind each; R and
-  NDCG@10 come from the source run. The run report's score statistics pool every computation instead, so they weigh a
-  question by its number of searches and are not these scores. Printed values round half up, as the paper does.
+  NDCG@10 come from the source run. `R on CR` is R over the questions CR scores, such as ERB's Basic and Semantic
+  questions; its count matches CR's when every such question has an R. The run report's score statistics pool every
+  computation instead, so they weigh a question by its number of searches and are not these scores. Printed values
+  round half up, as the paper does.
 
 ## Verification
 

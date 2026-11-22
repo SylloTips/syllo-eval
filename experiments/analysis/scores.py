@@ -33,7 +33,7 @@ from config import Configuration
 from deepeval_baseline import DeepEvalAnswerCorrectness, DeepEvalGoldClaimsContextualRecall
 
 ARMS = ('main', 'sc', 'wt', 'deepeval')
-COLUMNS = ('PC', 'AC', 'CP', 'CR', 'R', 'NDCG@10')
+COLUMNS = ('PC', 'AC', 'CP', 'CR', 'R', 'R on CR', 'NDCG@10')
 LABELS = {
   **{metric.metric_name: 'PC' for metric in (PlanCorrectnessJudgeMetric, PlanCorrectnessWT)},
   **{
@@ -98,6 +98,8 @@ def question_scores(
 
 
 def summary(scores: Mapping[str, Mapping[UUID, float]]) -> dict[str, Any]:
+  cr = scores.get('CR', {})
+  scores = {**scores, 'R on CR': {q: s for q, s in scores.get('R', {}).items() if q in cr}}
   return {
     key: value
     for label in COLUMNS

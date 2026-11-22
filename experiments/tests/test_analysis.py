@@ -22,6 +22,7 @@ from analysis.relevance import Decision, decisions, summary
 from analysis.retest import retest_rows
 from analysis.runs import judge_runs, latest_attempts, rounded
 from analysis.scores import question_scores
+from analysis.scores import summary as score_summary
 from config import Configuration
 
 CONFIGURATIONS = [
@@ -258,6 +259,13 @@ class QuestionScoresTest(unittest.TestCase):
     self.assertEqual(found['CR'], {'no_search': 0.0})
     self.assertEqual(found['AC'], {'no_answer': 0.0})
     self.assertNotIn('PC', found)
+
+  def test_set_recall_on_cr_keeps_only_the_questions_cr_scores(self) -> None:
+    scored, other = uuid4(), uuid4()
+    result = score_summary({'CR': {scored: 0.5}, 'R': {scored: 1.0, other: 0.0}})
+
+    self.assertEqual((result['R'], result['R questions']), (0.5, 2))
+    self.assertEqual((result['R on CR'], result['R on CR questions']), (1.0, 1))
 
   def test_an_infrastructure_failure_stops_the_analysis(self) -> None:
     with self.assertRaisesRegex(ValueError, 'score it again'):
