@@ -2,14 +2,13 @@ from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from itertools import combinations
 from math import sqrt
-from statistics import mean
 from typing import Any
 from uuid import UUID
 
 from syllo_eval.infrastructure import DatabaseManager
 
 from analysis.runs import finished_runs, gold_documents, judge_runs, reported, rounded
-from analysis.scores import run_scores, with_r_on_cr
+from analysis.scores import run_scores, summary
 from config import Configuration
 
 ARMS = ('main', 'sc', 'deepeval')
@@ -31,16 +30,12 @@ def ranking_rows(
 ) -> list[dict[str, Any]]:
   rows: list[dict[str, Any]] = []
   for (benchmark, arm, repetition), by_configuration in groups.items():
-    paired: dict[str, int] = {}
-    means: dict[str, dict[str, float | None]] = {}
-    for metric in METRICS:
-      scored = {label: scores[metric] for label, scores in by_configuration.items() if scores.get(metric)}
-      questions = set.intersection(*map(set, scored.values())) if scored else set()
-      if questions:
-        paired[metric] = len(questions)
-        means[metric] = {
-          label: mean(scored[label][q] for q in questions) if label in scored else None for label in expected[benchmark]
-        }
+    summaries = {label: summary(scores) for label, scores in by_configuration.items()}
+    scored = {
+      metric: {label: summaries[label][metric] if label in summaries else None for label in expected[benchmark]}
+      for metric in METRICS
+    }
+    means = {metric: values for metric, values in scored.items() if any(value is not None for value in values.values())}
     complete = {metric for metric, values in means.items() if None not in values.values()}
     for metric, values in means.items():
       present = [value for value in values.values() if value is not None]
@@ -50,8 +45,10 @@ def ranking_rows(
           'arm': arm,
           'repetition': repetition,
           'metric': metric,
-          'questions': paired[metric],
           'means': values,
+          'questions': {
+            label: summaries[label][f'{metric} questions'] if label in summaries else 0 for label in values
+          },
           'ranks': {
             label: None if value is None else 1 + sum(other > value for other in present)
             for label, value in values.items()
@@ -75,8 +72,8 @@ async def rankings(
   groups: defaultdict[tuple[str, str, int], dict[str, Mapping[str, Mapping[UUID, float]]]] = defaultdict(dict)
   for run in judge_runs(await finished_runs(db_manager), configurations, arms):
     if run.reported:
-      groups[(run.configuration.benchmark, run.arm, run.repetition)][_label(run.configuration)] = with_r_on_cr(
-        await run_scores(db_manager, run, gold)
+      groups[(run.configuration.benchmark, run.arm, run.repetition)][_label(run.configuration)] = await run_scores(
+        db_manager, run, gold
       )
   expected: defaultdict[str, list[str]] = defaultdict(list)
   for configuration in configurations:
@@ -98,17 +95,19 @@ def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
       lines.extend(
         [
           *([''] if lines else []),
-          '| Benchmark | Arm | Rep | Metric | Questions | ' + ' | '.join(header) + ' | τ-b |',
-          '|---|---|--:|---|--:|' + '--:|' * len(header) + '---|',
+          '| Benchmark | Arm | Rep | Metric | ' + ' | '.join(header) + ' | τ-b |',
+          '|---|---|--:|---|' + '--:|' * len(header) + '---|',
         ]
       )
     cells = [
-      '–' if row['means'][label] is None else f'{rounded(row["means"][label])} ({row["ranks"][label]})'
+      '–'
+      if row['means'][label] is None
+      else f'{rounded(row["means"][label])} ({row["questions"][label]}) #{row["ranks"][label]}'
       for label in header
     ]
     tau = ', '.join(f'{rounded(value)} vs {reference}' for reference, value in row['tau_b'].items()) or '–'
     lines.append(
-      f'| {row["benchmark"]} | {row["arm"]} | {row["repetition"]} | {row["metric"]} | {row["questions"]} | '
+      f'| {row["benchmark"]} | {row["arm"]} | {row["repetition"]} | {row["metric"]} | '
       + ' | '.join(cells)
       + f' | {tau} |'
     )

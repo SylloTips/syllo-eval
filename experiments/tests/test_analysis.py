@@ -290,16 +290,17 @@ class QuestionScoresTest(unittest.TestCase):
 
 
 class RankingsTest(unittest.TestCase):
-  def test_ranks_paired_means_and_compares_them_with_tau_b(self) -> None:
+  def test_ranks_the_table_3_scores_and_compares_them_with_tau_b(self) -> None:
     q1, q2 = uuid4(), uuid4()
     scores = {
       'a': {'CP': {q1: 0.9}, 'NDCG@10': {q1: 0.8}, 'CR': {q1: 0.5}, 'R': {q1: 1.0}},
       'b': {'CP': {q1: 0.5}, 'NDCG@10': {q1: 0.2}, 'CR': {q1: 0.4}, 'R': {q1: 1.0}},
-      'c': {'CP': {q1: 0.1, q2: 1.0}, 'NDCG@10': {q1: 0.4}, 'CR': {q1: 0.1}, 'R': {q1: 0.0}},
+      'c': {'CP': {q1: 0.1, q2: 0.3}, 'NDCG@10': {q1: 0.4}, 'CR': {q1: 0.1}, 'R': {q1: 0.0}},
     }
     rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})}
 
-    self.assertEqual((rows['CP']['questions'], rows['CP']['means']['c']), (1, 0.1))
+    self.assertEqual(rows['CP']['questions'], {'a': 1, 'b': 1, 'c': 2})
+    self.assertAlmostEqual(rows['CP']['means']['c'], 0.2)
     self.assertAlmostEqual(rows['CP']['tau_b']['NDCG@10'], 1 / 3)
     self.assertEqual(rows['R']['ranks'], {'a': 1, 'b': 1, 'c': 3})
     self.assertAlmostEqual(rows['CR']['tau_b']['R'], 2 / 6**0.5)

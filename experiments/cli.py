@@ -95,7 +95,7 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     rankings.rankings,
     rankings.table,
     rankings.ARMS,
-    'RQ2: the six configurations ranked by each metric on paired questions, with Kendall τ-b against its reference.',
+    "RQ2: the six configurations ranked by their Table 3 scores, with Kendall τ-b against each metric's reference.",
   ),
 }
 _BENCHMARK_STEPS = {

@@ -361,7 +361,8 @@ scoring of the retrieval metrics; answers get G-Eval's score.
     excluded from every metric and reported separately per configuration, never as a judge score.
 - **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's
   score statistics, which pool every computation and so weigh questions by their number of searches.
-- **Pairing:** rankings and bootstraps use the questions scored for every configuration, and their count is reported.
+- **Pairing:** bootstraps use the questions scored for every configuration, and their count is reported. Rankings
+  order the configuration scores, each over its own questions.
 - **Sensitivity analyses**, reported next to the primary results:
   - R and CR per search, averaged over a question's searches;
   - CP and NDCG@10 from the first search only.
