@@ -34,7 +34,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
-from analysis import attribution, plans, rankings, relevance, retest, scores
+from analysis import attribution, plans, power, rankings, relevance, retest, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -96,6 +96,12 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     rankings.table,
     rankings.ARMS,
     "RQ2: the six configurations ranked by their Table 3 scores, with Kendall τ-b against each metric's reference.",
+  ),
+  'power': (
+    power.power,
+    power.table,
+    power.ARMS,
+    'RQ2 Discriminative power: the share of the 15 configuration pairs each metric separates significantly.',
   ),
 }
 _BENCHMARK_STEPS = {

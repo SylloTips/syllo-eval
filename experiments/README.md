@@ -732,7 +732,13 @@ write.
 - `rankings` (RQ2; `--arms`: `main`, `sc`, `deepeval`) ranks the six reported configurations of each benchmark,
   arm and repetition by their `scores` (Table 3) for AC, CP, CR, R, `R on CR` and NDCG@10, each with its number of
   questions. Kendall τ-b compares each ranking with its reference from *RQ2 references*: CP's with NDCG@10's, CR's with
-  R's and with `R on CR`'s. Tied scores share a rank. A configuration without a run, or without scores for the metric, shows –, and leaves the metric and its
+  R's and with `R on CR`'s. Tied scores share a rank.
+- `power` (RQ2 Discriminative power; `--arms`: `main`, `sc`, `deepeval`) gives, for each benchmark, arm,
+  repetition and metric of `rankings`, the share of the 15 pairs of the six configurations whose scores differ
+  significantly, as METHODOLOGY's *RQ2 references* define it: a paired bootstrap of each pair's per-question
+  differences, on the questions both configurations scored, with a fixed seed, then Holm's correction over the 15
+  p-values. The JSON rows hold each pair's question count, mean difference, p and corrected p. A pair with fewer
+  than two shared questions has no p, and leaves the metric's power empty. A configuration without a run, or without scores for the metric, shows –, and leaves the metric and its
   reference without τ.
 
 ## Verification

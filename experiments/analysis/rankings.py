@@ -8,7 +8,7 @@ from uuid import UUID
 from syllo_eval.infrastructure import DatabaseManager
 
 from analysis.runs import finished_runs, gold_documents, judge_runs, reported, rounded
-from analysis.scores import run_scores, summary
+from analysis.scores import run_scores, summary, with_r_on_cr
 from config import Configuration
 
 ARMS = ('main', 'sc', 'deepeval')
@@ -68,18 +68,24 @@ def ranking_rows(
 async def rankings(
   db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str]
 ) -> list[dict[str, Any]]:
+  return ranking_rows(*await configuration_scores(db_manager, configurations, arms))
+
+
+async def configuration_scores(
+  db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str]
+) -> tuple[dict[tuple[str, str, int], dict[str, Mapping[str, Mapping[UUID, float]]]], dict[str, list[str]]]:
   gold = await gold_documents(db_manager)
   groups: defaultdict[tuple[str, str, int], dict[str, Mapping[str, Mapping[UUID, float]]]] = defaultdict(dict)
   for run in judge_runs(await finished_runs(db_manager), configurations, arms):
     if run.reported:
-      groups[(run.configuration.benchmark, run.arm, run.repetition)][_label(run.configuration)] = await run_scores(
-        db_manager, run, gold
+      groups[(run.configuration.benchmark, run.arm, run.repetition)][_label(run.configuration)] = with_r_on_cr(
+        await run_scores(db_manager, run, gold)
       )
   expected: defaultdict[str, list[str]] = defaultdict(list)
   for configuration in configurations:
     if reported(configuration):
       expected[configuration.benchmark].append(_label(configuration))
-  return ranking_rows(groups, expected)
+  return groups, expected
 
 
 def _label(configuration: Configuration) -> str:

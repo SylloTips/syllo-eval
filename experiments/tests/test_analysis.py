@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import numpy as np
+
 from syllo_eval.model import (
   EvaluationRun,
   EvaluationRunSample,
@@ -18,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 from analysis import attribution, plans
+from analysis.power import RESAMPLES, SEED, bootstrap_p_value, holm, power_rows
 from analysis.rankings import ranking_rows
 from analysis.relevance import Decision, decisions, summary
 from analysis.retest import retest_rows
@@ -313,6 +316,41 @@ class RankingsTest(unittest.TestCase):
 
     self.assertEqual(rows['CP']['ranks'], {'a': 1, 'b': 2, 'c': None})
     self.assertEqual(rows['CP']['tau_b'], {'NDCG@10': None})
+
+
+class PowerTest(unittest.TestCase):
+  def test_holm_corrects_the_p_values_together(self) -> None:
+    self.assertEqual([round(p, 9) for p in holm([0.01, 0.04, 0.03])], [0.03, 0.06, 0.06])
+
+  def test_power_is_the_share_of_pairs_that_differ_after_holm(self) -> None:
+    questions = [uuid4() for _ in range(30)]
+    alternating = {q: float(i % 2) for i, q in enumerate(questions)}
+    scores = {
+      'a': {'CP': dict.fromkeys(questions, 1.0)},
+      'b': {'CP': alternating},
+      'c': {'CP': dict(list(alternating.items())[:-1])},
+    }
+    [row] = power_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})
+
+    self.assertEqual([pair['questions'] for pair in row['pairs']], [30, 29, 29])
+    self.assertEqual((row['significant'], row['pairs'][2]['p']), (2, 1.0))
+    self.assertAlmostEqual(row['power'], 2 / 3)
+
+  def test_resampled_means_that_tie_the_observed_one_count_as_extreme(self) -> None:
+    tenths = np.array([1, 2, 0, -1, 3, 0, 1, -2])
+    sums = tenths[np.random.default_rng(SEED).integers(0, len(tenths), (RESAMPLES, len(tenths)))].sum(axis=1)
+    exact = (np.sum(np.abs(sums - tenths.sum()) >= abs(tenths.sum())) + 1) / (RESAMPLES + 1)
+
+    self.assertEqual(bootstrap_p_value(tenths / 10, np.random.default_rng(SEED)), exact)
+
+  def test_power_is_undefined_without_two_shared_questions_for_every_pair(self) -> None:
+    q1, q2, q3 = uuid4(), uuid4(), uuid4()
+    disjoint = {'a': {'CP': {q1: 1.0, q2: 0.0}}, 'b': {'CP': {q3: 0.0}}}
+    [row] = power_rows({('erb', 'main', 1): disjoint}, {'erb': ['a', 'b']})
+    [single] = power_rows({('erb', 'main', 1): {'a': disjoint['a']}}, {'erb': ['a']})
+
+    self.assertEqual((row['pairs'][0]['difference'], row['pairs'][0]['p'], row['power']), (None, None, None))
+    self.assertEqual((single['pairs'], single['power']), ([], None))
 
 
 class RetestTest(unittest.TestCase):
