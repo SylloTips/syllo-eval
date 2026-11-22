@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 from analysis import attribution, plans
+from analysis.known_order import order_rows
 from analysis.power import RESAMPLES, SEED, bootstrap_p_value, holm, power_rows
 from analysis.rankings import ranking_rows
 from analysis.relevance import Decision, decisions, summary
@@ -351,6 +352,22 @@ class PowerTest(unittest.TestCase):
 
     self.assertEqual((row['pairs'][0]['difference'], row['pairs'][0]['p'], row['power']), (None, None, None))
     self.assertEqual((single['pairs'], single['power']), ([], None))
+
+
+class KnownOrderTest(unittest.TestCase):
+  def test_compares_each_metric_with_the_degradation_order(self) -> None:
+    q = uuid4()
+    runs = {
+      ('erb/react/gpt', 'main', 1): {
+        0.0: {'R': {q: 0.9}, 'AC': {q: 0.5}},
+        0.25: {'R': {q: 0.6}, 'AC': {q: 1.0}},
+        0.5: {'R': {q: 0.3}},
+      }
+    }
+    rows = {row['metric']: row for row in order_rows(runs, {'erb/react/gpt': [0.0, 0.25, 0.5]})}
+
+    self.assertEqual(rows['R']['tau_b'], 1.0)
+    self.assertEqual((rows['AC']['means'][0.5], rows['AC']['tau_b']), (None, None))
 
 
 class RetestTest(unittest.TestCase):
