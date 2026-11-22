@@ -87,8 +87,6 @@ def question_scores(
         values.append(computation.score)
       elif computation.status is MetricComputationStatus.FAILED:
         require_judge_outcome(computation)
-        if label in RETRIEVAL:
-          values.append(0.0)
     skips = [c.error_message or '' for c in group if c.status is MetricComputationStatus.SKIPPED]
     if values:
       scores[label][sample_id] = mean(values)

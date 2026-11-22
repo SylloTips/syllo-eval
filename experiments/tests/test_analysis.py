@@ -265,11 +265,12 @@ class QuestionScoresTest(unittest.TestCase):
           ('cp', {'failure': 'misaligned'}),
           ('ac', {'failure': 'context_overflow'}),
         ],
+        'all_failed': [('cr', {'failure': 'timeout'})],
       },
       {name: frozenset({'g'}) for name in ('no_search', 'unreadable', 'failed')},
     )
 
-    self.assertEqual(found['CP'], {'no_search': 0.0, 'no_gold': 0.0, 'failed': 0.5})
+    self.assertEqual(found['CP'], {'no_search': 0.0, 'no_gold': 0.0, 'failed': 1.0})
     self.assertEqual(found['NDCG@10'], {'no_search': 0.0})
     self.assertEqual(found['CR'], {'no_search': 0.0})
     self.assertEqual(found['AC'], {'no_answer': 0.0})

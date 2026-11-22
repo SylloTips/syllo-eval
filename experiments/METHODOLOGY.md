@@ -355,6 +355,8 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   - A question without gold documents (ten ERB questions) has no R and no NDCG@10, even without a search; CP still
     scores it.
   - A question without an answer scores 0 on AC.
+  - A unit that failed with an outcome of the judge adds no score: the question keeps the mean of its other units, and
+    a question whose units all failed is not scored on that metric.
   - An agent failure that persists after retries is a collection failure: the question has no trace, so it is
     excluded from every metric and reported separately per configuration, never as a judge score.
 - **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's
@@ -419,14 +421,13 @@ scoring of the retrieval metrics; answers get G-Eval's score.
 
 ## Failures
 
-- Whole-trace context overflows and timeouts count as wrong, as do misaligned or truncated single-call and DeepEval
-  outputs.
-- Excluding instead every unit that failed with an outcome of the judge (listed below), in every arm, is reported only
-  as a sensitivity analysis.
+- A unit that failed with an outcome of the judge (listed below) counts as wrong in the RQ1 decisions, and adds no
+  score to the configuration scores (*Aggregation*): a judge failure says nothing about the agent.
+- Excluding these units from the RQ1 decisions too is reported only as a sensitivity analysis.
 - The experiment metrics record why a unit failed in `metadata['failure']`, the same way in every arm (main pass,
   retests and ablations):
-  - `misaligned`, `truncated`, `invalid_output`, `context_overflow` and `timeout` are outcomes of the judge, and count
-    as wrong in every arm;
+  - `misaligned`, `truncated`, `invalid_output`, `context_overflow` and `timeout` are outcomes of the judge, handled
+    the same way in every arm;
   - `invalid_output` is an output that does not parse or validate, or a refusal; an output that does not parse because
     it reached its token limit is `truncated`;
   - the judge client asks again while an output does not parse or validate, up to `output_attempts` (3) in
