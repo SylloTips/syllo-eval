@@ -8,7 +8,7 @@ from uuid import UUID
 
 from syllo_eval.infrastructure import DatabaseManager
 
-from analysis.runs import finished_runs, gold_documents, judge_runs, rounded
+from analysis.runs import finished_runs, gold_documents, judge_runs, reported, rounded
 from analysis.scores import run_scores, with_r_on_cr
 from config import Configuration
 
@@ -27,35 +27,44 @@ def kendall_tau_b(x: Sequence[float], y: Sequence[float]) -> float | None:
 
 def ranking_rows(
   groups: Mapping[tuple[str, str, int], Mapping[str, Mapping[str, Mapping[UUID, float]]]],
+  expected: Mapping[str, Sequence[str]],
 ) -> list[dict[str, Any]]:
   rows: list[dict[str, Any]] = []
   for (benchmark, arm, repetition), by_configuration in groups.items():
-    paired = {
-      metric: set.intersection(*(set(scores.get(metric, {})) for scores in by_configuration.values()))
-      for metric in METRICS
-    }
-    means = {
-      metric: {label: mean(scores[metric][q] for q in questions) for label, scores in by_configuration.items()}
-      for metric, questions in paired.items()
-      if questions
-    }
-    rows.extend(
-      {
-        'benchmark': benchmark,
-        'arm': arm,
-        'repetition': repetition,
-        'metric': metric,
-        'questions': len(paired[metric]),
-        'means': values,
-        'ranks': {label: 1 + sum(other > value for other in values.values()) for label, value in values.items()},
-        'tau_b': {
-          reference: kendall_tau_b(list(values.values()), [means[reference][label] for label in values])
-          for reference in REFERENCES.get(metric, ())
-          if reference in means
-        },
-      }
-      for metric, values in means.items()
-    )
+    paired: dict[str, int] = {}
+    means: dict[str, dict[str, float | None]] = {}
+    for metric in METRICS:
+      scored = {label: scores[metric] for label, scores in by_configuration.items() if scores.get(metric)}
+      questions = set.intersection(*map(set, scored.values())) if scored else set()
+      if questions:
+        paired[metric] = len(questions)
+        means[metric] = {
+          label: mean(scored[label][q] for q in questions) if label in scored else None for label in expected[benchmark]
+        }
+    complete = {metric for metric, values in means.items() if None not in values.values()}
+    for metric, values in means.items():
+      present = [value for value in values.values() if value is not None]
+      rows.append(
+        {
+          'benchmark': benchmark,
+          'arm': arm,
+          'repetition': repetition,
+          'metric': metric,
+          'questions': paired[metric],
+          'means': values,
+          'ranks': {
+            label: None if value is None else 1 + sum(other > value for other in present)
+            for label, value in values.items()
+          },
+          'tau_b': {
+            reference: kendall_tau_b(present, [value for value in means[reference].values() if value is not None])
+            if {metric, reference} <= complete
+            else None
+            for reference in REFERENCES.get(metric, ())
+            if reference in means
+          },
+        }
+      )
   return rows
 
 
@@ -66,11 +75,18 @@ async def rankings(
   groups: defaultdict[tuple[str, str, int], dict[str, Mapping[str, Mapping[UUID, float]]]] = defaultdict(dict)
   for run in judge_runs(await finished_runs(db_manager), configurations, arms):
     if run.reported:
-      label = f'{run.configuration.agent}/{run.configuration.model}'
-      groups[(run.configuration.benchmark, run.arm, run.repetition)][label] = with_r_on_cr(
+      groups[(run.configuration.benchmark, run.arm, run.repetition)][_label(run.configuration)] = with_r_on_cr(
         await run_scores(db_manager, run, gold)
       )
-  return ranking_rows(groups)
+  expected: defaultdict[str, list[str]] = defaultdict(list)
+  for configuration in configurations:
+    if reported(configuration):
+      expected[configuration.benchmark].append(_label(configuration))
+  return ranking_rows(groups, expected)
+
+
+def _label(configuration: Configuration) -> str:
+  return f'{configuration.agent}/{configuration.model}'
 
 
 def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -86,7 +102,10 @@ def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
           '|---|---|--:|---|--:|' + '--:|' * len(header) + '---|',
         ]
       )
-    cells = [f'{rounded(row["means"][label])} ({row["ranks"][label]})' for label in header]
+    cells = [
+      '–' if row['means'][label] is None else f'{rounded(row["means"][label])} ({row["ranks"][label]})'
+      for label in header
+    ]
     tau = ', '.join(f'{rounded(value)} vs {reference}' for reference, value in row['tau_b'].items()) or '–'
     lines.append(
       f'| {row["benchmark"]} | {row["arm"]} | {row["repetition"]} | {row["metric"]} | {row["questions"]} | '

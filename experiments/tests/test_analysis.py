@@ -297,13 +297,21 @@ class RankingsTest(unittest.TestCase):
       'b': {'CP': {q1: 0.5}, 'NDCG@10': {q1: 0.2}, 'CR': {q1: 0.4}, 'R': {q1: 1.0}},
       'c': {'CP': {q1: 0.1, q2: 1.0}, 'NDCG@10': {q1: 0.4}, 'CR': {q1: 0.1}, 'R': {q1: 0.0}},
     }
-    rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores})}
+    rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})}
 
     self.assertEqual((rows['CP']['questions'], rows['CP']['means']['c']), (1, 0.1))
     self.assertAlmostEqual(rows['CP']['tau_b']['NDCG@10'], 1 / 3)
     self.assertEqual(rows['R']['ranks'], {'a': 1, 'b': 1, 'c': 3})
     self.assertAlmostEqual(rows['CR']['tau_b']['R'], 2 / 6**0.5)
     self.assertEqual(rows['NDCG@10']['tau_b'], {})
+
+  def test_a_missing_configuration_leaves_no_tau(self) -> None:
+    q = uuid4()
+    scores = {'a': {'CP': {q: 0.9}, 'NDCG@10': {q: 0.8}}, 'b': {'CP': {q: 0.5}}}
+    rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})}
+
+    self.assertEqual(rows['CP']['ranks'], {'a': 1, 'b': 2, 'c': None})
+    self.assertEqual(rows['CP']['tau_b'], {'NDCG@10': None})
 
 
 class RetestTest(unittest.TestCase):

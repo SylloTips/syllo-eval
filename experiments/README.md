@@ -733,7 +733,8 @@ write.
   arm and repetition by AC, CP, CR, R, `R on CR` and NDCG@10: each configuration's mean over the questions every
   configuration has a score for, as METHODOLOGY's *Pairing* says, with their count. Kendall τ-b compares each ranking
   with its reference from *RQ2 references*: CP's with NDCG@10's, CR's with R's and with `R on CR`'s. Tied means share
-  a rank.
+  a rank. A configuration without a run, or without scores for the metric, shows –, and leaves the metric and its
+  reference without τ.
 
 ## Verification
 
