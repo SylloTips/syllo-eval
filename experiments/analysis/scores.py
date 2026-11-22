@@ -95,9 +95,13 @@ def question_scores(
   return dict(scores)
 
 
-def summary(scores: Mapping[str, Mapping[UUID, float]]) -> dict[str, Any]:
+def with_r_on_cr(scores: Mapping[str, Mapping[UUID, float]]) -> dict[str, Mapping[UUID, float]]:
   cr = scores.get('CR', {})
-  scores = {**scores, 'R on CR': {q: s for q, s in scores.get('R', {}).items() if q in cr}}
+  return {**scores, 'R on CR': {q: s for q, s in scores.get('R', {}).items() if q in cr}}
+
+
+def summary(scores: Mapping[str, Mapping[UUID, float]]) -> dict[str, Any]:
+  scores = with_r_on_cr(scores)
   return {
     key: value
     for label in COLUMNS

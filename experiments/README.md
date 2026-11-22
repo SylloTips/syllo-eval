@@ -729,6 +729,11 @@ write.
   questions; its count matches CR's when every such question has an R. The run report's score statistics pool every
   computation instead, so they weigh a question by its number of searches and are not these scores. Printed values
   round half up, as the paper does.
+- `rankings` (RQ2; `--arms`: `main`, `sc`, `deepeval`) ranks the six reported configurations of each benchmark,
+  arm and repetition by AC, CP, CR, R, `R on CR` and NDCG@10: each configuration's mean over the questions every
+  configuration has a score for, as METHODOLOGY's *Pairing* says, with their count. Kendall τ-b compares each ranking
+  with its reference from *RQ2 references*: CP's with NDCG@10's, CR's with R's and with `R on CR`'s. Tied means share
+  a rank.
 
 ## Verification
 
