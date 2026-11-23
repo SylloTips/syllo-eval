@@ -32,7 +32,7 @@ from benchmarks.common import (
   write_records,
 )
 from benchmarks.download import fetch_pinned_files, verify_pinned_files
-from config import BenchmarkSource
+from config import PILOT_SUFFIX, BenchmarkSource
 
 BUILDERS: dict[str, Callable[[Mapping[str, Path]], ConvertedBenchmark]] = {
   'erb': erb.build,
@@ -79,7 +79,7 @@ async def extract_claims(
 
 
 def pilot_dataset_name(source: BenchmarkSource) -> str:
-  return f'{source.dataset_name}-pilot'
+  return f'{source.dataset_name}{PILOT_SUFFIX}'
 
 
 async def import_pilot(
