@@ -813,9 +813,11 @@ write.
   with both metrics' mean on them.
 - `answers` (RQ1 Answers; `--arms`: `main`, `wt`, `deepeval`) compares Answer Correctness with the human grades of
   the 180 annotated ERB answers, read from `outputs/annotations/erb-task1/`: the four annotators' exports
-  (`erb-task1-<A-D>-*.json`), the tie-break file (`erb-task1-ties-*.json`) and the coordinator key
-  (`coordinator-key.csv`), which must all come from the same packet. An answer's final grade is the majority;
-  2–2 ties and flagged answers take the tie-break grade. Each answer is matched to its run sample by the key's trace.
+  (`erb-task1-<A-D>-*.json`), the tie-break file (`erb-task1-ties-*.json`), the packet they graded
+  (`task1-items.json`, whose SHA-256 each of them names), and the coordinator's key (`coordinator-key.csv`) and
+  answers (`answers.jsonl`). The key must give each item the trace whose answer the packet shows for it, so a key of
+  another packet or with swapped items stops the analysis. An answer's final grade is the majority; 2–2 ties and
+  flagged answers take the tie-break grade. Each answer is matched to its run sample by the key's trace.
   Per arm and repetition, it gives Spearman's ρ of AC against the final grades and against each annotator, with their
   mean. For the annotators, it gives ρ for each pair and their mean, Fleiss' κ on the answers all four graded, the
   4–0, 3–1 and 2–2 splits, the flagged and tie-break counts, and each annotator's share of answers graded correct.

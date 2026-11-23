@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
@@ -36,9 +37,16 @@ def read_annotations(directory: Path) -> tuple[dict[str, dict[str, int]], set[st
     }
   exports = {letter: _one(directory, f'erb-task1-{letter}-*.json') for letter in ANNOTATORS}
   ties = _one(directory, 'erb-task1-ties-*.json')
+  packet = (directory / 'task1-items.json').read_bytes()
   packets = {export['packet'] for export in (*exports.values(), ties)}
-  if len(packets) != 1:
-    raise ValueError(f'the annotation files come from different packets: {sorted(packets)}')
+  if packets != {hashlib.sha256(packet).hexdigest()}:
+    raise ValueError(f'the annotation files do not all come from task1-items.json: {sorted(packets)}')
+  shown = {item['item_id']: item['agent_answer'] for item in json.loads(packet)}
+  with (directory / 'answers.jsonl').open(encoding='utf-8') as handle:
+    traced = {record['trace_id']: record['agent_answer'] for record in map(json.loads, handle)}
+  wrong = [item for item, (_, _, trace) in key.items() if traced.get(trace) != shown.get(item)]
+  if shown.keys() != key.keys() or wrong:
+    raise ValueError(f'the coordinator key does not match the packet: {len(wrong)} of its traces answer other items')
   for letter, export in exports.items():
     if export['grades'].keys() != key.keys():
       raise ValueError(f'annotator {letter} graded other items than the coordinator key lists')
@@ -71,12 +79,14 @@ def final_grades(
   return finals
 
 
-def fleiss_kappa(ratings: Sequence[Sequence[int]]) -> float:
+def fleiss_kappa(ratings: Sequence[Sequence[int]]) -> float | None:
+  if not ratings:
+    return None
   raters = len(ratings[0])
   share = mean(map(sum, ratings)) / raters
   observed = mean((sum(r) ** 2 + (raters - sum(r)) ** 2 - raters) / (raters * (raters - 1)) for r in ratings)
   chance = share**2 + (1 - share) ** 2
-  return (observed - chance) / (1 - chance)
+  return None if chance == 1 else (observed - chance) / (1 - chance)
 
 
 def _row(
@@ -133,17 +143,15 @@ def rater_rows(
 async def item_scores(
   db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str], key: Key
 ) -> dict[tuple[str, int], dict[str, float]]:
-  sources = {configuration: run_id for configuration, run_id, _ in key.values()}
+  annotated = {(configuration, run_id) for configuration, run_id, _ in key.values()}
+  runs = [
+    run
+    for run in await finished_runs(db_manager)
+    if ((run.metadata or {}).get('configuration'), str(run.source_run_id)) in annotated
+  ]
   scores: dict[tuple[str, int], dict[str, float]] = {}
-  for run in judge_runs(await finished_runs(db_manager), configurations, arms):
+  for run in judge_runs(runs, configurations, arms):
     configuration = run.configuration.id
-    if configuration not in sources:
-      continue
-    if str(run.source_run_id) != sources[configuration]:
-      raise ValueError(
-        f'{configuration} {run.arm} {run.repetition} scores run {run.source_run_id}, '
-        f'not the annotated run {sources[configuration]}'
-      )
     async with UnitOfWork(db_manager) as uow:
       run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run.source_run_id)
     samples = {run_sample.trace_id: run_sample.sample_id for run_sample in run_samples}
