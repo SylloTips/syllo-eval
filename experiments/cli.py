@@ -36,7 +36,7 @@ from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
 from agentevals_baseline import AGENTEVALS_VERSION, AgentEvalsTrajectoryAccuracy
-from analysis import attribution, known_order, plans, power, rankings, relevance, retest, scores
+from analysis import answers, attribution, known_order, plans, power, rankings, relevance, retest, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -82,6 +82,12 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     plans.table,
     plans.ARMS,
     'RQ1 Plans: AUROC of Plan Correctness and of edit-distance matching against the tau2-bench reward.',
+  ),
+  'answers': (
+    partial(answers.answers, annotations_dir=DEFAULT_OUTPUTS / 'annotations' / 'erb-task1'),
+    answers.table,
+    answers.ARMS,
+    'RQ1 Answers: Spearman ρ of Answer Correctness against the human grades, and of the annotators with each other.',
   ),
   'retest': (
     retest.retest,

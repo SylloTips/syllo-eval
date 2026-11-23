@@ -481,8 +481,9 @@ only how it judges, so units, skip rules and result metadata stay those of the c
     on false positives, because non-gold items can be relevant. Cohen's κ is secondary.
   - Degraded runs are excluded.
 - **Answers:**
-  - Two annotators grade each answer correct (1.0) or incorrect (0.0) with the AC system prompt (v2), verbatim, blind
-    to configuration and judge output, and an adjudicator resolves every disagreement.
+  - Four annotators grade each answer correct (1.0) or incorrect (0.0) with the AC system prompt (v2), verbatim, blind
+    to configuration and judge output. The final grade is the majority; a fifth person settles 2–2 ties and flagged
+    answers.
   - Report Spearman ρ of the judge vs. the adjudicated grades.
   - Report judge vs. each annotator next to annotator vs. annotator.
 - **Plans:**
