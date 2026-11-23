@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import numpy as np
+
 from syllo_eval.model import (
   EvaluationRun,
   EvaluationRunSample,
@@ -18,6 +20,9 @@ import tempfile
 from pathlib import Path
 
 from analysis import attribution, plans
+from analysis.known_order import order_rows
+from analysis.power import RESAMPLES, SEED, bootstrap_p_value, holm, power_rows
+from analysis.rankings import ranking_rows
 from analysis.relevance import Decision, decisions, summary
 from analysis.retest import retest_rows
 from analysis.runs import judge_runs, latest_attempts, reportable_runs, rounded
@@ -286,6 +291,84 @@ class QuestionScoresTest(unittest.TestCase):
   def test_an_infrastructure_failure_stops_the_analysis(self) -> None:
     with self.assertRaisesRegex(ValueError, 'score it again'):
       self._scores({'q': [('cr', {'failure': 'provider'})]}, {})
+
+
+class RankingsTest(unittest.TestCase):
+  def test_ranks_the_table_3_scores_and_compares_them_with_tau_b(self) -> None:
+    q1, q2 = uuid4(), uuid4()
+    scores = {
+      'a': {'CP': {q1: 0.9}, 'NDCG@10': {q1: 0.8}, 'CR': {q1: 0.5}, 'R': {q1: 1.0}},
+      'b': {'CP': {q1: 0.5}, 'NDCG@10': {q1: 0.2}, 'CR': {q1: 0.4}, 'R': {q1: 1.0}},
+      'c': {'CP': {q1: 0.1, q2: 0.3}, 'NDCG@10': {q1: 0.4}, 'CR': {q1: 0.1}, 'R': {q1: 0.0}},
+    }
+    rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})}
+
+    self.assertEqual(rows['CP']['questions'], {'a': 1, 'b': 1, 'c': 2})
+    self.assertAlmostEqual(rows['CP']['means']['c'], 0.2)
+    self.assertAlmostEqual(rows['CP']['tau_b']['NDCG@10'], 1 / 3)
+    self.assertEqual(rows['R']['ranks'], {'a': 1, 'b': 1, 'c': 3})
+    self.assertAlmostEqual(rows['CR']['tau_b']['R'], 2 / 6**0.5)
+    self.assertEqual(rows['NDCG@10']['tau_b'], {})
+
+  def test_a_missing_configuration_leaves_no_tau(self) -> None:
+    q = uuid4()
+    scores = {'a': {'CP': {q: 0.9}, 'NDCG@10': {q: 0.8}}, 'b': {'CP': {q: 0.5}}}
+    rows = {row['metric']: row for row in ranking_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})}
+
+    self.assertEqual(rows['CP']['ranks'], {'a': 1, 'b': 2, 'c': None})
+    self.assertEqual(rows['CP']['tau_b'], {'NDCG@10': None})
+
+
+class PowerTest(unittest.TestCase):
+  def test_holm_corrects_the_p_values_together(self) -> None:
+    self.assertEqual([round(p, 9) for p in holm([0.01, 0.04, 0.03])], [0.03, 0.06, 0.06])
+
+  def test_power_is_the_share_of_pairs_that_differ_after_holm(self) -> None:
+    questions = [uuid4() for _ in range(30)]
+    alternating = {q: float(i % 2) for i, q in enumerate(questions)}
+    scores = {
+      'a': {'CP': dict.fromkeys(questions, 1.0)},
+      'b': {'CP': alternating},
+      'c': {'CP': dict(list(alternating.items())[:-1])},
+    }
+    [row] = power_rows({('erb', 'main', 1): scores}, {'erb': ['a', 'b', 'c']})
+
+    self.assertEqual([pair['questions'] for pair in row['pairs']], [30, 29, 29])
+    self.assertEqual((row['significant'], row['pairs'][2]['p']), (2, 1.0))
+    self.assertAlmostEqual(row['power'], 2 / 3)
+
+  def test_resampled_means_that_tie_the_observed_one_count_as_extreme(self) -> None:
+    tenths = np.array([1, 2, 0, -1, 3, 0, 1, -2])
+    sums = tenths[np.random.default_rng(SEED).integers(0, len(tenths), (RESAMPLES, len(tenths)))].sum(axis=1)
+    exact = (np.sum(np.abs(sums - tenths.sum()) >= abs(tenths.sum())) + 1) / (RESAMPLES + 1)
+
+    self.assertEqual(bootstrap_p_value(tenths / 10, np.random.default_rng(SEED)), exact)
+
+  def test_power_is_undefined_without_two_shared_questions_for_every_pair(self) -> None:
+    q1, q2, q3 = uuid4(), uuid4(), uuid4()
+    disjoint = {'a': {'CP': {q1: 1.0, q2: 0.0}}, 'b': {'CP': {q3: 0.0}}}
+    [row] = power_rows({('erb', 'main', 1): disjoint}, {'erb': ['a', 'b']})
+    [single] = power_rows({('erb', 'main', 1): {'a': disjoint['a']}}, {'erb': ['a']})
+
+    self.assertEqual((row['pairs'][0]['difference'], row['pairs'][0]['p'], row['power']), (None, None, None))
+    self.assertEqual((single['pairs'], single['power']), ([], None))
+
+
+class KnownOrderTest(unittest.TestCase):
+  def test_compares_each_metric_with_the_degradation_order(self) -> None:
+    q = uuid4()
+    runs = {
+      ('erb/react/gpt', 'main', 1): {
+        0.0: {'R': {q: 0.9}, 'AC': {q: 0.5}},
+        0.25: {'R': {q: 0.6}, 'AC': {q: 1.0}},
+        0.5: {'R': {q: 0.3}},
+      }
+    }
+    rows = {row['metric']: row for row in order_rows(runs, {'erb/react/gpt': [0.0, 0.25, 0.5]})}
+
+    self.assertEqual(rows['R']['tau_b'], 1.0)
+    self.assertAlmostEqual(rows['R']['drop'], -2 / 3)
+    self.assertEqual((rows['AC']['means'][0.5], rows['AC']['tau_b'], rows['AC']['drop']), (None, None, None))
 
 
 class RetestTest(unittest.TestCase):

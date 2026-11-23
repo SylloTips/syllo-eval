@@ -33,7 +33,11 @@ class JudgeRun:
 
   @property
   def reported(self) -> bool:
-    return self.configuration.agent in REPORTED_AGENTS and not self.configuration.degradation
+    return reported(self.configuration)
+
+
+def reported(configuration: Configuration) -> bool:
+  return configuration.agent in REPORTED_AGENTS and not configuration.degradation
 
 
 async def finished_runs(db_manager: DatabaseManager) -> list[EvaluationRun]:

@@ -361,7 +361,8 @@ scoring of the retrieval metrics; answers get G-Eval's score.
     excluded from every metric and reported separately per configuration, never as a judge score.
 - **Configuration scores:** a configuration's score is the mean of its per-question scores, not the run report's
   score statistics, which pool every computation and so weigh questions by their number of searches.
-- **Pairing:** rankings and bootstraps use the questions scored for every configuration, and their count is reported.
+- **Pairing:** a pair's bootstrap uses the questions both configurations scored, and their count is reported.
+  Rankings order the configuration scores, each over its own questions.
 - **Sensitivity analyses**, reported next to the primary results:
   - R and CR per search, averaged over a question's searches;
   - CP and NDCG@10 from the first search only.
@@ -394,7 +395,10 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   both models.
 - **Discriminative power:**
   - It is the share of the 15 configuration pairs that differ significantly.
-  - Significance uses a paired bootstrap over questions (B = 10,000) with Holm correction per metric at p < 0.05.
+  - Significance uses a two-sided paired bootstrap over questions (B = 10,000): the pair's per-question differences,
+    centered on their mean, are resampled, and p is the share of resampled means at least as far from 0 as the
+    observed one, counting the observed one. Holm's correction runs over the metric's 15 p-values together, at
+    p < 0.05.
   - It is also computed for the human grades, R and NDCG@10, and for AC on the annotated questions.
 - **Known order:** ReAct/GPT on ERB with f = 0 ≻ 0.25 ≻ 0.5, checked with R and NDCG@10.
 
