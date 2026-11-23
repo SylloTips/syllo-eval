@@ -555,7 +555,7 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
 - **Manifest:** the step is `deepeval:<source run>:<metrics>`, with the new run's id, the metric names, the DeepEval
   version and the failed units per metric and failure class.
 - **Completion:** the step completes when the run does and every failed unit failed with an outcome of the judge,
-  which counts as wrong ([`METHODOLOGY.md`](METHODOLOGY.md), Failures). A unit that failed in any other way, such as
+  which is counted ([`METHODOLOGY.md`](METHODOLOGY.md), Failures). A unit that failed in any other way, such as
   a provider error, is unscored, so the step is recorded as failed and the command exits with 1.
 - **Requirements:** the database and `GOOGLE_API_KEY` for the shared judge (`configs/models.yaml`). No agent is called.
 - **Cost:** Table 4 measures one sample at a time. That is the default unless `EVALUATION_MAX_CONCURRENT_SAMPLES` is
