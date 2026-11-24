@@ -33,6 +33,28 @@ def holm(p_values: Sequence[float]) -> list[float]:
   return adjusted
 
 
+def compare_pairs(
+  scored: Mapping[str, Mapping[Any, float]], labels: Sequence[str]
+) -> tuple[list[dict[str, Any]], int | None]:
+  pairs: list[dict[str, Any]] = []
+  for a, b in combinations(labels, 2):
+    questions = sorted(scored[a].keys() & scored[b].keys())
+    differences = np.array([scored[a][q] - scored[b][q] for q in questions])
+    pairs.append(
+      {
+        'pair': f'{a} vs {b}',
+        'questions': len(questions),
+        'difference': float(differences.mean()) if questions else None,
+        'p': bootstrap_p_value(differences, np.random.default_rng(SEED)) if len(questions) > 1 else None,
+      }
+    )
+  complete = bool(pairs) and all(pair['p'] is not None for pair in pairs)
+  if complete:
+    for pair, p_holm in zip(pairs, holm([pair['p'] for pair in pairs])):
+      pair['p_holm'] = p_holm
+  return pairs, sum(pair['p_holm'] < ALPHA for pair in pairs) if complete else None
+
+
 def power_rows(
   groups: Mapping[tuple[str, str, int], Mapping[str, Mapping[str, Mapping[UUID, float]]]],
   expected: Mapping[str, Sequence[str]],
@@ -44,23 +66,7 @@ def power_rows(
       scored = {label: by_configuration.get(label, {}).get(metric) or {} for label in labels}
       if not any(scored.values()):
         continue
-      pairs: list[dict[str, Any]] = []
-      for a, b in combinations(labels, 2):
-        questions = sorted(scored[a].keys() & scored[b].keys())
-        differences = np.array([scored[a][q] - scored[b][q] for q in questions])
-        pairs.append(
-          {
-            'pair': f'{a} vs {b}',
-            'questions': len(questions),
-            'difference': float(differences.mean()) if questions else None,
-            'p': bootstrap_p_value(differences, np.random.default_rng(SEED)) if len(questions) > 1 else None,
-          }
-        )
-      complete = bool(pairs) and all(pair['p'] is not None for pair in pairs)
-      if complete:
-        for pair, p_holm in zip(pairs, holm([pair['p'] for pair in pairs])):
-          pair['p_holm'] = p_holm
-      significant = sum(pair['p_holm'] < ALPHA for pair in pairs) if complete else None
+      pairs, significant = compare_pairs(scored, labels)
       rows.append(
         {
           'benchmark': benchmark,

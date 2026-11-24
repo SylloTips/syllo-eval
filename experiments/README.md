@@ -842,6 +842,11 @@ write.
   differences, on the questions both configurations scored, with a fixed seed, then Holm's correction over the 15
   p-values. The JSON rows hold each pair's question count, mean difference, p and corrected p. A pair with fewer
   than two shared questions has no p, and leaves the metric's power empty.
+- `answer-rankings` (RQ2 Answers; `--arms`: `main`, `wt`, `deepeval`) reads the annotations as `answers` does and
+  keeps AC to the 30 annotated ERB questions. For the final grades and for each arm and repetition, it gives each
+  configuration's mean over its annotated answers, with their number and its rank, and the discriminative power as
+  `power` computes it; for AC, Kendall τ-b compares its ranking with the final grades'. A configuration with fewer
+  scored answers, such as WT's failed ones, is still compared with the humans' mean over all 30.
 - `known-order` (RQ2 Known order; `--arms`: `main`, `sc`, `deepeval`) compares each degraded configuration's base
   (ReAct/GPT on ERB) with its degraded runs, for each arm and repetition that has them: the `scores` of each metric
   at f = 0, 0.25 and 0.5, Kendall τ-b against the known order f = 0 ≻ 0.25 ≻ 0.5, and the relative drop from f = 0 to
