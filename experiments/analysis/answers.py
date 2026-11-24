@@ -43,12 +43,21 @@ def read_annotations(directory: Path) -> tuple[dict[str, dict[str, int]], set[st
   packets = {export['packet'] for export in (*exports.values(), ties)}
   if packets != {hashlib.sha256(packet).hexdigest()}:
     raise ValueError(f'the annotation files do not all come from task1-items.json: {sorted(packets)}')
-  shown = {item['item_id']: item['agent_answer'] for item in json.loads(packet)}
+  shown = {item['item_id']: (item['question'], item['agent_answer']) for item in json.loads(packet)}
   with (directory / 'answers.jsonl').open(encoding='utf-8') as handle:
-    traced = {record['trace_id']: record['agent_answer'] for record in map(json.loads, handle)}
-  wrong = [item for item, (_, _, trace, _) in key.items() if traced.get(trace) != shown.get(item)]
+    traced = {
+      record['trace_id']: (
+        record['configuration'],
+        record['collection_run_id'],
+        record['trace_id'],
+        record['sample_key'],
+        (record['question'], record['agent_answer']),
+      )
+      for record in map(json.loads, handle)
+    }
+  wrong = [item for item, fields in key.items() if traced.get(fields[2]) != (*fields, shown.get(item))]
   if shown.keys() != key.keys() or wrong:
-    raise ValueError(f'the coordinator key does not match the packet: {len(wrong)} of its traces answer other items')
+    raise ValueError(f'the coordinator key does not match the packet: {len(wrong)} of its items disagree')
   for letter, export in exports.items():
     if export['grades'].keys() != key.keys():
       raise ValueError(f'annotator {letter} graded other items than the coordinator key lists')
@@ -157,13 +166,18 @@ async def item_scores(
     async with UnitOfWork(db_manager) as uow:
       run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run.source_run_id)
     samples = {run_sample.trace_id: run_sample.sample_id for run_sample in run_samples}
+    traces = {
+      item: trace_id
+      for item, (item_configuration, _, trace_id, _) in key.items()
+      if item_configuration == configuration
+    }
+    if missing := sorted(set(traces.values()) - samples.keys()):
+      raise ValueError(f'run {run.source_run_id} has no trace {missing[0]}')
+    annotated_samples = {samples[trace_id] for trace_id in traces.values()}
     computations, sample_ids = await load_attempts(db_manager, run.run_ids, AC)
+    computations = [c for c in computations if sample_ids[c.evaluation_run_sample_id] in annotated_samples]
     ac = question_scores(computations, sample_ids, AC, {}).get('AC', {})
-    for item, (item_configuration, _, trace_id, _) in key.items():
-      if item_configuration != configuration:
-        continue
-      if trace_id not in samples:
-        raise ValueError(f'run {run.source_run_id} has no trace {trace_id}')
+    for item, trace_id in traces.items():
       if samples[trace_id] in ac:
         scores.setdefault((run.arm, run.repetition), {})[item] = ac[samples[trace_id]]
   return scores
