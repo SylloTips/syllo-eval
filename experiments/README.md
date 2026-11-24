@@ -12,15 +12,16 @@ the judge runs the analysis reads (`analysis/`). It relies on `datasets.get_by_n
 `evaluation_run_samples.list_by_evaluation_run` and `metric_computations.list_by_evaluation_run`. The analysis also
 reads the start time of search spans with SQL, which no repository returns.
 
-The ablations and the DeepEval baseline also rely on a few library internals:
+The ablations and the DeepEval, AgentEvals and OpenEvals baselines also rely on a few library internals:
 - `_judge_client` and `_rubric_addition`, which the built-in judge metrics set from their constructor arguments, and
   `_extract_expected_answer` of Answer Correctness;
-- the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and `deepeval_baseline.py` import to
-  render prompts, traces and test cases, and `normalize_relevant_ids`, with which the analysis reads gold documents;
+- the `syllo_eval.evaluation.metric_support` helpers that `ablation_metrics.py` and the baselines' modules import to
+  render prompts, traces, test cases and trajectories, and `normalize_relevant_ids`, with which the analysis reads
+  gold documents;
 - the built-in v1 prompt templates that `prompts/` edits (v2 for Plan and Answer Correctness): a new built-in
   prompt version needs new ablation prompts;
-- `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the DeepEval judge reads
-  usage and retries rate limits as the library's judge client does.
+- `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the baselines' judge
+  (`baseline_judge.py`) reads usage and retries rate limits as the library's judge client does.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench,
 smolagents, Open Deep Research, deep agent and Dify adapters read the flattened records that client returns,
@@ -45,7 +46,10 @@ of the trace it assesses. The paper asks three questions:
   τ²-bench's own tool-calling agent.
 - **Models and configurations:** two agent models; [`configs/configurations.yaml`](configs/configurations.yaml) lists
   all 26 configurations.
-- **Comparisons:** Syllo-eval runs against DeepEval and two ablations, all with the same judge model:
+- **Comparisons:** Syllo-eval runs against three frameworks and two ablations, all with the same judge model:
+  - DeepEval scores relevance, fact support and answers;
+  - LangChain's AgentEvals scores τ²-bench plans, the only kind of unit it evaluates;
+  - LangChain's OpenEvals scores relevance, fact support, answers and plans;
   - Syllo-eval-SC judges all items or claims in a single call;
   - Syllo-eval-WT reads the whole trace instead of the target spans.
 
@@ -64,6 +68,8 @@ expected output of each step.
 | `tau2_runtime/` | τ²-bench's run of one task with traces, run in its own environment (see τ²-bench agent) |
 | `ablation_metrics.py`, `prompts/` | the SC and WT ablations, recall over the gold claims, and the ablation prompts |
 | `deepeval_baseline.py`, `deepeval_env.py` | the DeepEval baseline, and the switches DeepEval reads when it is imported |
+| `agentevals_baseline.py`, `openevals_baseline.py` | the AgentEvals and OpenEvals baselines, and the shared judge as OpenEvals calls it |
+| `baseline_judge.py` | the shared judge model as the baselines call it, the calls each unit made, and the document text they judge |
 | `dify/` | the Dify agent's DSL, configuration guide, and the Compose override that runs Dify beside Phoenix |
 | `indexing/` | the search indexes of the ERB and WixQA knowledge bases: embedding model, Qdrant vector store, pipeline |
 | `search_tool/` | the agents' search tool: an MCP server over the search index of one knowledge base |
@@ -457,8 +463,11 @@ ablations. Each ablation subclasses the metric it is compared with and overrides
 the same units with the same rubric, scoring, failure handling and result metadata; an ablation only adds metadata
 fields. `deepeval_baseline.py` adds the DeepEval baseline the same way: each DeepEval metric replaces how the compared
 metric judges, and keeps its units, skip rules and result metadata. The retrieval metrics also keep its scoring; the
-answer metric's score is G-Eval's. [`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation and the baseline
-change.
+answer metric's score is G-Eval's. `agentevals_baseline.py` adds the AgentEvals baseline for plans the same way: its
+metric replaces how Plan Correctness judges, and its score is AgentEvals' verdict, 1.0 or 0.0. `openevals_baseline.py`
+adds the OpenEvals baseline, one metric for each judge metric of the main arm. Its retrieval metrics judge each document
+or claim in its own call and keep the compared metric's scoring; its answer and plan metrics score OpenEvals' verdict.
+[`METHODOLOGY.md`](METHODOLOGY.md) describes what each ablation and baseline changes.
 
 | Metric | Unit | Judge calls per unit | Compared with |
 |---|---|---|---|
@@ -473,6 +482,12 @@ change.
 | `deepeval_contextual_precision` | one search call | one | `contextual_precision_document_judge` |
 | `deepeval_contextual_recall_gold_claims` | one question | one | `contextual_recall_gold_claims_siblings_question` |
 | `deepeval_answer_correctness` | one question | one | `answer_correctness_judge` |
+| `agentevals_trajectory_accuracy` | one τ²-bench trajectory | one | `plan_correctness_judge` |
+| `openevals_retrieval_relevance` | one search call | one per document | `contextual_precision_document_judge` |
+| `openevals_groundedness_gold_claims` | one question | one per gold claim | `contextual_recall_gold_claims` |
+| `openevals_groundedness_orbitals_claims` | one question | one per claim | `contextual_recall_orbitals_claims` |
+| `openevals_correctness` | one question | one | `answer_correctness_judge` |
+| `openevals_plan_adherence` | one τ²-bench trajectory | one | `plan_correctness_judge` |
 
 - **Retrieval units:** each agent's adapter reads every search output with `search_retrieval`
   (`search_tool/search.py`):
@@ -542,6 +557,33 @@ poetry run syllo-exp judge --source-run <collection run id> --arm wt --retry <ju
 - **Requirements:** the database, the converted benchmarks for `--pilot` and ERB `wt`, and `GOOGLE_API_KEY` for the
   shared judge (`configs/models.yaml`). No agent is called.
 
+## Baselines at a glance
+
+Each framework's metrics score the units of the Syllo-eval metric they are compared with, with the same judge model
+(`configs/models.yaml`), and record every judge call. ✅ runs with `syllo-exp <framework>`; "not run" means a
+counterpart exists but no comparison of the paper uses it.
+
+| Syllo-eval metric | What it measures | DeepEval | AgentEvals | OpenEvals |
+|---|---|---|---|---|
+| NDCG@10 (`ndcg_at_10_document`, `_snippet`) | rank quality of each search against the gold documents (deterministic) | none | none | none |
+| Set precision (`set_precision_document`, `_snippet`, `_retrieved_document`) | share of retrieved documents that are gold (deterministic) | none | none | none |
+| Set recall (`set_recall_document`, `_snippet`, `_retrieved_document`) | share of gold documents retrieved (deterministic) | none | none | none |
+| Contextual precision (`contextual_precision_document_judge`, `_snippet`) | judge: are the relevant documents ranked first? | ✅ `ContextualPrecisionMetric`, a ranking in one call | none | ✅ retrieval relevance, one call per document |
+| Contextual recall over stored claims (`…_stored_claims`, ERB gold claims, WixQA Orbitals claims) | judge: is each claim supported by the retrieved documents? | ✅ `ContextualRecallMetric`, all claims in one call, ERB gold claims only | none | ✅ groundedness, one call per claim, ERB and WixQA |
+| Contextual recall over claims the judge splits off (`contextual_recall_document_judge`, `_snippet`) | the same, after the judge splits the expected answer into claims | not run: `ContextualRecallMetric` splits the expected answer into sentences itself | none | none: OpenEvals cannot split an answer into claims |
+| Contextual recall over extracted claims (`…_claim_extractor`) | the same, with Orbitals extracting the claims | not run: as for stored claims | none | not run: as for stored claims |
+| Answer correctness (`answer_correctness_judge`) | judge: does the answer match the expected one? | ✅ G-Eval Correctness, 0–10 divided by 10 | none | ✅ correctness, 1.0 or 0.0 |
+| Plan correctness (`plan_correctness_judge`) | judge: does the plan reach the reference's outcome? | none: its plan metrics grade no reference plan | ✅ trajectory accuracy, 1.0 or 0.0 | ✅ plan adherence, 1.0 or 0.0 |
+| Plan efficiency (`plan_efficiency`) | expected steps divided by executed steps (deterministic) | none: `StepEfficiencyMetric` judges DeepEval's own traces, without a reference | none: its judge folds efficiency into one verdict, and its matches check which calls were made, not how many | none |
+| LLM calls (`llm_calls`) | number of LLM spans in the trace | none | none | none |
+
+The deterministic metrics score typed trace observations against gold labels or the trace's structure: gold document
+ids, ranks, step counts and LLM spans. None of the frameworks reads those from a test case: DeepEval's trace metrics
+need DeepEval's own traces, AgentEvals reads messages or LangGraph thread histories, and OpenEvals reads text. In the
+paper they are the references the judges are ranked against (RQ2). DeepEval's `ToolCorrectnessMetric` and AgentEvals'
+trajectory match, which OpenEvals copies, compare executed tool calls with expected ones; no Syllo-eval metric does,
+and the plan analysis takes that check from τ²-bench itself.
+
 ## DeepEval baseline
 
 ```bash
@@ -564,6 +606,56 @@ poetry run syllo-exp deepeval --source-run <run id> --metrics precision   # WixQ
   files in `outputs/deepeval/`. DeepEval reads these switches when it is imported, so code that uses DeepEval imports
   `deepeval_baseline` first, which imports the switches before DeepEval. `pyproject.toml` disables DeepEval's pytest
   plugin, which pytest would import first.
+
+## AgentEvals baseline
+
+```bash
+poetry run syllo-exp agentevals --source-run <τ²-bench collection run id>
+poetry run syllo-exp agentevals --source-run <τ²-bench collection run id> --retry <run id>   # unresolved samples
+```
+
+- **What it does:** it repeats a finished τ²-bench collection run, as `judge` takes it, on its stored traces with
+  AgentEvals' trajectory accuracy, which is compared with Plan Correctness. AgentEvals has no retrieval or answer
+  metric, so the command refuses a run of another benchmark. The new run's report counts AgentEvals' judge calls and
+  tokens as it counts Syllo-eval's.
+- **Run metadata:** the step, configuration, arm `agentevals` and repetition 1, as a judge run carries them.
+- **Manifest:** the step is `agentevals:<source run>`, with the new run's id, the configuration, the metric name, the
+  AgentEvals and OpenEvals versions and the failed units per failure class.
+- **Completion:** as for a judge step: the step completes once no sample is unresolved, a unit failed with an outcome of
+  the judge counting as resolved, and the manifest records the unresolved samples. `--retry <run>` takes the latest
+  run of the same step and scores its unresolved samples again, in a new run recorded as `<step>:retry-<n>`; a retry
+  that leaves none completes the step, listing every attempt in order.
+- **Requirements and cost:** as for the DeepEval baseline.
+- **Pins:** `pyproject.toml` pins AgentEvals 0.0.9, its latest release, and OpenEvals 0.2.2, whose judge AgentEvals
+  calls. Later OpenEvals releases need langchain-core 1.8, above the version the agent stacks are locked to; on the
+  judge's path they differ from 0.2.2 only in the description of the boolean score.
+- **Offline:** OpenEvals traces its evaluators to LangSmith only when LangSmith tracing is turned on in the environment,
+  which the experiments never do. AgentEvals sends no telemetry.
+
+## OpenEvals baseline
+
+```bash
+poetry run syllo-exp openevals --source-run <collection run id>                       # every metric of its benchmark
+poetry run syllo-exp openevals --source-run <collection run id> --metrics relevance   # some of them
+poetry run syllo-exp openevals --source-run <collection run id> --retry <run id>      # unresolved samples
+```
+
+- **What it does:** it repeats a finished collection run, as `judge` takes it, on its stored traces with the OpenEvals
+  metrics of its benchmark, one for each judge metric of the main arm:
+
+  | Benchmark | `relevance` | `recall` | `answer` | `plan` |
+  |---|---|---|---|---|
+  | ERB | retrieval relevance (vs CP) | groundedness of each gold claim (vs CR over `expected_claims_gold`) | correctness (vs AC) | |
+  | WixQA | retrieval relevance (vs CP) | groundedness of each Orbitals claim (vs CR over `expected_claims_orbitals`) | correctness (vs AC) | |
+  | τ²-bench | | | | plan adherence (vs PC) |
+
+  `--metrics` selects some of them; a metric the run's benchmark lacks is refused.
+- **Run metadata:** the step, configuration, arm `openevals` and repetition 1, as a judge run carries them.
+- **Manifest:** the step is `openevals:<source run>`, followed by `:<metrics>` when `--metrics` selects them, with the
+  new run's id, the configuration, the metric names, the OpenEvals version and the failed units per failure class.
+- **Completion, retries, requirements, cost, pins and offline:** as for the AgentEvals baseline. A run of an ERB or
+  WixQA configuration makes one judge call per document of every search and per claim, so `--retry` re-scores only
+  the samples a provider error left unresolved.
 
 ## Collection
 
@@ -784,7 +876,9 @@ The parent project's `poetry run ruff check .` and `poetry run ruff format .` al
    deterministic metrics.
 2. **Judge.** Every judge evaluation repeats a collection run on its stored traces:
    - the main pass and two retests, and the SC and WT ablations (`syllo-exp judge`);
-   - the DeepEval baseline (`syllo-exp deepeval`).
+   - the DeepEval baseline (`syllo-exp deepeval`);
+   - the AgentEvals baseline, on the τ²-bench runs (`syllo-exp agentevals`);
+   - the OpenEvals baseline (`syllo-exp openevals`).
 3. **Construct.** RQ3 lists and padded traces are imported as new traces.
 4. **Annotate.** Humans grade 240 answers and verify ERB facts.
 5. **Analyze.** Tables 2–4 and every red placeholder are regenerated from the exports.
