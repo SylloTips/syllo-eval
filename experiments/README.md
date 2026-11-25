@@ -815,9 +815,11 @@ write.
   the 180 annotated ERB answers, read from `outputs/annotations/erb-task1/`: the four annotators' exports
   (`erb-task1-<A-D>-*.json`), the tie-break file (`erb-task1-ties-*.json`), the packet they graded
   (`task1-items.json`, whose SHA-256 each of them names), and the coordinator's key (`coordinator-key.csv`) and
-  answers (`answers.jsonl`). The key must give each item the trace whose answer the packet shows for it, so a key of
-  another packet or with swapped items stops the analysis. An answer's final grade is the majority; 2–2 ties and
-  flagged answers take the tie-break grade. Each answer is matched to its run sample by the key's trace.
+  answers (`answers.jsonl`). The key must agree with `answers.jsonl` on each item's configuration, collection run,
+  question and trace, and that trace's question and answer must be the ones the packet shows for the item, so a key
+  of another packet or with swapped items or questions stops the analysis. An answer's final grade is the majority;
+  2–2 ties and flagged answers take the tie-break grade. Each answer is matched to its run sample by the key's trace,
+  and only the annotated answers' AC units are read, so a failure elsewhere in a run does not stop the analysis.
   Per arm and repetition, it gives Spearman's ρ of AC against the final grades and against each annotator, with their
   mean. For the annotators, it gives ρ for each pair and their mean, Fleiss' κ on the answers all four graded, the
   4–0, 3–1 and 2–2 splits, the flagged and tie-break counts, and each annotator's share of answers graded correct.
@@ -842,6 +844,11 @@ write.
   differences, on the questions both configurations scored, with a fixed seed, then Holm's correction over the 15
   p-values. The JSON rows hold each pair's question count, mean difference, p and corrected p. A pair with fewer
   than two shared questions has no p, and leaves the metric's power empty.
+- `answer-rankings` (RQ2 Answers; `--arms`: `main`, `wt`, `deepeval`) reads the annotations as `answers` does and
+  keeps AC to the 30 annotated ERB questions. For the final grades and for each arm and repetition, it gives each
+  configuration's mean over its annotated answers, with their number and its rank, and the discriminative power as
+  `power` computes it; for AC, Kendall τ-b compares its ranking with the final grades'. A configuration with fewer
+  scored answers, such as WT's failed ones, is still compared with the humans' mean over all 30.
 - `known-order` (RQ2 Known order; `--arms`: `main`, `sc`, `deepeval`) compares each degraded configuration's base
   (ReAct/GPT on ERB) with its degraded runs, for each arm and repetition that has them: the `scores` of each metric
   at f = 0, 0.25 and 0.5, Kendall τ-b against the known order f = 0 ≻ 0.25 ≻ 0.5, and the relative drop from f = 0 to

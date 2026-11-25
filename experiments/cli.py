@@ -89,6 +89,13 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     answers.ARMS,
     'RQ1 Answers: Spearman ρ of Answer Correctness against the human grades, and of the annotators with each other.',
   ),
+  'answer-rankings': (
+    partial(answers.answer_rankings, annotations_dir=DEFAULT_OUTPUTS / 'annotations' / 'erb-task1'),
+    answers.rankings_table,
+    answers.ARMS,
+    'RQ2 Answers: the six configurations ranked by Answer Correctness and by the human grades on the 30 annotated '
+    'ERB questions, with τ-b against the human ranking and the discriminative power of each.',
+  ),
   'retest': (
     retest.retest,
     retest.table,

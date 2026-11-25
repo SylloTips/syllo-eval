@@ -11,6 +11,8 @@ from typing import Any
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 
+from analysis.power import compare_pairs
+from analysis.rankings import kendall_tau_b
 from analysis.retest import agreement
 from analysis.runs import finished_runs, judge_runs, load_attempts, rounded
 from analysis.scores import LABELS, question_scores
@@ -19,7 +21,7 @@ from config import Configuration
 ARMS = ('main', 'wt', 'deepeval')
 ANNOTATORS = ('A', 'B', 'C', 'D')
 AC = {metric: label for metric, label in LABELS.items() if label == 'AC'}
-Key = dict[str, tuple[str, str, str]]
+Key = dict[str, tuple[str, str, str, str]]
 
 
 def _one(directory: Path, pattern: str) -> dict[str, Any]:
@@ -32,7 +34,7 @@ def _one(directory: Path, pattern: str) -> dict[str, Any]:
 def read_annotations(directory: Path) -> tuple[dict[str, dict[str, int]], set[str], dict[str, Any], Key]:
   with (directory / 'coordinator-key.csv').open(encoding='utf-8', newline='') as handle:
     key = {
-      row['item_id']: (row['configuration'], row['collection_run_id'], row['trace_id'])
+      row['item_id']: (row['configuration'], row['collection_run_id'], row['trace_id'], row['sample_key'])
       for row in csv.DictReader(handle)
     }
   exports = {letter: _one(directory, f'erb-task1-{letter}-*.json') for letter in ANNOTATORS}
@@ -41,12 +43,21 @@ def read_annotations(directory: Path) -> tuple[dict[str, dict[str, int]], set[st
   packets = {export['packet'] for export in (*exports.values(), ties)}
   if packets != {hashlib.sha256(packet).hexdigest()}:
     raise ValueError(f'the annotation files do not all come from task1-items.json: {sorted(packets)}')
-  shown = {item['item_id']: item['agent_answer'] for item in json.loads(packet)}
+  shown = {item['item_id']: (item['question'], item['agent_answer']) for item in json.loads(packet)}
   with (directory / 'answers.jsonl').open(encoding='utf-8') as handle:
-    traced = {record['trace_id']: record['agent_answer'] for record in map(json.loads, handle)}
-  wrong = [item for item, (_, _, trace) in key.items() if traced.get(trace) != shown.get(item)]
+    traced = {
+      record['trace_id']: (
+        record['configuration'],
+        record['collection_run_id'],
+        record['trace_id'],
+        record['sample_key'],
+        (record['question'], record['agent_answer']),
+      )
+      for record in map(json.loads, handle)
+    }
+  wrong = [item for item, fields in key.items() if traced.get(fields[2]) != (*fields, shown.get(item))]
   if shown.keys() != key.keys() or wrong:
-    raise ValueError(f'the coordinator key does not match the packet: {len(wrong)} of its traces answer other items')
+    raise ValueError(f'the coordinator key does not match the packet: {len(wrong)} of its items disagree')
   for letter, export in exports.items():
     if export['grades'].keys() != key.keys():
       raise ValueError(f'annotator {letter} graded other items than the coordinator key lists')
@@ -143,7 +154,7 @@ def rater_rows(
 async def item_scores(
   db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str], key: Key
 ) -> dict[tuple[str, int], dict[str, float]]:
-  annotated = {(configuration, run_id) for configuration, run_id, _ in key.values()}
+  annotated = {(configuration, run_id) for configuration, run_id, *_ in key.values()}
   runs = [
     run
     for run in await finished_runs(db_manager)
@@ -155,13 +166,18 @@ async def item_scores(
     async with UnitOfWork(db_manager) as uow:
       run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run.source_run_id)
     samples = {run_sample.trace_id: run_sample.sample_id for run_sample in run_samples}
+    traces = {
+      item: trace_id
+      for item, (item_configuration, _, trace_id, _) in key.items()
+      if item_configuration == configuration
+    }
+    if missing := sorted(set(traces.values()) - samples.keys()):
+      raise ValueError(f'run {run.source_run_id} has no trace {missing[0]}')
+    annotated_samples = {samples[trace_id] for trace_id in traces.values()}
     computations, sample_ids = await load_attempts(db_manager, run.run_ids, AC)
+    computations = [c for c in computations if sample_ids[c.evaluation_run_sample_id] in annotated_samples]
     ac = question_scores(computations, sample_ids, AC, {}).get('AC', {})
-    for item, (item_configuration, _, trace_id) in key.items():
-      if item_configuration != configuration:
-        continue
-      if trace_id not in samples:
-        raise ValueError(f'run {run.source_run_id} has no trace {trace_id}')
+    for item, trace_id in traces.items():
       if samples[trace_id] in ac:
         scores.setdefault((run.arm, run.repetition), {})[item] = ac[samples[trace_id]]
   return scores
@@ -186,4 +202,79 @@ def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     f'{row["statistic"]} | {"–" if row["items"] is None else row["items"]} | {rounded(row["value"])} |'
     for row in rows
   )
+  return lines
+
+
+def by_configuration(grades: Mapping[str, float], key: Key, labels: Mapping[str, str]) -> dict[str, dict[str, float]]:
+  scored: dict[str, dict[str, float]] = {label: {} for label in labels.values()}
+  for item, grade in grades.items():
+    configuration, _, _, question = key[item]
+    scored[labels[configuration]][question] = grade
+  return scored
+
+
+def ranking_row(
+  rater: str,
+  repetition: int | None,
+  scored: Mapping[str, Mapping[str, float]],
+  human: Mapping[str, float | None] | None,
+) -> dict[str, Any]:
+  means = {label: mean(questions.values()) if questions else None for label, questions in scored.items()}
+  present = [value for value in means.values() if value is not None]
+  pairs, significant = compare_pairs(scored, list(scored))
+  return {
+    'rater': rater,
+    'repetition': repetition,
+    'means': means,
+    'questions': {label: len(questions) for label, questions in scored.items()},
+    'ranks': {
+      label: None if value is None else 1 + sum(other > value for other in present) for label, value in means.items()
+    },
+    'tau_b': None
+    if human is None or None in (*means.values(), *human.values())
+    else kendall_tau_b(present, [value for value in human.values() if value is not None]),
+    'significant': significant,
+    'power': None if significant is None else significant / len(pairs),
+    'pairs': pairs,
+  }
+
+
+async def answer_rankings(
+  db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str], annotations_dir: Path
+) -> list[dict[str, Any]]:
+  humans, flagged, ties, key = read_annotations(annotations_dir)
+  annotated = {configuration for configuration, *_ in key.values()}
+  labels = {c.id: f'{c.agent}/{c.model}' for c in configurations if c.id in annotated}
+  if labels.keys() != annotated:
+    raise ValueError(f'the configs have no configuration {sorted(annotated - labels.keys())}')
+  human = ranking_row('final', None, by_configuration(final_grades(humans, flagged, ties), key, labels), None)
+  scores = await item_scores(db_manager, configurations, arms, key)
+  return [
+    human,
+    *(
+      ranking_row(arm, repetition, by_configuration(scores[(arm, repetition)], key, labels), human['means'])
+      for arm, repetition in sorted(scores, key=lambda found: (ARMS.index(found[0]), found[1]))
+    ),
+  ]
+
+
+def rankings_table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+  labels = list(rows[0]['means']) if rows else []
+  lines = [
+    '| Rater | Rep | ' + ' | '.join(labels) + ' | τ-b vs final | Significant pairs | Power |',
+    '|---|--:|' + '--:|' * len(labels) + '--:|--:|--:|',
+  ]
+  for row in rows:
+    cells = [
+      '–'
+      if row['means'][label] is None
+      else f'{rounded(row["means"][label])} ({row["questions"][label]}) #{row["ranks"][label]}'
+      for label in labels
+    ]
+    significant = '–' if row['significant'] is None else f'{row["significant"]}/{len(row["pairs"])}'
+    lines.append(
+      f'| {row["rater"]} | {"–" if row["repetition"] is None else row["repetition"]} | '
+      + ' | '.join(cells)
+      + f' | {rounded(row["tau_b"])} | {significant} | {rounded(row["power"])} |'
+    )
   return lines
