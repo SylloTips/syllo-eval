@@ -856,11 +856,12 @@ write.
   below τ-b = 1, the degraded runs must be collected again. They are read on every question of the collection run,
   not only on those the judge run completed, so the check does not depend on the judge's coverage.
 - `trace-length` (RQ3 Trace length; `--arms`: `main`, `wt`) splits the 180 annotated ERB answers and the τ²-bench
-  trajectories into three parts of equal size by the length of their rendered whole trace, read from the WT units
-  (`trace_render.chars`) whatever `--arms` selects. In each part and for each arm and repetition, it gives `answers`'
-  Spearman ρ of AC against the final grades and `plans`' AUROC of PC and of matching against the reward, with the
-  scored items and the positives (answers graded correct, rewarded trajectories) among them. WT's failed units have no
-  score, so its long part can hold fewer scored answers than main's.
+  trajectories into three parts of equal size by the input tokens of their WT unit (`judge_usage.input_tokens`: the
+  rendered whole trace and the prompt), whatever `--arms` selects; units that overflowed the judge's context window
+  have no count and sort last. In each part and for each arm and repetition, it gives `answers`' Spearman ρ of AC
+  against the final grades and `plans`' AUROC of PC and of matching against the reward, with the scored items and the
+  positives (answers graded correct, rewarded trajectories) among them. WT's failed units have no score, so its long
+  part can hold fewer scored answers than main's.
 
 ## Verification
 

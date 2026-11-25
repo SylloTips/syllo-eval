@@ -3,6 +3,7 @@ from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from syllo_eval.evaluation.judge.failures import JudgeFailureKind
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 
@@ -16,33 +17,44 @@ ARMS = ('main', 'wt')
 PARTS = ('short', 'medium', 'long')
 
 
-async def trace_lengths(db_manager: DatabaseManager, runs: Sequence[JudgeRun], metric: str) -> dict[str, int]:
-  lengths: dict[str, int] = {}
+async def trace_lengths(db_manager: DatabaseManager, runs: Sequence[JudgeRun], metric: str) -> dict[str, int | None]:
+  lengths: dict[str, int | None] = {}
   for run in runs:
     async with UnitOfWork(db_manager) as uow:
       run_samples = await uow.evaluation_run_samples.list_by_evaluation_run(run.source_run_id)
     traces = {run_sample.sample_id: run_sample.trace_id for run_sample in run_samples}
     computations, sample_ids = await load_attempts(db_manager, run.run_ids, {metric})
     for computation in computations:
-      render = (computation.metadata or {}).get('trace_render')
+      metadata = computation.metadata or {}
       trace = traces[sample_ids[computation.evaluation_run_sample_id]]
-      if render is None or trace is None:
+      if 'trace_render' not in metadata or trace is None:
         continue
-      if lengths.setdefault(trace, render['chars']) != render['chars']:
-        raise ValueError(f'trace {trace} renders to {lengths[trace]} and {render["chars"]} characters')
+      usage = metadata.get('judge_usage')
+      if usage is None and metadata.get('failure') != JudgeFailureKind.CONTEXT_OVERFLOW:
+        raise ValueError(f'{metric} on trace {trace} has no input token count')
+      tokens = None if usage is None else usage['input_tokens']
+      if lengths.setdefault(trace, tokens) != tokens:
+        raise ValueError(f'trace {trace} counts {lengths[trace]} and {tokens} input tokens')
   return lengths
 
 
-def terciles(lengths: Mapping[str, int]) -> dict[str, str]:
+def terciles(lengths: Mapping[str, int | None]) -> dict[str, str]:
   if len(lengths) < len(PARTS):
     raise ValueError(f'{len(lengths)} traces cannot be split into {len(PARTS)} parts')
-  ordered = sorted(lengths, key=lambda key: (lengths[key], key))
+  ordered = sorted(lengths, key=lambda key: (lengths[key] is None, lengths[key] or 0, key))
   return {key: PARTS[3 * index // len(ordered)] for index, key in enumerate(ordered)}
 
 
-def _part(benchmark: str, part: str, lengths: Mapping[str, int], parts: Mapping[str, str]) -> dict[str, Any]:
-  chars = [lengths[key] for key, found in parts.items() if found == part]
-  return {'benchmark': benchmark, 'part': part, 'chars_min': min(chars), 'chars_max': max(chars), 'items': len(chars)}
+def _part(benchmark: str, part: str, lengths: Mapping[str, int | None], parts: Mapping[str, str]) -> dict[str, Any]:
+  tokens = [lengths[key] for key, found in parts.items() if found == part]
+  counted = [count for count in tokens if count is not None]
+  return {
+    'benchmark': benchmark,
+    'part': part,
+    'tokens_min': min(counted),
+    'tokens_max': None if None in tokens else max(counted),
+    'items': len(tokens),
+  }
 
 
 async def _answer_rows(
@@ -50,7 +62,7 @@ async def _answer_rows(
   configurations: Sequence[Configuration],
   arms: Collection[str],
   annotations_dir: Path,
-  lengths: Mapping[str, int],
+  lengths: Mapping[str, int | None],
 ) -> list[dict[str, Any]]:
   humans, flagged, ties, key = answers.read_annotations(annotations_dir)
   finals = answers.final_grades(humans, flagged, ties)
@@ -84,7 +96,7 @@ async def _plan_rows(
   configurations: Sequence[Configuration],
   arms: Collection[str],
   rewards_dir: Path,
-  lengths: Mapping[str, int],
+  lengths: Mapping[str, int | None],
 ) -> list[dict[str, Any]]:
   found, eligible = await plans.trajectories(db_manager, configurations, arms, rewards_dir, plans.ARMS)
   if missing := sorted(eligible - lengths.keys()):
@@ -137,13 +149,14 @@ async def trace_length(
 
 def table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
   lines = [
-    '| Benchmark | Part | Characters | Items | Arm | Rep | Scored | Positives | Statistic | Value | AUROC matching |',
+    '| Benchmark | Part | Tokens | Items | Arm | Rep | Scored | Positives | Statistic | Value | AUROC matching |',
     '|---|---|--:|--:|---|--:|--:|--:|---|--:|--:|',
   ]
-  lines.extend(
-    f'| {row["benchmark"]} | {row["part"]} | {row["chars_min"]:,}–{row["chars_max"]:,} | {row["items"]} | '
-    f'{row["arm"]} | {row["repetition"]} | {row["scored"]} | {row["positives"]} | {row["statistic"]} | '
-    f'{rounded(row["value"])} | {rounded(row["matching_auroc"])} |'
-    for row in rows
-  )
+  for row in rows:
+    tokens = f'{row["tokens_min"]:,}' + ('+' if row['tokens_max'] is None else f'–{row["tokens_max"]:,}')
+    lines.append(
+      f'| {row["benchmark"]} | {row["part"]} | {tokens} | {row["items"]} | {row["arm"]} | {row["repetition"]} | '
+      f'{row["scored"]} | {row["positives"]} | {row["statistic"]} | {rounded(row["value"])} | '
+      f'{rounded(row["matching_auroc"])} |'
+    )
   return lines
