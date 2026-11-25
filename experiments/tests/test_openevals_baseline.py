@@ -2,6 +2,7 @@ import asyncio
 import re
 import unittest
 from typing import Any, cast
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -295,6 +296,25 @@ class OpenEvalsGroundednessTest(unittest.IsolatedAsyncioTestCase):
     for prompt in prompts:
       self.assertIn('how well LLM output aligns with and is supported by the retrieved context', prompt)
       self.assertIn("<context>\n{'documents': ['Text of d1.', 'Text of d2.']}\n</context>", prompt)
+
+  async def test_a_unit_keeps_its_documents_in_an_explicit_cache_and_sends_only_each_claim(self) -> None:
+    chat = FakeChatModel(verdict(True))
+    cache = SimpleNamespace(name='cachedContents/1', usage_metadata=SimpleNamespace(total_token_count=500))
+    chat.async_client.caches.create = AsyncMock(return_value=cache)
+    chat.async_client.caches.delete = AsyncMock()
+
+    result = await self.metric(chat).compute(
+      search_span('s1', ['d1', 'd2'], stage='retrieved'), ground_truths(claims_truth(*CLAIMS))
+    )
+
+    [cached] = chat.async_client.caches.create.await_args.kwargs['config'].contents.parts
+    self.assertIn("{'documents': ['Text of d1.', 'Text of d2.']}", cached.text)
+    prompts = [prompt_text(call['messages']) for call in chat.calls]
+    self.assertEqual(sorted(prompt.partition('\n')[0] for prompt in prompts), sorted(claim.text for claim in CLAIMS))
+    self.assertEqual({call['options']['cached_content'] for call in chat.calls}, {cache.name})
+    chat.async_client.caches.delete.assert_awaited_once_with(name=cache.name)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['judge_usage']['cache_creation_input_tokens'], 500)
 
   async def test_every_claim_reads_each_document_title_then_its_content(self) -> None:
     chat = FakeChatModel(verdict(True))

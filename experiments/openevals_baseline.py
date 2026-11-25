@@ -19,11 +19,15 @@ Syllo-eval's, and failed units record the same failure classes. AgentEvals judge
 uses the same judge (``agentevals_baseline``).
 """
 
+import logging
+import time
 from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import Any
 
+from google.genai import types
+from google.genai.errors import APIError
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
@@ -40,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictBool
 
 from syllo_eval.evaluation.judge import LlmJudgeResponse, judge_metadata
 from syllo_eval.evaluation.judge.batch import judge_batch
+from syllo_eval.evaluation.judge.prefix import SharedPromptPrefix, shared_prefix_of, shared_prompt_prefix
 from syllo_eval.evaluation.metric_support.agent_outputs import (
   display_text,
   extract_actual_plan,
@@ -55,6 +60,7 @@ from syllo_eval.evaluation.metrics.implementations.rag.contextual_precision_judg
   ContextualPrecisionJudgment,
 )
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge import ContextualRecallJudgment
+from syllo_eval.infrastructure.llm_judge.gemini import _CACHE_TTL
 from syllo_eval.model import GroundTruth, MetricComputationStatus, Span
 from syllo_eval.settings import GeminiJudgeSettings
 
@@ -63,6 +69,8 @@ from baseline_judge import NO_SYLLO_EVAL_JUDGE, BaselineJudge, node_text, record
 from benchmarks.orbitals_claims import CLAIMS_KEY as ORBITALS_CLAIMS_KEY
 from config import Benchmark, JudgeConfig
 from judge import build_chat_model
+
+logger = logging.getLogger(__name__)
 
 OPENEVALS_VERSION = version('openevals')
 # The baseline's metrics, keyed by the names the CLI selects them with.
@@ -119,13 +127,56 @@ class OpenEvalsJudge(BaseChatModel):
     # Another schema would make outputs fail validation as the judge's own failures, so it is refused instead.
     if include_raw or kwargs or not _is_boolean_score(schema):
       raise ValueError('The OpenEvals baseline asks only for the default output of OpenEvals judges.')
-    runnable = self._judge.chat_model.with_structured_output(schema=schema, method='json_schema', include_raw=True)
 
     async def judge(messages: list[dict[str, Any]]) -> dict[str, Any]:
+      chat_model, messages = await self._cached(messages)
+      runnable = chat_model.with_structured_output(schema=schema, method='json_schema', include_raw=True)
       output = await self._judge.generate(runnable, messages, BooleanScore.model_validate)
       return output.model_dump()
 
     return RunnableLambda(judge)
+
+  async def _cached(self, messages: list[dict[str, Any]]) -> tuple[ChatGoogleGenerativeAI, list[dict[str, Any]]]:
+    chat_model = self._judge.chat_model
+    prefix = shared_prefix_of('', messages[0]['content'])
+    if prefix is None or prefix.requests < 2:
+      return chat_model, messages
+    async with prefix.cache_lock:
+      if not prefix.cache_attempted:
+        prefix.cache_attempted = True
+        await _create_cache(chat_model, prefix)
+    if prefix.cache_name is None:
+      return chat_model, messages
+    suffix = messages[0]['content'][len(prefix.user_prefix) :]
+    return chat_model.model_copy(update={'cached_content': prefix.cache_name}), [{**messages[0], 'content': suffix}]
+
+
+async def _create_cache(chat_model: ChatGoogleGenerativeAI, prefix: SharedPromptPrefix) -> None:
+  started = time.monotonic()
+  try:
+    cache = await chat_model.async_client.caches.create(
+      model=chat_model.model,
+      config=types.CreateCachedContentConfig(
+        contents=types.Content(role='user', parts=[types.Part(text=prefix.user_prefix)]), ttl=_CACHE_TTL
+      ),
+    )
+  except Exception as error:
+    if not isinstance(error, APIError) or error.code != 400:
+      logger.warning('Calls sharing a prompt prefix run uncached, the cache could not be created: %s', error)
+  else:
+    prefix.cache_name = cache.name
+    prefix.cache_creation_input_tokens = cache.usage_metadata.total_token_count if cache.usage_metadata else None
+    prefix.cache_close = lambda: _delete_cache(chat_model, prefix)
+  prefix.cache_seconds += time.monotonic() - started
+
+
+async def _delete_cache(chat_model: ChatGoogleGenerativeAI, prefix: SharedPromptPrefix) -> None:
+  started = time.monotonic()
+  try:
+    await chat_model.async_client.caches.delete(name=prefix.cache_name)
+  except Exception as error:
+    logger.warning('Cache %s could not be deleted and expires after %s: %s', prefix.cache_name, _CACHE_TTL, error)
+  prefix.cache_seconds += time.monotonic() - started
 
 
 def _is_boolean_score(schema: object) -> bool:
@@ -222,6 +273,20 @@ class OpenEvalsGoldClaimsGroundedness(GoldClaimsContextualRecall):
       prompt=RAG_GROUNDEDNESS_PROMPT, feedback_key='groundedness', judge=judge
     )
     self._output_token_limit = output_token_limit
+
+  async def _judge_claims_sharing_prefix(
+    self,
+    span: Span,
+    retrieved_items: list[RetrievedItem],
+    claims: list[str],
+    *,
+    prior_responses: Sequence[LlmJudgeResponse] = (),
+  ) -> tuple[
+    tuple[list[LlmJudgeResponse], list[ContextualRecallJudgment]] | MetricComputationResult, SharedPromptPrefix
+  ]:
+    shared = RAG_GROUNDEDNESS_PROMPT.partition('{outputs}')[0].format(context=_documents(retrieved_items))
+    async with shared_prompt_prefix('', shared, len(claims)) as prefix:
+      return await self.judge_claims(span, retrieved_items, claims, prior_responses=prior_responses), prefix
 
   async def judge_claims(
     self,

@@ -271,9 +271,9 @@ built-in prompt v2. The first main pass scored CR with v1, which gave each call 
 claims; v2 aligns CR better with set recall, so every reported CR uses it, and the v1 scores are kept only as a
 record of the change. A unit with at least two claims keeps the first turn in a Gemini explicit
 cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
-call per unit, so they keep their single-turn prompts and no cache. OpenEvals makes one single-turn call per claim, each
-holding all the unit's documents before the claim, and no explicit cache, since OpenEvals creates none: only Gemini's
-implicit caching can serve the repeated documents, and run reports count its hits as cached input tokens.
+call per unit, so they keep their single-turn prompts and no cache. OpenEvals makes one call per claim, its prompt
+holding all the unit's documents before the claim. The prompt is unchanged, but a unit with at least two claims keeps
+the prompt up to the claim in a Gemini explicit cache, as Syllo-eval does, and each call sends the claim after it.
 
 ## Ablations
 
