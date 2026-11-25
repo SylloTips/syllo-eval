@@ -618,13 +618,15 @@ poetry run syllo-exp agentevals --source-run <τ²-bench collection run id> --re
   AgentEvals' trajectory accuracy, which is compared with Plan Correctness. AgentEvals has no retrieval or answer
   metric, so the command refuses a run of another benchmark. The new run's report counts AgentEvals' judge calls and
   tokens as it counts Syllo-eval's.
-- **Run metadata:** the step, configuration, arm `agentevals` and repetition 1, as a judge run carries them.
+- **Run metadata:** the step, configuration, arm `agentevals`, repetition 1 and judge settings (model, temperature and
+  thinking level), as a judge run carries them.
 - **Manifest:** the step is `agentevals:<source run>`, with the new run's id, the configuration, the metric name, the
-  AgentEvals and OpenEvals versions and the failed units per failure class.
+  AgentEvals and OpenEvals versions, the judge settings and the failed units per failure class.
 - **Completion:** as for a judge step: the step completes once no sample is unresolved, a unit failed with an outcome of
   the judge counting as resolved, and the manifest records the unresolved samples. `--retry <run>` takes the latest
   run of the same step and scores its unresolved samples again, in a new run recorded as `<step>:retry-<n>`; a retry
-  that leaves none completes the step, listing every attempt in order.
+  that leaves none completes the step, listing every attempt in order. A retry judges with the settings its run
+  recorded: a run judged with other settings, or with none recorded, is refused.
 - **Requirements and cost:** as for the DeepEval baseline.
 - **Pins:** `pyproject.toml` pins AgentEvals 0.0.9, its latest release, and OpenEvals 0.2.2, whose judge AgentEvals
   calls. Later OpenEvals releases need langchain-core 1.8, above the version the agent stacks are locked to; on the
@@ -650,9 +652,11 @@ poetry run syllo-exp openevals --source-run <collection run id> --retry <run id>
   | τ²-bench | | | | plan adherence (vs PC) |
 
   `--metrics` selects some of them; a metric the run's benchmark lacks is refused.
-- **Run metadata:** the step, configuration, arm `openevals` and repetition 1, as a judge run carries them.
+- **Run metadata:** the step, configuration, arm `openevals`, repetition 1 and judge settings, as for the AgentEvals
+  baseline.
 - **Manifest:** the step is `openevals:<source run>`, followed by `:<metrics>` when `--metrics` selects them, with the
-  new run's id, the configuration, the metric names, the OpenEvals version and the failed units per failure class.
+  new run's id, the configuration, the metric names, the OpenEvals version, the judge settings and the failed units per
+  failure class.
 - **Completion, retries, requirements, cost, pins and offline:** as for the AgentEvals baseline. A run of an ERB or
   WixQA configuration makes one judge call per document of every search and per claim, so `--retry` re-scores only
   the samples a provider error left unresolved.

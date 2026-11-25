@@ -901,7 +901,11 @@ async def _score_with_langchain(
       print(f'{arm}: --retry must name the latest attempt of {base_step}; {latest}', file=sys.stderr)
       return 2
     step = f'{base_step}:retry-{sum(name.startswith(f"{base_step}:retry-") for name in manifest.latest()) + 1}'
-  details: dict[str, Any] = {'source_run_id': str(args.source_run), **versions}
+  details: dict[str, Any] = {
+    'source_run_id': str(args.source_run),
+    **versions,
+    'judge': judge_config.model_dump(include={'model', 'temperature', 'thinking_level'}),
+  }
   run_ids: tuple[UUID, ...] = ()
   try:
     async with open_database(settings) as db_manager, open_openevals_judge(judge_config, judge_settings) as judge:
@@ -912,14 +916,24 @@ async def _score_with_langchain(
       metrics = metrics_for(configuration, judge, judge_config.output_token_limit)
       metric_names = [metric.name for metric in metrics]
       details.update(configuration=configuration.id, metrics=metric_names)
-      sample_ids = await _retry_samples(db_manager, args.retry, args.source_run, metric_names) if args.retry else None
+      sample_ids = (
+        await _retry_samples(db_manager, args.retry, args.source_run, metric_names, judge=details['judge'])
+        if args.retry
+        else None
+      )
       async with build_service(settings, db_manager, metrics=metrics) as service:
         handle = await service.repeat_evaluation(
           source_run_id=args.source_run,
           metrics=metric_names,
           max_concurrent_samples=args.max_concurrent_samples,
           sample_ids=sample_ids,
-          metadata={'step': step, 'configuration': configuration.id, 'arm': arm, 'repetition': 1},
+          metadata={
+            'step': step,
+            'configuration': configuration.id,
+            'arm': arm,
+            'repetition': 1,
+            'judge': details['judge'],
+          },
         )
         run_ids = (handle.run.id,)
         # A crash past this point leaves the step started, with the run it made.
@@ -1131,13 +1145,20 @@ async def _scoped_samples(
 
 
 async def _retry_samples(
-  db_manager: DatabaseManager, judge_run_id: UUID, source_run_id: UUID, metric_names: Sequence[str]
+  db_manager: DatabaseManager,
+  judge_run_id: UUID,
+  source_run_id: UUID,
+  metric_names: Sequence[str],
+  *,
+  judge: Mapping[str, Any] | None = None,
 ) -> list[UUID]:
   async with UnitOfWork(db_manager) as uow:
     judge_run = await uow.evaluation_runs.get_by_id_or_raise(judge_run_id)
     judge_metric_names = await uow.evaluation_run_metrics.list_metrics(judge_run_id)
   if judge_run.source_run_id != source_run_id or sorted(judge_metric_names) != sorted(metric_names):
     raise ValueError(f'run {judge_run_id} is not a run of this step')
+  if judge is not None and (recorded := (judge_run.metadata or {}).get('judge')) != judge:
+    raise ValueError(f'run {judge_run_id} was judged with {recorded}, not with {judge}')
   unresolved = await _unresolved_samples(db_manager, judge_run_id, metric_names)
   if not unresolved:
     raise ValueError(f'run {judge_run_id} has no unresolved samples')
