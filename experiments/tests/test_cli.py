@@ -5,13 +5,13 @@ import os
 import shutil
 import tempfile
 import unittest
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
+from collections.abc import AsyncIterator, Sequence
+from contextlib import ExitStack, asynccontextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import psycopg
@@ -20,6 +20,7 @@ import yaml
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import Dataset, EvaluationStatus, MetricComputationStatus
 
+from agentevals_baseline import AGENTEVALS_VERSION
 from benchmarks.common import ImportOutcome
 from cli import DEFAULT_MANIFEST, main
 from config import CONFIG_DIR
@@ -28,6 +29,7 @@ from indexing.embedding import EmbeddingError, Embeddings
 from indexing.pipeline import EmbedOutcome, LoadOutcome
 from indexing.vector_store import VectorStoreError
 from manifest import Manifest, StepStatus
+from openevals_baseline import OPENEVALS_VERSION, openevals_metrics
 
 
 # Patching cli.httpx.Client patches the shared httpx module, so keep the real class for the mock client.
@@ -660,6 +662,359 @@ class DeepEvalCliTest(unittest.TestCase):
   def test_rejects_scoring_fewer_than_one_sample_at_a_time(self) -> None:
     with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
       self._deepeval('--max-concurrent-samples', '0')
+
+
+class _LangChainCliTestCase(unittest.TestCase):
+  """Runs a LangChain baseline command with the database, judge, source run and service replaced by fakes."""
+
+  COMMAND = ''
+  METRIC = ''
+  # The source run's configuration, as _collection_run reads it.
+  configuration: SimpleNamespace
+
+  def setUp(self) -> None:
+    self._directory = tempfile.TemporaryDirectory()
+    self.manifest = Path(self._directory.name) / 'manifest.jsonl'
+    self.source_run, self.run_id = uuid4(), uuid4()
+    self.judge = object()
+    self.service = MagicMock()
+    self.service.__aenter__.return_value = self.service
+    self.service.repeat_evaluation = AsyncMock()
+    self.build_service = MagicMock(return_value=self.service)
+    self.db_manager = MagicMock()
+    self.db_manager.health_check = AsyncMock(return_value=True)
+    # What the new run persisted, as the CLI reads it back: its computations and its unresolved samples.
+    self.computations: list[SimpleNamespace] = []
+    self.unresolved: list[UUID] = []
+    # The samples that a retry of the step's latest run scores again.
+    self.retried = [uuid4()]
+    self.unresolved_samples = AsyncMock()
+    self.retry_samples = AsyncMock()
+    self.environment = {'GOOGLE_API_KEY': 'test-key'}
+
+  def tearDown(self) -> None:
+    self._directory.cleanup()
+
+  def _finishing(self, status: EvaluationStatus) -> None:
+    run = SimpleNamespace(id=self.run_id, status=status)
+    self.service.repeat_evaluation.return_value = SimpleNamespace(run=run, execute=AsyncMock(return_value=run))
+
+  def _computation(self, status: MetricComputationStatus, failure: str | None = None) -> None:
+    metadata: dict[str, Any] = {'failure': failure} if failure else {'judge_calls': 1}
+    self.computations.append(SimpleNamespace(metric=self.METRIC, status=status, metadata=metadata))
+
+  def _command(self, *args: str, patches: Sequence[Any] = ()) -> tuple[int, str]:
+    @asynccontextmanager
+    async def fake_database(settings: Any) -> AsyncIterator[object]:
+      yield self.db_manager
+
+    @asynccontextmanager
+    async def fake_judge(config: Any, settings: Any) -> AsyncIterator[object]:
+      yield self.judge
+
+    uow = MagicMock()
+    uow.__aenter__.return_value = uow
+    # Only the new run holds the baseline's computations.
+    uow.metric_computations.list_by_evaluation_run = AsyncMock(
+      side_effect=lambda run_id: self.computations if run_id == self.run_id else []
+    )
+    self.unresolved_samples = AsyncMock(return_value=self.unresolved)
+    self.retry_samples = AsyncMock(return_value=self.retried)
+    collection_run = AsyncMock(return_value=SimpleNamespace(configuration=self.configuration))
+    with ExitStack() as stack:
+      stack.enter_context(patch.dict(os.environ, self.environment))
+      for patcher in (
+        patch('cli.load_environment'),
+        patch('cli.open_database', fake_database),
+        patch('cli.open_openevals_judge', fake_judge),
+        patch('cli._collection_run', collection_run),
+        patch('cli._unresolved_samples', self.unresolved_samples),
+        patch('cli._retry_samples', self.retry_samples),
+        patch('cli.build_service', self.build_service),
+        patch('cli.UnitOfWork', return_value=uow),
+        *patches,
+      ):
+        stack.enter_context(patcher)
+      # GeminiJudgeSettings reads the key under either name.
+      for name in ('GOOGLE_API_KEY', 'GEMINI_API_KEY'):
+        if name not in self.environment:
+          os.environ.pop(name, None)
+      status, output = _run(
+        [self.COMMAND, '--source-run', str(self.source_run), '--manifest', str(self.manifest), *args]
+      )
+    if collection_run.called:
+      self.assertEqual(collection_run.call_args.args[2], self.source_run)
+    return status, output
+
+
+class AgentEvalsCliTest(_LangChainCliTestCase):
+  COMMAND = 'agentevals'
+  METRIC = 'agentevals_trajectory_accuracy'
+
+  def setUp(self) -> None:
+    super().setUp()
+    self.metric = SimpleNamespace(name=self.METRIC)
+    self.configuration = SimpleNamespace(id='tau2/llm-agent/gpt/trial-1', benchmark='tau2')
+    self.step = f'agentevals:{self.source_run}'
+
+  def _agentevals(self, *args: str) -> tuple[int, str]:
+    metric_class = MagicMock(return_value=self.metric)
+    status, output = self._command(*args, patches=[patch('cli.AgentEvalsTrajectoryAccuracy', metric_class)])
+    if metric_class.called:
+      self.assertEqual(metric_class.call_args.kwargs, {'judge': self.judge, 'output_token_limit': 65536})
+    return status, output
+
+  def test_repeats_the_source_run_with_trajectory_accuracy_and_records_the_run(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    self._computation(MetricComputationStatus.COMPLETED)
+    self._computation(MetricComputationStatus.FAILED, 'invalid_output')
+
+    status, output = self._agentevals('--max-concurrent-samples', '1')
+
+    self.assertEqual(status, 0, output)
+    self.service.repeat_evaluation.assert_awaited_once_with(
+      source_run_id=self.source_run,
+      metrics=[self.METRIC],
+      max_concurrent_samples=1,
+      sample_ids=None,
+      metadata={'step': self.step, 'configuration': self.configuration.id, 'arm': 'agentevals', 'repetition': 1},
+    )
+    self.assertEqual(self.build_service.call_args.kwargs['metrics'], [self.metric])
+    self.unresolved_samples.assert_awaited_once_with(self.db_manager, self.run_id, [self.METRIC])
+    records = Manifest(self.manifest).records()
+    self.assertEqual([record.step for record in records], [self.step] * 2)
+    self.assertEqual([record.status for record in records], [StepStatus.STARTED, StepStatus.COMPLETED])
+    self.assertEqual([record.run_ids for record in records], [(self.run_id,)] * 2)
+    # A judge outcome counts as a wrong decision, so a unit failed with one leaves its sample resolved.
+    self.assertEqual(
+      records[-1].details,
+      {
+        'source_run_id': str(self.source_run),
+        'agentevals_version': AGENTEVALS_VERSION,
+        'openevals_version': OPENEVALS_VERSION,
+        'configuration': self.configuration.id,
+        'metrics': [self.METRIC],
+        'run_status': 'COMPLETED',
+        'failed_units': {self.METRIC: {'invalid_output': 1}},
+        'unresolved': [],
+      },
+    )
+    self.assertIn(str(self.run_id), output)
+    self.assertIn(f'{self.METRIC} failed units: 1 invalid_output', output)
+
+  def test_a_run_of_another_benchmark_is_refused_before_scoring(self) -> None:
+    self.configuration = SimpleNamespace(id='erb/react/gpt', benchmark='erb')
+
+    status, output = self._agentevals()
+
+    self.assertEqual(status, 1)
+    self.assertIn('agentevals: failed: ValueError', output)
+    self.build_service.assert_not_called()
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual((record.step, record.status), (self.step, StepStatus.FAILED))
+
+  def test_unresolved_samples_fail_the_step_and_name_the_run_to_retry(self) -> None:
+    self._finishing(EvaluationStatus.PARTIALLY_COMPLETED)
+    self._computation(MetricComputationStatus.FAILED, 'timeout')
+    self._computation(MetricComputationStatus.FAILED, 'provider')
+    self.unresolved = [uuid4()]
+
+    status, output = self._agentevals()
+
+    self.assertEqual(status, 1)
+    self.assertIn(f'1 samples are unresolved; score them again with --retry {self.run_id}', output)
+    record = Manifest(self.manifest).latest()[self.step]
+    self.assertEqual((record.status, record.run_ids), (StepStatus.FAILED, (self.run_id,)))
+    self.assertEqual(record.details['run_status'], 'PARTIALLY_COMPLETED')
+    self.assertEqual(record.details['unresolved'], [str(self.unresolved[0])])
+    self.assertEqual(record.details['failed_units'], {self.METRIC: {'provider': 1, 'timeout': 1}})
+
+  def test_a_retry_scores_the_unresolved_samples_again_and_completes_the_step(self) -> None:
+    first = uuid4()
+    Manifest(self.manifest).append(self.step, StepStatus.FAILED, run_ids=(first,), details={'unresolved': ['s']})
+    self._finishing(EvaluationStatus.COMPLETED)
+
+    status, output = self._agentevals('--retry', str(first))
+
+    self.assertEqual(status, 0, output)
+    self.retry_samples.assert_awaited_once_with(self.db_manager, first, self.source_run, [self.METRIC])
+    retry_step = f'{self.step}:retry-1'
+    kwargs = self.service.repeat_evaluation.call_args.kwargs
+    self.assertEqual((kwargs['sample_ids'], kwargs['metadata']['step']), (self.retried, retry_step))
+    latest = Manifest(self.manifest).latest()
+    self.assertEqual((latest[retry_step].status, latest[retry_step].run_ids), (StepStatus.COMPLETED, (self.run_id,)))
+    # Its runs are every attempt in order: for each sample, the latest run that scored it holds its results.
+    self.assertEqual(
+      (latest[self.step].status, latest[self.step].run_ids), (StepStatus.COMPLETED, (first, self.run_id))
+    )
+    self.assertEqual(latest[self.step].details['unresolved'], [])
+
+  def test_a_retry_must_name_the_latest_attempt_of_the_step(self) -> None:
+    for earlier in ((), (uuid4(),)):
+      with self.subTest(earlier=earlier):
+        self.manifest = Path(self._directory.name) / f'manifest-{len(earlier)}.jsonl'
+        if earlier:
+          Manifest(self.manifest).append(self.step, StepStatus.FAILED, run_ids=earlier)
+        errors = io.StringIO()
+
+        with redirect_stderr(errors):
+          status, _ = self._agentevals('--retry', str(uuid4()))
+
+        self.assertEqual(status, 2)
+        self.assertIn(f'--retry must name the latest attempt of {self.step}', errors.getvalue())
+        self.db_manager.health_check.assert_not_awaited()
+
+  def test_a_failure_after_the_run_started_keeps_the_run_and_details(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    handle = self.service.repeat_evaluation.return_value
+    handle.execute.side_effect = psycopg.OperationalError('server closed the connection')
+
+    status, _ = self._agentevals()
+
+    self.assertEqual(status, 1)
+    started, failed = Manifest(self.manifest).records()
+    self.assertEqual((started.status, failed.status), (StepStatus.STARTED, StepStatus.FAILED))
+    self.assertEqual(failed.run_ids, (self.run_id,))
+    self.assertEqual(failed.details['metrics'], [self.METRIC])
+    self.assertEqual(failed.details['error'], 'OperationalError: server closed the connection')
+
+  def test_an_unreachable_database_is_recorded_as_failed(self) -> None:
+    self.db_manager.health_check.return_value = False
+
+    status, output = self._agentevals()
+
+    self.assertEqual(status, 1)
+    self.assertIn('agentevals: failed: ConnectionError: Database health check failed', output)
+    self.build_service.assert_not_called()
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual(record.status, StepStatus.FAILED)
+
+  def test_without_a_judge_key_nothing_runs(self) -> None:
+    self.environment = {}
+    errors = io.StringIO()
+
+    with redirect_stderr(errors):
+      status, _ = self._agentevals()
+
+    self.assertEqual(status, 2)
+    self.assertIn('GOOGLE_API_KEY', errors.getvalue())
+    self.db_manager.health_check.assert_not_awaited()
+    self.assertFalse(self.manifest.exists())
+
+  def test_rejects_scoring_fewer_than_one_sample_at_a_time(self) -> None:
+    with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+      self._agentevals('--max-concurrent-samples', '0')
+
+
+class OpenEvalsCliTest(_LangChainCliTestCase):
+  COMMAND = 'openevals'
+  METRIC = 'openevals_correctness'
+  ERB_METRICS = ['openevals_retrieval_relevance', 'openevals_groundedness_gold_claims', 'openevals_correctness']
+
+  def setUp(self) -> None:
+    super().setUp()
+    self.configuration = SimpleNamespace(id='erb/react/gpt', benchmark='erb')
+
+  def _openevals(self, *args: str) -> tuple[int, str]:
+    factory = MagicMock(wraps=openevals_metrics)
+    status, output = self._command(*args, patches=[patch('cli.openevals_metrics', factory)])
+    if factory.called:
+      self.assertEqual(factory.call_args.args, (self.configuration.benchmark, self.judge))
+      self.assertEqual(factory.call_args.kwargs, {'output_token_limit': 65536})
+    return status, output
+
+  def _scored_metrics(self) -> list[str]:
+    return [metric.name for metric in self.build_service.call_args.kwargs['metrics']]
+
+  def test_scores_every_metric_of_the_run_benchmark_by_default_and_records_the_run(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    self._computation(MetricComputationStatus.FAILED, 'invalid_output')
+
+    status, output = self._openevals('--max-concurrent-samples', '1')
+
+    self.assertEqual(status, 0, output)
+    step = f'openevals:{self.source_run}'
+    self.service.repeat_evaluation.assert_awaited_once_with(
+      source_run_id=self.source_run,
+      metrics=self.ERB_METRICS,
+      max_concurrent_samples=1,
+      sample_ids=None,
+      metadata={'step': step, 'configuration': self.configuration.id, 'arm': 'openevals', 'repetition': 1},
+    )
+    self.assertEqual(self._scored_metrics(), self.ERB_METRICS)
+    records = Manifest(self.manifest).records()
+    self.assertEqual(
+      [(record.step, record.status) for record in records], [(step, StepStatus.STARTED), (step, StepStatus.COMPLETED)]
+    )
+    self.assertEqual(
+      records[-1].details,
+      {
+        'source_run_id': str(self.source_run),
+        'openevals_version': OPENEVALS_VERSION,
+        'configuration': self.configuration.id,
+        'metrics': self.ERB_METRICS,
+        'run_status': 'COMPLETED',
+        'failed_units': {self.METRIC: {'invalid_output': 1}},
+        'unresolved': [],
+      },
+    )
+
+  def test_each_benchmark_gets_a_metric_for_each_judge_metric_of_its_main_arm(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    expected = {
+      'wixqa': ['openevals_retrieval_relevance', 'openevals_groundedness_orbitals_claims', 'openevals_correctness'],
+      'tau2': ['openevals_plan_adherence'],
+    }
+    for benchmark, metrics in expected.items():
+      with self.subTest(benchmark=benchmark):
+        self.configuration = SimpleNamespace(id=f'{benchmark}/agent/gpt', benchmark=benchmark)
+
+        status, output = self._openevals()
+
+        self.assertEqual(status, 0, output)
+        self.assertEqual(self._scored_metrics(), metrics)
+
+  def test_selected_metrics_name_the_step(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+
+    status, output = self._openevals('--metrics', 'answer', 'relevance')
+
+    self.assertEqual(status, 0, output)
+    self.assertEqual(self._scored_metrics(), ['openevals_retrieval_relevance', 'openevals_correctness'])
+    [step] = Manifest(self.manifest).latest()
+    self.assertEqual(step, f'openevals:{self.source_run}:relevance+answer')
+
+  def test_a_metric_the_run_benchmark_lacks_is_refused_before_scoring(self) -> None:
+    status, output = self._openevals('--metrics', 'plan')
+
+    self.assertEqual(status, 1)
+    self.assertIn('openevals: failed: ValueError: OpenEvals has no plan metric for erb', output)
+    self.build_service.assert_not_called()
+    [record] = Manifest(self.manifest).records()
+    self.assertEqual((record.step, record.status), (f'openevals:{self.source_run}:plan', StepStatus.FAILED))
+
+  def test_unresolved_samples_fail_the_step(self) -> None:
+    self._finishing(EvaluationStatus.COMPLETED)
+    self._computation(MetricComputationStatus.FAILED, 'provider')
+    self.unresolved = [uuid4()]
+
+    status, output = self._openevals()
+
+    self.assertEqual(status, 1)
+    self.assertIn(f'score them again with --retry {self.run_id}', output)
+    self.unresolved_samples.assert_awaited_once_with(self.db_manager, self.run_id, self.ERB_METRICS)
+    record = Manifest(self.manifest).latest()[f'openevals:{self.source_run}']
+    self.assertEqual((record.status, record.details['unresolved']), (StepStatus.FAILED, [str(self.unresolved[0])]))
+
+  def test_without_a_judge_key_nothing_runs(self) -> None:
+    self.environment = {}
+
+    with redirect_stderr(io.StringIO()):
+      status, _ = self._openevals()
+
+    self.assertEqual(status, 2)
+    self.db_manager.health_check.assert_not_awaited()
+    self.assertFalse(self.manifest.exists())
 
 
 if __name__ == '__main__':

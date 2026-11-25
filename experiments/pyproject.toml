@@ -8,8 +8,10 @@ readme = "README.md"
 # The modules live directly in this folder, which is the import root.
 packages = [
   {include = "ablation_metrics.py"},
+  {include = "agentevals_baseline.py"},
   {include = "analysis"},
   {include = "agents"},
+  {include = "baseline_judge.py"},
   {include = "benchmarks"},
   {include = "cli.py"},
   {include = "collect.py"},
@@ -20,6 +22,7 @@ packages = [
   {include = "search_tool"},
   {include = "judge.py"},
   {include = "manifest.py"},
+  {include = "openevals_baseline.py"},
   {include = "run_outputs.py"},
   {include = "service.py"},
 ]
@@ -42,6 +45,10 @@ pyarrow = "^21.0.0"
 numpy = "^2.5.3"
 pyyaml = "^6.0"
 deepeval = "4.2.6"
+# LangChain's AgentEvals, and the OpenEvals judge it calls. OpenEvals 0.2.3 and later need langchain-core 1.8, above
+# the version the agent stacks are locked to.
+agentevals = "0.0.9"
+openevals = "0.2.2"
 qdrant-client = "^1.19.1"
 fastmcp = ">=2.12.5,<3"
 # Open Deep Research

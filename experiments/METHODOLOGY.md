@@ -248,7 +248,8 @@ and a simulated customer take turns until one of them ends the conversation.
     pilot) gets it without a call. Within a pass, a question and document therefore get one verdict for every
     configuration, as pooled relevance judgments do, while each retest judges them again. A reused verdict reports the
     original call's usage and latency, so costs do not depend on the order of the runs.
-- DeepEval and the ablations receive the same units with the same document text.
+- DeepEval, OpenEvals and the ablations receive the same units with the same document text, and AgentEvals the same
+  plan units.
 - **Answers (AC):** one unit per question.
 - **Plans (PC):** one unit per τ²-bench trajectory. The executed steps are its tool calls, with each call's arguments
   as the step input and its result as the step output. The plan judge also sees each step's status.
@@ -270,7 +271,9 @@ built-in prompt v2. The first main pass scored CR with v1, which gave each call 
 claims; v2 aligns CR better with set recall, so every reported CR uses it, and the v1 scores are kept only as a
 record of the change. A unit with at least two claims keeps the first turn in a Gemini explicit
 cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
-call per unit, so they keep their single-turn prompts and no cache.
+call per unit, so they keep their single-turn prompts and no cache. OpenEvals makes one single-turn call per claim, each
+holding all the unit's documents before the claim, and no explicit cache, since OpenEvals creates none: only Gemini's
+implicit caching can serve the repeated documents, and run reports count its hits as cached input tokens.
 
 ## Ablations
 
@@ -343,6 +346,109 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   reached the judge's output limit of 65,536 tokens.
 - **Cost:** every DeepEval call is recorded as a judge call with the usage the provider reported. Run reports therefore
   count DeepEval's calls, tokens, cached tokens and latency as they count Syllo-eval's, failed units included.
+
+## AgentEvals baseline
+
+LangChain's AgentEvals 0.0.9, pinned in `pyproject.toml` with the OpenEvals 0.2.2 judge it calls, is called directly
+on each plan unit (`agentevals_baseline.py`): the unit becomes a trajectory and a reference trajectory, the message
+lists AgentEvals takes, graded by one AgentEvals evaluator. AgentEvals evaluates trajectories only: it has no retrieval
+or answer metric, so relevance, fact support and answers have no AgentEvals arm. Its metric subclasses Plan
+Correctness and replaces only how it judges, so units, skip rules and result metadata stay those of Plan Correctness.
+
+- **Evaluator:** the trajectory LLM-as-judge with AgentEvals' reference prompt,
+  `TRAJECTORY_ACCURACY_PROMPT_WITH_REFERENCE`, and its default output: a reasoning and a boolean score. A trajectory it
+  finds accurate scores 1.0, and is accepted; any other scores 0.0.
+- **Rubric:** each framework's own, so the two arms grade different things.
+  - AgentEvals calls a trajectory accurate when it "makes logical sense between steps", "shows clear progression", "is
+    relatively efficient, though it does not need to be perfectly efficient" and "is semantically equivalent to the
+    provided reference trajectory".
+  - Plan Correctness grades whether the plan reaches the reference's outcome. It accepts reordered independent steps
+    and extra read-only lookups, and does not penalize inefficiency, which its rubric leaves to a separate metric.
+  - The rubrics diverge most on the 45 tasks whose reference lists only the write calls: a trajectory that follows the
+    retail policy also authenticates the user and looks up the orders, steps that the reference does not list.
+- **Trajectory:** the OpenAI-style messages AgentEvals takes, holding what Plan Correctness reads:
+  - the request, τ²-bench's user scenario, as the user's message;
+  - each executed step as an assistant message that calls the step's tool, with the step's input as its arguments,
+    followed by a tool message with the tool's result as the agent read it, when the trace observed one. A failed
+    call's result is the error the agent read: an OpenAI message has no place for a step's status. The tool-call id is
+    the one the agent's model gave, or else the step's id.
+  - The agent's replies to the customer and the customer's messages are left out, as Plan Correctness leaves them out.
+- **Reference trajectory:** the expected plan, one assistant message per step that calls its tool with the step's
+  parameters as arguments, without results. τ²-bench's plans carry no rubric or notes, so both arms see the same
+  request, steps and expected plan.
+- **Arguments:** each call's arguments, and any result that is not text, are JSON as Plan Correctness renders them,
+  with sorted keys and non-ASCII characters kept. LangChain, through which AgentEvals reads the messages, parses and
+  re-serializes the arguments, and keeps both. A step whose input or parameters are not a JSON object is refused
+  rather than guessed into one.
+- **Judge:**
+  - The model, temperature, thinking level, timeout, concurrency limit and rate-limit retries are the shared judge's.
+  - OpenEvals sends the formatted prompt as the only message, with the JSON schema of its default output as
+    structured output, which LangChain sends to Gemini with its default method, `json_schema`. No output limit is set,
+    as AgentEvals sets none.
+  - An output that does not parse or validate, such as a score that is not a boolean, fails the unit as
+    `invalid_output` at once. OpenEvals never asks again, and neither does the DeepEval judge, where Syllo-eval's judge
+    client asks up to `output_attempts` times.
+- **Evaluators left out:**
+  - the trajectory judge without a reference, which grades no reference plan;
+  - the graph-trajectory evaluators: they read LangGraph thread histories, which τ²-bench's agent does not have, and
+    the benchmark has no reference graph trajectories;
+  - the trajectory match evaluators: deterministic checks of the kind of τ²-bench's action check, which the plan
+    analysis takes from τ²-bench itself.
+- **Cost:** every AgentEvals call is recorded as a judge call, as DeepEval's are.
+
+## OpenEvals baseline
+
+LangChain's OpenEvals 0.2.2, pinned in `pyproject.toml`, is called directly on the units of the main pass
+(`openevals_baseline.py`), with one metric for each judge metric of the main arm. OpenEvals ships LLM-as-judge prompts
+that each return one verdict per call. Each metric subclasses the Syllo-eval metric it is compared with and replaces
+only how it judges, so units, skip rules and result metadata stay those of the compared metric.
+
+- **Prompts:** each metric uses one of OpenEvals' prebuilt prompts, verbatim, with the default output of its
+  LLM-as-judge: a reasoning and a boolean score.
+- **Relevance:** `RAG_RETRIEVAL_RELEVANCE_PROMPT`, compared with Contextual Precision.
+  - Each document of a ranking is judged in its own call, with the search request as the inputs and the document as
+    the retrieved context. OpenEvals' example passes all the documents of a retrieval as one context, for one verdict.
+    One document per call gives a verdict per document, which Contextual Precision scores with its own formula, and
+    which RQ1's per-document decisions need.
+  - The prompt reads no reference: unlike Syllo-eval and DeepEval, it never sees the expected answer.
+- **Fact support:** OpenEvals has no recall evaluator. `RAG_GROUNDEDNESS_PROMPT` decides whether an output is supported
+  by the retrieved context. Each claim of a unit is judged as the output, in its own call, against all the unit's
+  retrieved documents, and Contextual Recall scores the verdicts as attributions. It runs over the ERB gold claims and
+  over the WixQA Orbitals claims, as the main pass does.
+- **Answers:** `CORRECTNESS_PROMPT`, with the question as the inputs, the answer as the outputs and the expected answer
+  as the reference outputs. A correct answer scores 1.0, any other 0.0.
+- **Plans:** `PLAN_ADHERENCE_PROMPT`, with the request as the inputs, the executed steps as the outputs and the expected
+  plan as the plan, both rendered as Plan Correctness renders them. Steps that follow the plan score 1.0, any others
+  0.0.
+  - The rubric grades obedience to a plan: every planned step executed, in the plan's order, and no major action
+    beyond it. It is stricter than Plan Correctness, which accepts reordered independent steps and extra read-only
+    lookups, and it diverges most on the 45 tasks whose reference lists only the write calls.
+  - The prompt asks whether an agent "followed its declared plan" and says it evaluates "plan obedience only, not
+    whether the agent succeeded at the task". With the expected plan as the plan, it works as an LLM version of
+    τ²-bench's action check rather than as a plan-correctness judge: a deviating success, which fails the action
+    check, is expected to fail it too. OpenEvals' reference-trajectory judge is the one the AgentEvals baseline runs.
+- **Documents:** each document is its title, a blank line and its content, as in the DeepEval arm. The context goes to
+  OpenEvals as its examples give it, `{'documents': [...]}`, which its prompts render with Python's `str()`. Each
+  document therefore reaches the judge as a Python string literal, as in the DeepEval arm's lists of documents: line
+  breaks, tabs, backslashes and characters that are not printable, such as non-breaking spaces, are escaped, and so
+  are quotes when a document holds both kinds.
+- **Judge:** OpenEvals' judge is AgentEvals' (`OpenEvalsJudge`), with the settings and failure rules of the AgentEvals
+  baseline.
+- **Calls:** the calls of a unit run concurrently, under the judge's concurrency limit. The first failure cancels the
+  others and fails the unit, counting the usage of every call that returned, as in Syllo-eval. Identical requests are
+  not merged, since OpenEvals reuses no verdicts.
+- **Analyses:**
+  - RQ1: relevance gives one decision per document and fact support one per claim, as Contextual Precision and Recall
+    do; answers and plans give one score per unit, 1.0 or 0.0.
+  - RQ2: relevance verdicts are not pooled. The main arm reuses one verdict per question and document across
+    configurations (Evaluation units), while OpenEvals judges each configuration's documents anew.
+  - RQ3 lists: each relevance call sees one document, so its decisions, like Syllo-eval's per-document ones, cannot
+    depend on the list's length or the item's position, and a list of n documents costs n calls, where OpenEvals'
+    example judges a retrieval in one call. Fact support reads the whole list in each claim call, so it does test
+    length.
+- **Evaluators left out:** the helpfulness and groundedness of answers, which no compared metric grades, and OpenEvals'
+  copy of AgentEvals' trajectory evaluators, which the AgentEvals baseline runs.
+- **Cost:** every OpenEvals call is recorded as a judge call, as DeepEval's are.
 
 ## Aggregation
 
@@ -429,14 +535,18 @@ scoring of the retrieval metrics; answers get G-Eval's score.
   score to the configuration scores (*Aggregation*): a judge failure says nothing about the agent.
 - Excluding these units from the RQ1 decisions too is reported only as a sensitivity analysis.
 - The experiment metrics record why a unit failed in `metadata['failure']`, the same way in every arm (main pass,
-  retests and ablations):
+  retests, ablations and baselines):
   - `misaligned`, `truncated`, `invalid_output`, `context_overflow` and `timeout` are outcomes of the judge, handled
     the same way in every arm;
   - `invalid_output` is an output that does not parse or validate, or a refusal; an output that does not parse because
     it reached its token limit is `truncated`;
-  - the judge client asks again while an output does not parse or validate, up to `output_attempts` (3) in
-    `configs/models.yaml`, so `invalid_output` means every attempt failed; refusals and outputs at their token limit
-    are not asked again, and each attempt's usage counts with its call;
+  - Syllo-eval's judge client (main pass, retests and ablations) asks again while an output does not parse or
+    validate, up to `output_attempts` (3) in `configs/models.yaml`, so there `invalid_output` means every attempt
+    failed; refusals and outputs at their token limit are not asked again, and each attempt's usage counts with its
+    call;
+  - the DeepEval, AgentEvals and OpenEvals judges never ask again, so there `invalid_output` means one failed attempt.
+    OpenEvals' relevance and fact support make one call per document or claim, and a single invalid output fails the
+    whole unit: a search unit of ten documents fails about ten times as often as a unit judged in one call;
   - `provider` and `trace_load` are infrastructure failures: the unit is re-run in every arm, not counted.
   - A judge run with such a failure, or with a unit that failed without a recorded class, is incomplete: the manifest
     records its step as failed, with the failed units per metric and class.

@@ -8,7 +8,7 @@ import logging
 import signal
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -17,6 +17,7 @@ from uuid import UUID
 import httpx
 import psycopg
 
+from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.evaluation.metrics.implementations.rag.contextual_recall_judge import BaseContextualRecallJudgeMetric
 from syllo_eval.infrastructure import DatabaseManager
 from syllo_eval.infrastructure.arize import PhoenixClient
@@ -34,6 +35,7 @@ from syllo_eval.model import (
 from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
+from agentevals_baseline import AGENTEVALS_VERSION, AgentEvalsTrajectoryAccuracy
 from analysis import attribution, known_order, plans, power, rankings, relevance, retest, scores
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
@@ -55,6 +57,8 @@ from indexing.embedding import AzureFoundrySettings, Embedder, EmbeddingError, o
 from indexing.vector_store import QdrantSettings, VectorStore, VectorStoreError, open_vector_store
 from judge import ARMS, JUDGE_OUTCOMES, judge_metrics, open_judge_client
 from manifest import Manifest, StepStatus
+from openevals_baseline import METRIC_KEYS as OPENEVALS_METRIC_KEYS
+from openevals_baseline import OPENEVALS_VERSION, OpenEvalsJudge, open_openevals_judge, openevals_metrics
 from run_outputs import RunOutputs
 from service import build_service, open_database
 
@@ -206,6 +210,56 @@ def build_parser() -> argparse.ArgumentParser:
   deepeval.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
   deepeval.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
 
+  agentevals = commands.add_parser(
+    'agentevals',
+    help='Score the stored plans of a τ²-bench run with the AgentEvals baseline.',
+    description=(
+      'Repeat a τ²-bench collection run on its stored traces with AgentEvals trajectory accuracy, judged by the '
+      'shared judge model.'
+    ),
+  )
+  agentevals.add_argument(
+    '--source-run', type=UUID, required=True, help='τ²-bench collection run whose stored traces AgentEvals scores.'
+  )
+  agentevals.add_argument(
+    '--max-concurrent-samples',
+    type=_positive_int,
+    help='Samples scored at once (default: EVALUATION_MAX_CONCURRENT_SAMPLES, or 1); cost runs use 1.',
+  )
+  agentevals.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  agentevals.add_argument(
+    '--retry', type=UUID, metavar='RUN', help='Score again the unresolved samples of the latest run of the same step.'
+  )
+  agentevals.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
+
+  openevals = commands.add_parser(
+    'openevals',
+    help='Score the stored traces of a run with the OpenEvals baseline.',
+    description=(
+      'Repeat a collection run on its stored traces with the OpenEvals metrics of its benchmark, one for each judge '
+      'metric of the main arm, judged by the shared judge model.'
+    ),
+  )
+  openevals.add_argument(
+    '--source-run', type=UUID, required=True, help='Collection run whose stored traces OpenEvals scores.'
+  )
+  openevals.add_argument(
+    '--metrics',
+    nargs='+',
+    choices=OPENEVALS_METRIC_KEYS,
+    help="Metrics to run (default: every metric of the run's benchmark).",
+  )
+  openevals.add_argument(
+    '--max-concurrent-samples',
+    type=_positive_int,
+    help='Samples scored at once (default: EVALUATION_MAX_CONCURRENT_SAMPLES, or 1); cost runs use 1.',
+  )
+  openevals.add_argument('--config-dir', type=Path, default=CONFIG_DIR, help='Folder with the YAML configs.')
+  openevals.add_argument(
+    '--retry', type=UUID, metavar='RUN', help='Score again the unresolved samples of the latest run of the same step.'
+  )
+  openevals.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST, help='Manifest JSONL file.')
+
   judge = commands.add_parser(
     'judge',
     help='Score the stored traces of a collection run with the metrics of one experiment arm.',
@@ -322,6 +376,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     return _serve_search(args)
   elif args.command == 'collect':
     return asyncio.run(_collect(args))
+  elif args.command == 'agentevals':
+    return asyncio.run(_score_with_agentevals(args))
+  elif args.command == 'openevals':
+    return asyncio.run(_score_with_openevals(args))
   elif args.command == 'deepeval':
     return asyncio.run(_score_with_deepeval(args))
   elif args.command == 'judge':
@@ -743,6 +801,119 @@ async def _score_with_deepeval(args: argparse.Namespace) -> int:
   if unscored:
     print(f'deepeval: failed: {unscored} units failed without a judge outcome and must run again')
   return 0 if complete else 1
+
+
+async def _score_with_agentevals(args: argparse.Namespace) -> int:
+  """Repeat a τ²-bench collection run with AgentEvals trajectory accuracy; the manifest records the step and its run."""
+
+  def metrics_for(
+    configuration: Configuration, judge: OpenEvalsJudge, output_token_limit: int
+  ) -> list[EvaluationMetric]:
+    if configuration.benchmark != 'tau2':
+      raise ValueError(f'AgentEvals scores τ²-bench plans; run {args.source_run} is {configuration.id}')
+    return [AgentEvalsTrajectoryAccuracy(judge=judge, output_token_limit=output_token_limit)]
+
+  versions = {'agentevals_version': AGENTEVALS_VERSION, 'openevals_version': OPENEVALS_VERSION}
+  return await _score_with_langchain(
+    args, arm='agentevals', step=f'agentevals:{args.source_run}', versions=versions, metrics_for=metrics_for
+  )
+
+
+async def _score_with_openevals(args: argparse.Namespace) -> int:
+  """Repeat a collection run with the OpenEvals metrics of its benchmark; the manifest records the step and its run."""
+  keys = [key for key in OPENEVALS_METRIC_KEYS if key in (args.metrics or ())]
+
+  def metrics_for(
+    configuration: Configuration, judge: OpenEvalsJudge, output_token_limit: int
+  ) -> list[EvaluationMetric]:
+    metrics = openevals_metrics(configuration.benchmark, judge, output_token_limit=output_token_limit)
+    if missing := [key for key in keys if key not in metrics]:
+      raise ValueError(f'OpenEvals has no {", ".join(missing)} metric for {configuration.benchmark}')
+    return [metric for key, metric in metrics.items() if not keys or key in keys]
+
+  # Without --metrics, the step scores every metric of the run's benchmark.
+  step = f'openevals:{args.source_run}' + (f':{"+".join(keys)}' if keys else '')
+  versions = {'openevals_version': OPENEVALS_VERSION}
+  return await _score_with_langchain(args, arm='openevals', step=step, versions=versions, metrics_for=metrics_for)
+
+
+async def _score_with_langchain(
+  args: argparse.Namespace,
+  *,
+  arm: str,
+  step: str,
+  versions: Mapping[str, str],
+  metrics_for: Callable[[Configuration, OpenEvalsJudge, int], list[EvaluationMetric]],
+) -> int:
+  """Repeat a collection run with the metrics of a LangChain baseline, judged as OpenEvals calls the shared judge.
+
+  The step completes as a judge step does: once no sample is unresolved. ``--retry`` scores again the unresolved
+  samples of the step's latest attempt, and a retry that resolves them all completes the step.
+  """
+  config = load_config(args.config_dir)
+  judge_config = config.models.judge
+  load_environment()
+  settings, judge_settings = Settings(), GeminiJudgeSettings()
+  if judge_settings.api_key is None:
+    print('The judge needs GOOGLE_API_KEY.', file=sys.stderr)
+    return 2
+  manifest = Manifest(args.manifest)
+  base_step = step
+  chain = _step_chain(manifest, base_step)
+  if args.retry:
+    # As in `judge`: retrying the latest attempt leaves every other sample's latest attempt resolved.
+    if not chain or args.retry != chain[-1]:
+      latest = f'its latest attempt is {chain[-1]}' if chain else 'it has no run yet'
+      print(f'{arm}: --retry must name the latest attempt of {base_step}; {latest}', file=sys.stderr)
+      return 2
+    step = f'{base_step}:retry-{sum(name.startswith(f"{base_step}:retry-") for name in manifest.latest()) + 1}'
+  details: dict[str, Any] = {'source_run_id': str(args.source_run), **versions}
+  run_ids: tuple[UUID, ...] = ()
+  try:
+    async with open_database(settings) as db_manager, open_openevals_judge(judge_config, judge_settings) as judge:
+      # The service's own check raises a bare RuntimeError; this one is recorded like any other database error.
+      if not await db_manager.health_check():
+        raise DatabaseConnectionError('Database health check failed')
+      configuration = (await _collection_run(db_manager, config, args.source_run)).configuration
+      metrics = metrics_for(configuration, judge, judge_config.output_token_limit)
+      metric_names = [metric.name for metric in metrics]
+      details.update(configuration=configuration.id, metrics=metric_names)
+      sample_ids = await _retry_samples(db_manager, args.retry, args.source_run, metric_names) if args.retry else None
+      async with build_service(settings, db_manager, metrics=metrics) as service:
+        handle = await service.repeat_evaluation(
+          source_run_id=args.source_run,
+          metrics=metric_names,
+          max_concurrent_samples=args.max_concurrent_samples,
+          sample_ids=sample_ids,
+          metadata={'step': step, 'configuration': configuration.id, 'arm': arm, 'repetition': 1},
+        )
+        run_ids = (handle.run.id,)
+        # A crash past this point leaves the step started, with the run it made.
+        manifest.append(step, StepStatus.STARTED, run_ids=run_ids, details=details)
+        run = await handle.execute()
+      failed_units = await _failed_units(db_manager, run.id)
+      unresolved = await _unresolved_samples(db_manager, run.id, metric_names)
+  except (ValueError, PersistenceError, psycopg.Error) as error:
+    _record_failure(manifest, step, arm, error, run_ids=run_ids, details=details)
+    return 1
+  details.update(run_status=run.status.value, failed_units=failed_units, unresolved=[str(s) for s in unresolved])
+  manifest.append(step, StepStatus.FAILED if unresolved else StepStatus.COMPLETED, run_ids=run_ids, details=details)
+  if args.retry and not unresolved:
+    # The step completes once a retry resolves what its earlier runs left; its runs are every attempt in order.
+    base = manifest.latest().get(base_step)
+    manifest.append(
+      base_step,
+      StepStatus.COMPLETED,
+      run_ids=tuple(dict.fromkeys((*chain, *run_ids))),
+      details={**(base.details if base else {}), 'unresolved': []},
+    )
+  scored = ', '.join(metric_names)
+  print(f'{arm}: run {run.id} {run.status.value}, scoring {scored} on the traces of {args.source_run}')
+  for metric_name, kinds in failed_units.items():
+    print(f'  {metric_name} failed units: ' + ', '.join(f'{count} {kind}' for kind, count in kinds.items()))
+  if unresolved:
+    print(f'{arm}: failed: {len(unresolved)} samples are unresolved; score them again with --retry {run.id}')
+  return 1 if unresolved else 0
 
 
 async def _judge(args: argparse.Namespace) -> int:
