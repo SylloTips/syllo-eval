@@ -70,15 +70,16 @@ def judge_failure_result(
     metadata={
       **(metadata or {}),
       'failure': classify_judge_error(error, max_output_tokens).value,
-      **judge_metadata(
-        responses,
-        failed_usages=[
-          aggregate_usage([getattr(item, 'usage', None), getattr(item, 'retry_usage', None)])
-          for item in failed_errors or (error,)
-        ],
-      ),
+      **judge_metadata(responses, failed_usages=[_unreported_usage(item) for item in failed_errors or (error,)]),
     },
   )
+
+
+def _unreported_usage(error: BaseException) -> dict[str, int] | None:
+  if getattr(error, 'usage_reported', False):
+    return None
+  setattr(error, 'usage_reported', True)
+  return aggregate_usage([getattr(error, 'usage', None), getattr(error, 'retry_usage', None)])
 
 
 def _causes(error: BaseException) -> Iterator[BaseException]:

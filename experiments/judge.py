@@ -12,7 +12,7 @@ its original usage. ``judge_metrics`` binds each experiment arm's metrics to it.
 import asyncio
 import hashlib
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,66 +84,101 @@ class _SharedCall:
   charged: bool = False
 
 
+JudgeCall = Callable[[], Coroutine[Any, Any, LlmJudgeResponse[Any]]]
+
+
+async def shared_call(key: Any, run: JudgeCall) -> LlmJudgeResponse[Any]:
+  calls: dict[Any, _SharedCall] | None = sample_cache.get(None)
+  if calls is None:
+    return await run()
+  call = calls.get(key)
+  if call is None or call.task.cancelling():
+    call = calls[key] = _SharedCall(asyncio.create_task(run()))
+    call.task.add_done_callback(
+      lambda done: (done.cancelled() or done.exception()) and calls.get(key) is call and calls.pop(key)
+    )
+  call.waiters += 1
+  try:
+    response = await asyncio.shield(call.task)
+  except asyncio.CancelledError:
+    call.waiters -= 1
+    if not call.waiters:
+      call.task.cancel()
+      await asyncio.gather(call.task, return_exceptions=True)
+    raise
+  if not call.charged:
+    call.charged = True
+    return response
+  usage = None if response.usage is None else dict.fromkeys(response.usage, 0)
+  return response.model_copy(update={'usage': usage, 'retry_usage': None, 'latency_seconds': 0.0})
+
+
 class ReusingJudgeClient:
   def __init__(self, inner: LlmJudgeClient):
     self._inner = inner
 
   async def judge[Payload: BaseModel](self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
-    calls: dict[Any, _SharedCall] | None = sample_cache.get(None)
-    if calls is None:
-      return await self._inner.judge(request)
     model = request.response_model
     fields = request.model_dump_json(exclude={'response_model'})
     key = ('judge', hashlib.sha256(f'{model.__module__}.{model.__qualname__}\0{fields}'.encode()).hexdigest())
-    call = calls.get(key)
-    if call is None or call.task.cancelling():
-      call = calls[key] = _SharedCall(asyncio.create_task(self._inner.judge(request)))
-      call.task.add_done_callback(
-        lambda done: (done.cancelled() or done.exception()) and calls.get(key) is call and calls.pop(key)
-      )
-    call.waiters += 1
-    try:
-      response = await asyncio.shield(call.task)
-    except asyncio.CancelledError:
-      call.waiters -= 1
-      if not call.waiters:
-        call.task.cancel()
-        await asyncio.gather(call.task, return_exceptions=True)
-      raise
-    if not call.charged:
-      call.charged = True
-      return response
-    usage = None if response.usage is None else dict.fromkeys(response.usage, 0)
-    return response.model_copy(update={'usage': usage, 'retry_usage': None, 'latency_seconds': 0.0})
+    return await shared_call(key, lambda: self._inner.judge(request))
 
   async def aclose(self) -> None:
     await self._inner.aclose()
 
 
+class VerdictStore:
+  def __init__(self, path: Path, scope: str):
+    self._path = path
+    self._scope = scope
+    self._db: sqlite3.Connection | None = None
+
+  def _connection(self) -> sqlite3.Connection:
+    if self._db is None:
+      self._path.parent.mkdir(parents=True, exist_ok=True)
+      db = sqlite3.connect(self._path, isolation_level=None)
+      try:
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('CREATE TABLE IF NOT EXISTS verdicts (key TEXT PRIMARY KEY, response TEXT NOT NULL)')
+      except BaseException:
+        db.close()
+        raise
+      self._db = db
+    return self._db
+
+  async def judged(
+    self, fields: str, response_type: type[LlmJudgeResponse[Any]], run: JudgeCall
+  ) -> LlmJudgeResponse[Any]:
+    db = self._connection()
+    key = hashlib.sha256(f'{self._scope}\0{fields}'.encode()).hexdigest()
+    select = 'SELECT response FROM verdicts WHERE key = ?'
+    row = db.execute(select, (key,)).fetchone()
+    if row is not None:
+      return response_type.model_validate_json(row[0])
+    response = await run()
+    db.execute('INSERT OR IGNORE INTO verdicts VALUES (?, ?)', (key, response.model_dump_json()))
+    stored = response_type.model_validate_json(db.execute(select, (key,)).fetchone()[0])
+    return response.model_copy(update={'output': stored.output})
+
+  def close(self) -> None:
+    if self._db is not None:
+      self._db.close()
+
+
 class StoredPrecisionJudgeClient:
   def __init__(self, inner: LlmJudgeClient, path: Path, scope: str):
     self._inner = inner
-    self._scope = scope
-    path.parent.mkdir(parents=True, exist_ok=True)
-    self._db = sqlite3.connect(path, isolation_level=None)
-    self._db.execute('PRAGMA journal_mode=WAL')
-    self._db.execute('CREATE TABLE IF NOT EXISTS verdicts (key TEXT PRIMARY KEY, response TEXT NOT NULL)')
+    self._store = VerdictStore(path, scope)
 
   async def judge[Payload: BaseModel](self, request: LlmJudgeRequest[Payload]) -> LlmJudgeResponse[Payload]:
     if request.response_model is not ContextualPrecisionItemJudgePayload:
       return await self._inner.judge(request)
     fields = request.model_dump_json(exclude={'response_model'})
-    key = hashlib.sha256(f'{self._scope}\0{fields}'.encode()).hexdigest()
-    select = 'SELECT response FROM verdicts WHERE key = ?'
-    row = self._db.execute(select, (key,)).fetchone()
-    if row is None:
-      response = await self._inner.judge(request)
-      self._db.execute('INSERT OR IGNORE INTO verdicts VALUES (?, ?)', (key, response.model_dump_json()))
-      row = self._db.execute(select, (key,)).fetchone()
-    return LlmJudgeResponse[request.response_model].model_validate_json(row[0])  # type: ignore[name-defined]
+    response_type = LlmJudgeResponse[request.response_model]  # type: ignore[name-defined]
+    return await self._store.judged(fields, response_type, lambda: self._inner.judge(request))
 
   async def aclose(self) -> None:
-    self._db.close()
+    self._store.close()
     await self._inner.aclose()
 
 

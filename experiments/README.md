@@ -21,7 +21,9 @@ The ablations and the DeepEval, AgentEvals and OpenEvals baselines also rely on 
 - the built-in v1 prompt templates that `prompts/` edits (v2 for Plan and Answer Correctness): a new built-in
   prompt version needs new ablation prompts;
 - `LangChainLlmJudgeClient._usage` and `GeminiLlmJudgeClient._retry_delay_seconds`, with which the baselines' judge
-  (`baseline_judge.py`) reads usage and retries rate limits as the library's judge client does.
+  (`baseline_judge.py`) reads usage and retries rate limits as the library's judge client does;
+- `shared_prompt_prefix`, contextual recall's `_judge_claims_sharing_prefix` and the Gemini judge's `_CACHE_TTL`, with
+  which OpenEvals' fact support keeps a unit's documents in an explicit cache as Syllo-eval's contextual recall does.
 
 Collection wraps the library's `PhoenixClient` to archive the traces it fetches (`collect.py`). The τ²-bench,
 smolagents, Open Deep Research, deep agent and Dify adapters read the flattened records that client returns,
@@ -77,7 +79,7 @@ expected output of each step.
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `analysis/` | the results tables, computed from the stored judge runs (see Analysis) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
-| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP verdicts |
+| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP and OpenEvals relevance verdicts |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup

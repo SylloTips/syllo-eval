@@ -1,7 +1,10 @@
 import asyncio
 import re
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any, cast
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -24,6 +27,7 @@ from benchmarks.common import Claim
 from benchmarks.erb import CLAIMS_KEY as ERB_CLAIMS_KEY
 from benchmarks.orbitals_claims import CLAIMS_KEY as ORBITALS_CLAIMS_KEY
 from config import Benchmark, load_config
+from judge import VerdictStore
 from judge_fakes import FakeChatModel, Unparsed, prompt_text, rate_limit
 from metric_fakes import (
   EXPECTED_ANSWER,
@@ -230,6 +234,28 @@ class OpenEvalsRetrievalRelevanceTest(unittest.IsolatedAsyncioTestCase):
     # OpenEvals' relevance reads no reference.
     self.assertNotIn(EXPECTED_ANSWER, prompt)
 
+  async def test_a_stored_verdict_is_reused_by_a_later_run_with_its_original_usage(self) -> None:
+    chat = FakeChatModel(lambda prompt: verdict(True))
+    with tempfile.TemporaryDirectory() as folder:
+      verdicts = VerdictStore(Path(folder) / 'verdicts.sqlite', 'scope')
+      judge = OpenEvalsJudge(
+        cast(ChatGoogleGenerativeAI, chat),
+        temperature=0.0,
+        max_concurrent_requests=2,
+        max_attempts=3,
+        verdicts=verdicts,
+      )
+      metric = OpenEvalsRetrievalRelevance(
+        judge=judge, output_token_limit=OUTPUT_LIMIT, target_span_types=(SEARCH_SPAN_TYPE,)
+      )
+      first = await metric.compute(search_span('s1', ['d1', 'd2']), ground_truths(truth()))
+      later = await metric.compute(search_span('s2', ['d2', 'd3']), ground_truths(truth()))
+      verdicts.close()
+
+    self.assertEqual(sorted(judged_document(prompt_text(call['messages'])) for call in chat.calls), ['d1', 'd2', 'd3'])
+    assert first.metadata is not None and later.metadata is not None
+    self.assertEqual(first.metadata['judge_usage'], later.metadata['judge_usage'])
+
   async def test_a_document_is_its_title_then_its_content_as_a_python_string(self) -> None:
     chat = FakeChatModel(verdict(True))
     items = [RetrievalItem(id='d1', title='Budget policy', content='Dana approves budgets.')]
@@ -295,6 +321,27 @@ class OpenEvalsGroundednessTest(unittest.IsolatedAsyncioTestCase):
     for prompt in prompts:
       self.assertIn('how well LLM output aligns with and is supported by the retrieved context', prompt)
       self.assertIn("<context>\n{'documents': ['Text of d1.', 'Text of d2.']}\n</context>", prompt)
+
+  async def test_a_unit_keeps_its_documents_in_an_explicit_cache_and_sends_only_each_claim(self) -> None:
+    chat = FakeChatModel(verdict(True))
+    cache = SimpleNamespace(name='cachedContents/1', usage_metadata=SimpleNamespace(total_token_count=500))
+    chat.async_client.caches.create = AsyncMock(return_value=cache)
+    chat.async_client.caches.delete = AsyncMock()
+
+    result = await self.metric(chat).compute(
+      search_span('s1', ['d1', 'd2'], stage='retrieved'), ground_truths(claims_truth(*CLAIMS))
+    )
+
+    create_call = chat.async_client.caches.create.await_args
+    assert create_call is not None
+    [cached] = create_call.kwargs['config'].contents.parts
+    self.assertIn("{'documents': ['Text of d1.', 'Text of d2.']}", cached.text)
+    prompts = [prompt_text(call['messages']) for call in chat.calls]
+    self.assertEqual(sorted(prompt.partition('\n')[0] for prompt in prompts), sorted(claim.text for claim in CLAIMS))
+    self.assertEqual({call['options']['cached_content'] for call in chat.calls}, {cache.name})
+    chat.async_client.caches.delete.assert_awaited_once_with(name=cache.name)
+    assert result.metadata is not None
+    self.assertEqual(result.metadata['judge_usage']['cache_creation_input_tokens'], 500)
 
   async def test_every_claim_reads_each_document_title_then_its_content(self) -> None:
     chat = FakeChatModel(verdict(True))

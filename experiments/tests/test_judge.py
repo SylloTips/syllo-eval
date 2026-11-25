@@ -235,7 +235,7 @@ class StoredPrecisionJudgeClientTest(unittest.IsolatedAsyncioTestCase):
       class _SlowerJudge:
         async def judge(self, request: LlmJudgeRequest) -> LlmJudgeResponse:
           await first.judge(request)
-          return verdict(False)
+          return verdict(False).model_copy(update={'usage': {'input_tokens': 100}})
 
         async def aclose(self) -> None:
           await first.aclose()
@@ -244,7 +244,7 @@ class StoredPrecisionJudgeClientTest(unittest.IsolatedAsyncioTestCase):
       response = await second.judge(precision)
       await second.aclose()
 
-    self.assertEqual(response, verdict(True))
+    self.assertEqual((response.output, response.usage), (verdict(True).output, {'input_tokens': 100}))
 
 
 class ReusedCallsAndPromptCacheTest(unittest.IsolatedAsyncioTestCase):

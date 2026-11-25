@@ -240,14 +240,16 @@ and a simulated customer take turns until one of them ends the conversation.
   rank order. The search span carries the user question. The labels are per question, so a search for part of the
   question cannot reach an NDCG@10 of 1.
   - A document that several searches of a question returned gets the same CP request in each of them. The shared
-    judge calls the model once per distinct request of a sample and gives the repeats its verdict, reporting no tokens
-    for them, so costs count each distinct request once; the report's judge call counts include the repeats.
+    judge calls the model once per distinct request of a sample and gives the repeats its verdict, or its failure,
+    reporting no tokens for them, so costs count each distinct request once; the report's judge call counts include
+    the repeats.
   - The main arm's judge step also reuses CP verdicts across runs. It stores each per-document verdict in
     `outputs/judge_verdicts.sqlite`, keyed by the request, the judge's model, temperature and thinking level, and the
     repetition, so a later run of the same repetition (another configuration, a retry, or the full pass after the
     pilot) gets it without a call. Within a pass, a question and document therefore get one verdict for every
     configuration, as pooled relevance judgments do, while each retest judges them again. A reused verdict reports the
-    original call's usage and latency, so costs do not depend on the order of the runs.
+    original call's usage and latency, so costs do not depend on the order of the runs. Two runs that miss the same
+    verdict at once both call the judge; each reports its own call and takes the verdict stored first.
 - DeepEval, OpenEvals and the ablations receive the same units with the same document text, and AgentEvals the same
   plan units.
 - **Answers (AC):** one unit per question.
@@ -271,9 +273,9 @@ built-in prompt v2. The first main pass scored CR with v1, which gave each call 
 claims; v2 aligns CR better with set recall, so every reported CR uses it, and the v1 scores are kept only as a
 record of the change. A unit with at least two claims keeps the first turn in a Gemini explicit
 cache for the duration of its calls, as the library does with every Gemini judge. The ablations and DeepEval make one
-call per unit, so they keep their single-turn prompts and no cache. OpenEvals makes one single-turn call per claim, each
-holding all the unit's documents before the claim, and no explicit cache, since OpenEvals creates none: only Gemini's
-implicit caching can serve the repeated documents, and run reports count its hits as cached input tokens.
+call per unit, so they keep their single-turn prompts and no cache. OpenEvals makes one call per claim, its prompt
+holding all the unit's documents before the claim. The prompt is unchanged, but a unit with at least two claims keeps
+the prompt up to the claim in a Gemini explicit cache, as Syllo-eval does, and each call sends the claim after it.
 
 ## Ablations
 
@@ -435,13 +437,15 @@ only how it judges, so units, skip rules and result metadata stay those of the c
 - **Judge:** OpenEvals' judge is AgentEvals' (`OpenEvalsJudge`), with the settings and failure rules of the AgentEvals
   baseline.
 - **Calls:** the calls of a unit run concurrently, under the judge's concurrency limit. The first failure cancels the
-  others and fails the unit, counting the usage of every call that returned, as in Syllo-eval. Identical requests are
-  not merged, since OpenEvals reuses no verdicts.
+  others and fails the unit, counting the usage of every call that returned, as in Syllo-eval. Relevance reuses
+  verdicts as the main arm reuses its CP verdicts (Units): an identical request, the same question and document, is
+  judged once per sample, and its verdict is stored in `outputs/openevals_verdicts.sqlite` for the other
+  configurations' runs, keyed by the request and the judge's model, temperature and thinking level.
 - **Analyses:**
   - RQ1: relevance gives one decision per document and fact support one per claim, as Contextual Precision and Recall
     do; answers and plans give one score per unit, 1.0 or 0.0.
-  - RQ2: relevance verdicts are not pooled. The main arm reuses one verdict per question and document across
-    configurations (Evaluation units), while OpenEvals judges each configuration's documents anew.
+  - RQ2: relevance verdicts are pooled as the main arm's: one verdict per question and document across
+    configurations (Evaluation units).
   - RQ3 lists: each relevance call sees one document, so its decisions, like Syllo-eval's per-document ones, cannot
     depend on the list's length or the item's position, and a list of n documents costs n calls, where OpenEvals'
     example judges a retrieval in one call. Fact support reads the whole list in each claim call, so it does test

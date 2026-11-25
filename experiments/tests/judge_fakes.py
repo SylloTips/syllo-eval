@@ -35,6 +35,7 @@ class FakeChatModel:
     self.calls: list[dict[str, Any]] = []
     self.load = {'in_flight': 0, 'peak': 0}
     self.async_client = MagicMock(aclose=AsyncMock())
+    self.async_client.caches.create = AsyncMock(side_effect=ClientError(400, {}))
 
   def model_copy(self, *, update: dict[str, Any]) -> 'FakeChatModel':
     copy = FakeChatModel.__new__(FakeChatModel)
