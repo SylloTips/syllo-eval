@@ -676,7 +676,7 @@ class _LangChainCliTestCase(unittest.TestCase):
     self._directory = tempfile.TemporaryDirectory()
     self.manifest = Path(self._directory.name) / 'manifest.jsonl'
     self.source_run, self.run_id = uuid4(), uuid4()
-    self.judge = object()
+    self.judge = SimpleNamespace(verdicts=None)
     self.service = MagicMock()
     self.service.__aenter__.return_value = self.service
     self.service.repeat_evaluation = AsyncMock()
@@ -709,7 +709,7 @@ class _LangChainCliTestCase(unittest.TestCase):
       yield self.db_manager
 
     @asynccontextmanager
-    async def fake_judge(config: Any, settings: Any) -> AsyncIterator[object]:
+    async def fake_judge(config: Any, settings: Any, verdict_store: Path | None = None) -> AsyncIterator[object]:
       yield self.judge
 
     uow = MagicMock()

@@ -79,7 +79,7 @@ expected output of each step.
 | `docker-compose.yml`, `Dockerfile` | the campaign environment (see Setup) |
 | `analysis/` | the results tables, computed from the stored judge runs (see Analysis) |
 | `tests/` | tests on synthetic data; `ImportBenchmarkTest` and `QdrantServerTest` also write to the configured database and Qdrant (see Verification) |
-| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP verdicts |
+| `outputs/` | gitignored: manifest, raw trace exports, τ²-bench simulations and rewards, computations, annotation packets, stored CP and OpenEvals relevance verdicts |
 | `data/` | gitignored: benchmark downloads and search indexes |
 
 ## Setup

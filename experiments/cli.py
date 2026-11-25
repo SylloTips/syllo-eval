@@ -904,7 +904,14 @@ async def _score_with_langchain(
   details: dict[str, Any] = {'source_run_id': str(args.source_run), **versions}
   run_ids: tuple[UUID, ...] = ()
   try:
-    async with open_database(settings) as db_manager, open_openevals_judge(judge_config, judge_settings) as judge:
+    async with (
+      open_database(settings) as db_manager,
+      open_openevals_judge(
+        judge_config,
+        judge_settings,
+        verdict_store=DEFAULT_OUTPUTS / 'openevals_verdicts.sqlite' if arm == 'openevals' else None,
+      ) as judge,
+    ):
       # The service's own check raises a bare RuntimeError; this one is recorded like any other database error.
       if not await db_manager.health_check():
         raise DatabaseConnectionError('Database health check failed')

@@ -24,6 +24,7 @@ import time
 from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any
 
 from google.genai import types
@@ -68,7 +69,7 @@ from ablation_metrics import SEARCH_SPAN_TYPE, GoldClaimsContextualRecall
 from baseline_judge import NO_SYLLO_EVAL_JUDGE, BaselineJudge, node_text, recorded_judge_calls
 from benchmarks.orbitals_claims import CLAIMS_KEY as ORBITALS_CLAIMS_KEY
 from config import Benchmark, JudgeConfig
-from judge import build_chat_model
+from judge import VerdictStore, build_chat_model, shared_call
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ class OpenEvalsJudge(BaseChatModel):
   """
 
   _judge: BaselineJudge = PrivateAttr()
+  _verdicts: VerdictStore | None = PrivateAttr()
 
   def __init__(
     self,
@@ -105,6 +107,7 @@ class OpenEvalsJudge(BaseChatModel):
     temperature: float,
     max_concurrent_requests: int,
     max_attempts: int,
+    verdicts: VerdictStore | None = None,
   ):
     super().__init__()
     self._judge = BaselineJudge(
@@ -113,6 +116,11 @@ class OpenEvalsJudge(BaseChatModel):
       max_concurrent_requests=max_concurrent_requests,
       max_attempts=max_attempts,
     )
+    self._verdicts = verdicts
+
+  @property
+  def verdicts(self) -> VerdictStore | None:
+    return self._verdicts
 
   @property
   def _llm_type(self) -> str:
@@ -234,6 +242,7 @@ class OpenEvalsRetrievalRelevance(ContextualPrecisionDocumentJudgeMetric):
       prompt=RAG_RETRIEVAL_RELEVANCE_PROMPT, feedback_key='retrieval_relevance', judge=judge
     )
     self._output_token_limit = output_token_limit
+    self._verdicts = judge.verdicts
 
   async def judge_items(
     self, span: Span, ground_truth: GroundTruth, rankings: list[list[RetrievedItem]]
@@ -241,7 +250,7 @@ class OpenEvalsRetrievalRelevance(ContextualPrecisionDocumentJudgeMetric):
     ranked_items = [(rank, item) for items in rankings for rank, item in enumerate(items, start=1)]
     request = span.semantics.request or '<empty>'
     responses, failure = await judge_batch(
-      (judged(self._evaluator, inputs=request, context=_documents([item])) for _, item in ranked_items),
+      (self._judged(request, item) for _, item in ranked_items),
       max_output_tokens=self._output_token_limit,
     )
     if failure is not None:
@@ -255,6 +264,17 @@ class OpenEvalsRetrievalRelevance(ContextualPrecisionDocumentJudgeMetric):
       )
       for (rank, item), response in zip(ranked_items, responses)
     ]
+
+  async def _judged(self, request: str, item: RetrievedItem) -> LlmJudgeResponse[Any]:
+    context = _documents([item])
+    prompt = RAG_RETRIEVAL_RELEVANCE_PROMPT.format(inputs=request, context=context)
+
+    def run() -> Coroutine[Any, Any, LlmJudgeResponse[Any]]:
+      return judged(self._evaluator, inputs=request, context=context)
+
+    verdicts = self._verdicts
+    stored = run if verdicts is None else lambda: verdicts.judged(prompt, LlmJudgeResponse[BooleanScore], run)
+    return await shared_call(('openevals', prompt), stored)
 
 
 class OpenEvalsGoldClaimsGroundedness(GoldClaimsContextualRecall):
@@ -394,15 +414,23 @@ def openevals_metrics(
 
 
 @asynccontextmanager
-async def open_openevals_judge(config: JudgeConfig, settings: GeminiJudgeSettings) -> AsyncIterator[OpenEvalsJudge]:
-  """Yield the shared judge as OpenEvals calls it: the model, temperature, concurrency and retries of ``config``."""
+async def open_openevals_judge(
+  config: JudgeConfig, settings: GeminiJudgeSettings, verdict_store: Path | None = None
+) -> AsyncIterator[OpenEvalsJudge]:
+  """Yield the shared judge as OpenEvals calls it: the model, temperature, concurrency and retries of ``config``.
+  With ``verdict_store``, relevance verdicts are reused across runs, as the main arm reuses its CP verdicts."""
   chat_model = build_chat_model(config, settings)
+  scope = config.model_dump_json(include={'model', 'temperature', 'thinking_level'})
+  verdicts = None if verdict_store is None else VerdictStore(verdict_store, scope)
   try:
     yield OpenEvalsJudge(
       chat_model,
       temperature=config.temperature,
       max_concurrent_requests=config.max_concurrent_requests,
       max_attempts=config.max_retries,
+      verdicts=verdicts,
     )
   finally:
+    if verdicts is not None:
+      verdicts.close()
     await chat_model.async_client.aclose()

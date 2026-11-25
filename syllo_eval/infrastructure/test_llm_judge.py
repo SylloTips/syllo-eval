@@ -25,6 +25,7 @@ from syllo_eval.infrastructure.exceptions import (
   DataMappingError,
   ExternalServiceError,
   InfrastructureError,
+  JudgeOutputError,
 )
 from syllo_eval.infrastructure.llm_judge.gemini import GeminiLlmJudgeClient
 from syllo_eval.infrastructure.llm_judge.openai import OpenAILlmJudgeClient
@@ -345,6 +346,14 @@ class TestGeminiLlmJudgeClient(unittest.IsolatedAsyncioTestCase):
     metadata = judge_failure_result(raised.exception, []).metadata
     assert metadata is not None
     self.assertEqual(metadata['failure'], JudgeFailureKind.INVALID_OUTPUT)
+
+  def test_a_failure_shared_by_two_computations_is_classified_for_both_and_charged_once(self) -> None:
+    error = JudgeOutputError('gemini', 'cut off', usage={'input_tokens': 10, 'output_tokens': 100})
+
+    first, second = (judge_failure_result(error, [], max_output_tokens=100).metadata or {} for _ in range(2))
+
+    self.assertEqual((first['failure'], second['failure']), (JudgeFailureKind.TRUNCATED, JudgeFailureKind.TRUNCATED))
+    self.assertEqual((first['judge_usage']['output_tokens'], second.get('judge_usage')), (100, None))
 
   def test_gemini_disables_sdk_retries(self) -> None:
     with patch('syllo_eval.infrastructure.llm_judge.gemini.ChatGoogleGenerativeAI') as chat_model_cls:
