@@ -13,7 +13,7 @@ from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import GroundTruthKey, MetricComputationStatus
 
 from ablation_metrics import PlanCorrectnessWT
-from analysis.runs import finished_runs, judge_runs, load_attempts, require_judge_outcome, rounded
+from analysis.runs import JudgeRun, finished_runs, judge_runs, load_attempts, require_judge_outcome, rounded
 from config import Configuration
 
 ARMS = ('main', 'wt')
@@ -84,9 +84,9 @@ def read_rewards(path: Path) -> dict[UUID, tuple[bool, bool]]:
 
 async def _source(
   db_manager: DatabaseManager, run_id: UUID, rewards_dir: Path, expected: Mapping[UUID, list[tuple[str, str]]]
-) -> dict[UUID, tuple[float, bool, bool]]:
+) -> dict[UUID, tuple[float, bool, bool, str]]:
   rewards = read_rewards(rewards_dir / str(run_id) / 'rewards.jsonl')
-  found: dict[UUID, tuple[float, bool, bool]] = {}
+  found: dict[UUID, tuple[float, bool, bool, str]] = {}
   async with UnitOfWork(db_manager) as uow:
     for run_sample in await uow.evaluation_run_samples.list_by_evaluation_run(run_id):
       if run_sample.trace_id is None or run_sample.sample_id not in expected:
@@ -95,16 +95,25 @@ async def _source(
       planning = root.semantics.planning
       executed = [call(step.operation, step.input) for step in (planning.executed_steps if planning else None) or ()]
       rewarded, follows = rewards[run_sample.sample_id]
-      found[run_sample.sample_id] = (matching(executed, expected[run_sample.sample_id]), rewarded, follows)
+      found[run_sample.sample_id] = (
+        matching(executed, expected[run_sample.sample_id]),
+        rewarded,
+        follows,
+        run_sample.trace_id,
+      )
   return found
 
 
-async def plans(
-  db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str], rewards_dir: Path
-) -> list[dict[str, Any]]:
+async def trajectories(
+  db_manager: DatabaseManager,
+  configurations: Sequence[Configuration],
+  arms: Collection[str],
+  rewards_dir: Path,
+  cohort_arms: Collection[str],
+) -> tuple[list[tuple[JudgeRun, list[tuple[str, Trajectory]]]], set[str]]:
   runs = [
     run
-    for run in judge_runs(await finished_runs(db_manager), configurations, arms)
+    for run in judge_runs(await finished_runs(db_manager), configurations, {*arms, *cohort_arms})
     if run.configuration.benchmark == 'tau2'
   ]
   async with UnitOfWork(db_manager) as uow:
@@ -113,19 +122,33 @@ async def plans(
     row.sample_id: [call(step['operation'], step.get('parameters')) for step in row.ground_truth_value['expected_plan']]
     for row in rows
   }
-  sources: dict[UUID, dict[UUID, tuple[float, bool, bool]]] = {}
-  groups: defaultdict[tuple[str, str, int], list[Trajectory]] = defaultdict(list)
+  sources: dict[UUID, dict[UUID, tuple[float, bool, bool, str]]] = {}
   for run in runs:
     if run.source_run_id not in sources:
       sources[run.source_run_id] = await _source(db_manager, run.source_run_id, rewards_dir, expected)
+  found: list[tuple[JudgeRun, list[tuple[str, Trajectory]]]] = []
+  for run in runs:
+    if run.arm not in arms:
+      continue
+    scored: list[tuple[str, Trajectory]] = []
     computations, sample_ids = await load_attempts(db_manager, run.run_ids, PC_METRICS)
     for computation in computations:
       if computation.status is MetricComputationStatus.FAILED:
         require_judge_outcome(computation)
       if computation.status is not MetricComputationStatus.COMPLETED or computation.score is None:
         continue
-      score, rewarded, follows = sources[run.source_run_id][sample_ids[computation.evaluation_run_sample_id]]
-      trajectory = Trajectory(computation.score, score, rewarded, follows)
+      score, rewarded, follows, trace = sources[run.source_run_id][sample_ids[computation.evaluation_run_sample_id]]
+      scored.append((trace, Trajectory(computation.score, score, rewarded, follows)))
+    found.append((run, scored))
+  return found, {trace for source in sources.values() for *_, trace in source.values()}
+
+
+async def plans(
+  db_manager: DatabaseManager, configurations: Sequence[Configuration], arms: Collection[str], rewards_dir: Path
+) -> list[dict[str, Any]]:
+  groups: defaultdict[tuple[str, str, int], list[Trajectory]] = defaultdict(list)
+  for run, scored in (await trajectories(db_manager, configurations, arms, rewards_dir, arms))[0]:
+    for _, trajectory in scored:
       for model in (run.configuration.model, 'pooled'):
         groups[(model, run.arm, run.repetition)].append(trajectory)
   return [

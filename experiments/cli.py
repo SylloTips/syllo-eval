@@ -36,7 +36,18 @@ from syllo_eval.settings import GeminiJudgeSettings, OrbitalsSettings, Settings
 
 import collect
 from agentevals_baseline import AGENTEVALS_VERSION, AgentEvalsTrajectoryAccuracy
-from analysis import answers, attribution, known_order, plans, power, rankings, relevance, retest, scores
+from analysis import (
+  answers,
+  attribution,
+  known_order,
+  plans,
+  power,
+  rankings,
+  relevance,
+  retest,
+  scores,
+  trace_length,
+)
 from benchmarks import orbitals_claims
 from benchmarks import steps as benchmark_steps
 from benchmarks.download import FetchInProgressError, PinnedFileMismatchError
@@ -125,6 +136,16 @@ _ANALYSES: dict[str, tuple[Any, Any, tuple[str, ...], str]] = {
     known_order.table,
     known_order.ARMS,
     'RQ2 Known order: Kendall τ-b of each metric against f = 0 ≻ 0.25 ≻ 0.5 on the degraded configurations.',
+  ),
+  'trace-length': (
+    partial(
+      trace_length.trace_length,
+      annotations_dir=DEFAULT_OUTPUTS / 'annotations' / 'erb-task1',
+      rewards_dir=DEFAULT_OUTPUTS / 'tau2',
+    ),
+    trace_length.table,
+    trace_length.ARMS,
+    'RQ3 Trace length: AC against the human grades and PC against the tau2-bench reward, per tercile of trace length.',
   ),
 }
 _BENCHMARK_STEPS = {

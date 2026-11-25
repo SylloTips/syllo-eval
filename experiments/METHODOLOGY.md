@@ -517,8 +517,11 @@ only how it judges, so units, skip rules and result metadata stay those of the c
   - Lists are nested across n and seeded.
   - Balanced accuracy is computed over item (CP) or claim (CR) decisions, per n and per position.
 - **Traces:**
-  - Terciles use the length of the rendered whole trace in characters, which every judged WT unit records. Input
-    tokens reported by the judge would leave out the units that failed, which are the longest.
+  - Terciles use the input tokens the judge counts for the WT call: the rendered whole trace and the prompt. Units
+    that overflow the judge's context window have no count and sort after every counted unit.
+  - The 180 annotated ERB answers and the τ²-bench trajectories are each sorted by that length and split into three
+    parts of equal size. In each part, AC is compared with the human grades (Spearman's ρ) and PC with the reward
+    (AUROC), for Syllo-eval and Syllo-eval-WT.
   - Padding adds non-gold search spans as children of the agent root, so that they are part of the trace WT reads:
     +32k, +64k and +128k tokens. Their start times decide where they render among the agent's own spans, so the
     construction fixes them before the pilot.
