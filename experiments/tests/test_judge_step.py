@@ -118,6 +118,28 @@ class ScopedSamplesTest(unittest.IsolatedAsyncioTestCase):
     uow.samples.list_by_dataset.assert_awaited_once_with(source.dataset_id)
 
 
+class RetrySamplesTest(unittest.IsolatedAsyncioTestCase):
+  async def test_a_retry_must_judge_with_the_settings_its_run_recorded(self) -> None:
+    judge = {'model': 'gemini-3.8-flash', 'temperature': 1.0, 'thinking_level': None}
+    source_run_id, unresolved = uuid4(), [uuid4()]
+    uow = MagicMock()
+    uow.__aenter__.return_value = uow
+    uow.evaluation_run_metrics.list_metrics = AsyncMock(return_value=['m'])
+
+    async def retry(recorded: dict[str, Any]) -> list[UUID]:
+      run = SimpleNamespace(source_run_id=source_run_id, metadata={'judge': recorded})
+      uow.evaluation_runs.get_by_id_or_raise = AsyncMock(return_value=run)
+      return await cli._retry_samples(MagicMock(), uuid4(), source_run_id, ['m'], judge=judge)
+
+    with (
+      patch('cli.UnitOfWork', return_value=uow),
+      patch('cli._unresolved_samples', AsyncMock(return_value=unresolved)),
+    ):
+      self.assertEqual(await retry(judge), unresolved)
+      with self.assertRaisesRegex(ValueError, 'was judged with'):
+        await retry({**judge, 'temperature': 0.0})
+
+
 class JudgeCliTest(unittest.TestCase):
   """Runs `judge` with the database, judge and service replaced by fakes; each repeat makes a new run."""
 

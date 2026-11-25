@@ -669,6 +669,7 @@ class _LangChainCliTestCase(unittest.TestCase):
 
   COMMAND = ''
   METRIC = ''
+  JUDGE = {'model': 'gemini-3.8-flash', 'temperature': 1.0, 'thinking_level': None}
   # The source run's configuration, as _collection_run reads it.
   configuration: SimpleNamespace
 
@@ -777,7 +778,13 @@ class AgentEvalsCliTest(_LangChainCliTestCase):
       metrics=[self.METRIC],
       max_concurrent_samples=1,
       sample_ids=None,
-      metadata={'step': self.step, 'configuration': self.configuration.id, 'arm': 'agentevals', 'repetition': 1},
+      metadata={
+        'step': self.step,
+        'configuration': self.configuration.id,
+        'arm': 'agentevals',
+        'repetition': 1,
+        'judge': self.JUDGE,
+      },
     )
     self.assertEqual(self.build_service.call_args.kwargs['metrics'], [self.metric])
     self.unresolved_samples.assert_awaited_once_with(self.db_manager, self.run_id, [self.METRIC])
@@ -792,6 +799,7 @@ class AgentEvalsCliTest(_LangChainCliTestCase):
         'source_run_id': str(self.source_run),
         'agentevals_version': AGENTEVALS_VERSION,
         'openevals_version': OPENEVALS_VERSION,
+        'judge': self.JUDGE,
         'configuration': self.configuration.id,
         'metrics': [self.METRIC],
         'run_status': 'COMPLETED',
@@ -837,7 +845,9 @@ class AgentEvalsCliTest(_LangChainCliTestCase):
     status, output = self._agentevals('--retry', str(first))
 
     self.assertEqual(status, 0, output)
-    self.retry_samples.assert_awaited_once_with(self.db_manager, first, self.source_run, [self.METRIC])
+    self.retry_samples.assert_awaited_once_with(
+      self.db_manager, first, self.source_run, [self.METRIC], judge=self.JUDGE
+    )
     retry_step = f'{self.step}:retry-1'
     kwargs = self.service.repeat_evaluation.call_args.kwargs
     self.assertEqual((kwargs['sample_ids'], kwargs['metadata']['step']), (self.retried, retry_step))
@@ -939,7 +949,13 @@ class OpenEvalsCliTest(_LangChainCliTestCase):
       metrics=self.ERB_METRICS,
       max_concurrent_samples=1,
       sample_ids=None,
-      metadata={'step': step, 'configuration': self.configuration.id, 'arm': 'openevals', 'repetition': 1},
+      metadata={
+        'step': step,
+        'configuration': self.configuration.id,
+        'arm': 'openevals',
+        'repetition': 1,
+        'judge': self.JUDGE,
+      },
     )
     self.assertEqual(self._scored_metrics(), self.ERB_METRICS)
     records = Manifest(self.manifest).records()
@@ -951,6 +967,7 @@ class OpenEvalsCliTest(_LangChainCliTestCase):
       {
         'source_run_id': str(self.source_run),
         'openevals_version': OPENEVALS_VERSION,
+        'judge': self.JUDGE,
         'configuration': self.configuration.id,
         'metrics': self.ERB_METRICS,
         'run_status': 'COMPLETED',
