@@ -20,6 +20,7 @@ from syllo_eval.evaluation.evaluation_report import EvaluationReportNotAvailable
 from syllo_eval.evaluation.trace_import import TraceImportError
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import Dataset, DatasetSummary, EvaluationRun, EvaluationStatus
+from syllo_eval.pii_masking import PiiMasker
 
 
 class _EvaluationHandleStub:
@@ -53,6 +54,7 @@ class _ServiceStub:
     self._report = report
     self._error = error
     self.db_manager = object()
+    self.pii_masker = None
     self.calls: list[dict[str, object]] = []
     self.list_calls: list[dict[str, object]] = []
     self.get_calls: list[object] = []
@@ -489,10 +491,12 @@ class TestEvaluationApi(unittest.TestCase):
 
   def test_injected_service_provides_dataset_manager(self) -> None:
     service = _ServiceStub()
+    service.pii_masker = cast(Any, PiiMasker())
     app = create_app(service=cast(Any, service))
 
     with TestClient(app):
       self.assertIs(app.state.dataset_service._db_manager, service.db_manager)
+      self.assertIs(app.state.dataset_service._pii_masker, service.pii_masker)
 
   def test_get_evaluation_status_returns_running_run(self) -> None:
     run = self._build_run()

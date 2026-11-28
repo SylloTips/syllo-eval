@@ -279,7 +279,8 @@ example `{"answer_correctness_judge": "The answer must cite the warranty clause.
 source run's additions. `--metadata` records a JSON object of your own on the run, for example
 `'{"experiment": "baseline"}'`: it is kept apart from the resolved `config`, shown in the run status and the report's
 `run.metadata`, and not inherited by repeats. `EvaluationService.update_evaluation_metadata()` merges top-level keys into
-it later. Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
+it later. `--mask-pii` masks personal data for that command (see [Personal data masking](#personal-data-masking)).
+Each command prints a JSON summary with the run ID and status. The exit code is 0 for `COMPLETED` and
 `PARTIALLY_COMPLETED` runs, and non-zero when the run fails. `run`, `import` and `repeat` also write the report with
 `--report-path`. Run `--help` on any command for all options.
 
@@ -413,9 +414,54 @@ In Python, you can build `Settings` directly instead.
 | `EVALUATION_SAMPLE_TRACE_TIMEOUT_SECONDS` | — | Deadline for the agent call and trace ingestion per sample |
 | `EVALUATION_SAMPLE_COMPUTE_TIMEOUT_SECONDS` | — | Deadline for metric computation per sample |
 | `EVALUATION_RETRIEVAL_SPAN_TYPES` | `["agent_root"]` | JSON list of the span types the built-in retrieval metrics score |
+| `PII_MASKING_ENABLED` | `false` | Mask personal data before it is stored or sent to a model; see below |
+| `PII_MASKING_CATEGORIES` | every category | JSON list of the categories to mask, e.g. `["email", "phone"]` |
+| `PII_MASKING_KEY` | — | Secret of 16 or more characters that gives each masked value its own code |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 `syllo_eval/settings.py` lists every option, including timeouts and retry backoffs.
+
+### Personal data masking
+
+Masking is off by default. Turn it on with `PII_MASKING_ENABLED=true`, with `--mask-pii` on `run`, `import`, `repeat`
+and `dataset import`, or with `Settings(pii_masking=PiiMaskingSettings(enabled=True))`. The HTTP API follows the
+server's setting. Masking follows the approach of [potato](https://github.com/davidjurgens/potato)'s PII redaction:
+each match becomes a label, such as `[EMAIL]`.
+
+| Category | Finds |
+|---|---|
+| `url` | `http`, `https` and `ftp` links |
+| `email` | Email addresses |
+| `iban` | IBANs, checked with their check digits |
+| `it_tax_code` | Italian tax codes (codice fiscale), checked with their check letter |
+| `mac` | MAC addresses |
+| `ip` | IPv4 and IPv6 addresses |
+| `card` | Payment card numbers, checked with the Luhn checksum |
+| `ssn` | US Social Security numbers |
+| `it_vat` | Italian VAT numbers (partita IVA), checked with their check digit |
+| `phone` | Phone numbers, and other runs of 8 to 15 digits, such as order numbers |
+| `handle` | `@` handles |
+
+With masking on:
+- Datasets, traces, run metadata, rubric additions, metric reasoning and error messages are masked before they are
+  stored. A dataset imported with masking on is stored masked, so the agent receives masked prompts too.
+- Metrics receive masked spans and ground truths. Judges, the claim extractor and custom metrics therefore see only
+  masked text, even for data stored before masking was turned on.
+- Identifiers are never masked: trace, span, document, claim and plan step IDs, plan operations and span names. Metrics
+  compare them, so masking one would change a score.
+- Trace import compares masked prompts, so traces bind to their samples whether the dataset was stored masked or not.
+- The run's `config.pii_masking` records the categories and whether labels carry codes, never the key.
+
+Without a key, every value of a category gets the same label, so a judge cannot tell a wrong phone number from the right
+one. With `PII_MASKING_KEY`, each label carries a code computed from the value, such as `[PHONE_3fa2c19b]`: equal values
+get equal codes, whatever their spacing or letter case, and different values get different codes. Keep the same key,
+and the same setting, for the life of a database: data masked another way no longer matches, for example when an
+import binds traces to samples.
+
+Masking finds patterns, not meaning. It misses names, street addresses and other personal details written in prose,
+and it masks some numbers that are not personal, such as order numbers. Logs are not masked. A caller-owned
+`TraceIntegration` that persists traces itself should normalize them with `normalize_trace(..., service.pii_masker)`,
+and a custom metric that sends other data to a model should mask it with `service.pii_masker`.
 
 ## Development
 

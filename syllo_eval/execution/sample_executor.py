@@ -13,6 +13,7 @@ from syllo_eval.evaluation.trace_processor import TraceIntegration
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import Agent, EvaluationRunSample, EvaluationSampleStatus, MetricComputation, Sample
+from syllo_eval.pii_masking import PiiMasker
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,14 @@ class SampleExecutor:
     trace_processor: TraceIntegration | None,
     metric_planner: MetricPlanner,
     plan_executor: PlanExecutor,
+    pii_masker: PiiMasker | None = None,
   ) -> None:
     self._db_manager = db_manager
     self._agent_call_dispatcher = agent_call_dispatcher
     self._trace_processor = trace_processor
     self._metric_planner = metric_planner
     self._plan_executor = plan_executor
+    self._pii_masker = pii_masker
 
   async def execute(
     self,
@@ -297,6 +300,9 @@ class SampleExecutor:
     error_message: str | None = None,
     metadata: dict[str, Any] | None = None,
   ) -> EvaluationRunSample:
+    if error_message is not None and self._pii_masker is not None:
+      # An agent or trace error can quote the raw input or records it failed on.
+      error_message = self._pii_masker.mask_text(error_message)
     async with UnitOfWork(self._db_manager) as uow:
       return await uow.evaluation_run_samples.update_status(
         run_sample_id=run_sample_id,

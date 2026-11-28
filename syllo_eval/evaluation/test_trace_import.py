@@ -13,6 +13,7 @@ from syllo_eval.evaluation.trace_import import (
   normalize_imported_trace,
 )
 from syllo_eval.model import Sample
+from syllo_eval.pii_masking import PiiMasker
 
 
 def phoenix_trace(trace_id: str, question: Any) -> ImportedTrace:
@@ -64,6 +65,19 @@ class TestTraceImport(unittest.TestCase):
     for name, (results, samples, message) in cases.items():
       with self.subTest(name), self.assertRaisesRegex(TraceImportError, message):
         match_traces_to_samples(results, samples)
+
+  def test_with_a_masker_traces_are_masked_and_bind_to_masked_or_unmasked_samples(self) -> None:
+    masker = PiiMasker()
+    question = 'My email is jane@example.com, what is my plan?'
+    stored_unmasked = Sample(id=uuid4(), dataset_id=self.first.dataset_id, input_prompt=question)
+    stored_masked = Sample(id=uuid4(), dataset_id=self.first.dataset_id, input_prompt=masker.mask_text(question))
+
+    result = normalize_imported_trace(self.adapter, phoenix_trace('t1', question), masker)
+
+    self.assertEqual(result.spans[0].input_data, 'My email is [EMAIL], what is my plan?')
+    for sample in (stored_unmasked, stored_masked):
+      with self.subTest(prompt=sample.input_prompt):
+        self.assertEqual(match_traces_to_samples([result], [sample, self.first], masker), {sample.id: 't1'})
 
   def test_invalid_records_and_files_raise_import_errors(self) -> None:
     broken = ImportedTrace(trace_id='t1', spans=[{'name': 'no span id'}])

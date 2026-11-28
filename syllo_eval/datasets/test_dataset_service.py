@@ -7,7 +7,8 @@ from uuid import uuid4
 from syllo_eval.datasets.model import DatasetJsonPayload, DatasetJsonPlanStep, DatasetJsonSample
 from syllo_eval.datasets.service import DatasetAlreadyExistsError, DatasetService
 from syllo_eval.infrastructure import DatabaseManager
-from syllo_eval.model import Dataset, DatasetSummary
+from syllo_eval.model import Dataset, DatasetSummary, ExpectedClaim
+from syllo_eval.pii_masking import PiiMasker
 
 
 class _DatasetRepoStub:
@@ -87,6 +88,39 @@ class DatasetServiceImportTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(uow.samples.created[0].dataset_id, summary.dataset.id)
     self.assertEqual(summary.ground_truth_count, 4)
     self.assertEqual(len(uow.ground_truths.created), 4)
+
+  async def test_import_dataset_with_a_masker_stores_masked_text_and_unchanged_identifiers(self) -> None:
+    service = DatasetService(db_manager=cast(DatabaseManager, object()), pii_masker=PiiMasker())
+    uow = _UnitOfWorkStub(_DatasetRepoStub())
+    sample = DatasetJsonSample(
+      input_prompt='I am jane@example.com, call me on +39 333 1234567.',
+      ground_truth_output='We wrote to jane@example.com.',
+      document_ids=['3331234567'],
+      plan=[
+        DatasetJsonPlanStep(operation='lookup', instruction='Find jane@example.com', parameters={'id': '3331234567'})
+      ],
+      claims=[ExpectedClaim(id='3331234567', text='The customer is jane@example.com.')],
+    )
+
+    with patch('syllo_eval.datasets.service.TransactionalUnitOfWork', return_value=uow):
+      await service.import_dataset(name='demo', payload=DatasetJsonPayload(samples=[sample]))
+
+    [stored] = uow.samples.created
+    self.assertEqual(stored.input_prompt, 'I am [EMAIL], call me on [PHONE].')
+    self.assertEqual(stored.ground_truth_output, 'We wrote to [EMAIL].')
+    values = {truth.key: truth.ground_truth_value for truth in uow.ground_truths.created}
+    self.assertEqual(
+      values,
+      {
+        'relevant_document_ids': {'relevant_ids': ['3331234567']},
+        'expected_output': {'expected_output': 'We wrote to [EMAIL].'},
+        'expected_plan': {
+          'expected_plan': [{'operation': 'lookup', 'instruction': 'Find [EMAIL]', 'parameters': {'id': '3331234567'}}]
+        },
+        'expected_claims': {'claims': [{'id': '3331234567', 'text': 'The customer is [EMAIL].'}]},
+      },
+    )
+    self.assertEqual({truth.sample_id for truth in uow.ground_truths.created}, {stored.id})
 
   async def test_import_dataset_skips_optional_ground_truths(self) -> None:
     service = _build_service()

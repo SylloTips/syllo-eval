@@ -29,6 +29,7 @@ from syllo_eval.model import (
   SpanType,
   Trace,
 )
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.testing_database import setup_test_database as _setup_database
 
 
@@ -158,6 +159,37 @@ class TestPlanExecutorLatency(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(_metric_metadata(failed.metadata), {})
     self.assertEqual(skipped.status, MetricComputationStatus.SKIPPED)
     self.assertIsNone(skipped.metadata)
+
+
+class _QuotingMetric(_PlanItemStubMetric):
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
+    return MetricComputationResult(score=1.0, reasoning='Asked for jane@example.com', metadata={'id': '3331234567'})
+
+
+class _FailingQuotingMetric(_PlanItemStubMetric):
+  async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+    del span, ground_truths
+    raise ValueError('Unexpected value: +39 333 1234567')
+
+
+class TestPlanExecutorPiiMasking(unittest.IsolatedAsyncioTestCase):
+  async def test_reasoning_and_errors_are_stored_masked(self) -> None:
+    async def plan_items():
+      async for item in _single_plan_item():
+        yield MetricPlanItem(metric=_QuotingMetric(), target=item.target, ground_truths={})
+        yield MetricPlanItem(metric=_FailingQuotingMetric(), target=item.target, ground_truths={})
+
+    repository = _RecordingMetricComputationRepository()
+    executor = PlanExecutor(db_manager=cast(Any, object()), pii_masker=PiiMasker())
+
+    with patch('syllo_eval.evaluation.plan_executor.UnitOfWork', return_value=_RecordingUnitOfWork(repository)):
+      await executor.execute(plan_items(), uuid4())
+
+    completed, failed = repository.created
+    self.assertEqual(completed.reasoning, 'Asked for [EMAIL]')
+    self.assertEqual(_metric_metadata(completed.metadata), {'id': '3331234567'})
+    self.assertEqual(failed.error_message, 'Unexpected value: [PHONE]')
 
 
 class TestPlanExecutorPersistenceErrors(unittest.IsolatedAsyncioTestCase):

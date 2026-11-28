@@ -1,7 +1,9 @@
 import unittest
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 from syllo_eval.evaluation.metric_planner import (
@@ -19,6 +21,7 @@ from syllo_eval.evaluation.metrics.contracts import (
 )
 from syllo_eval.infrastructure import UnitOfWork
 from syllo_eval.model import Dataset, GroundTruth, Metric, MetricTargetSpanType, Sample, Span, SpanType, Trace
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.testing_database import setup_test_database as _setup_database
 
 
@@ -493,6 +496,50 @@ class TestMetricPlanner(_MetricPlannerIntegrationBase):
 
     items = [item async for item in planner.iter_plan_items(self.trace_id, self.sample_id)]
     self.assertEqual(items, [])
+
+
+class _RepositoryContext:
+  def __init__(self, spans: list[Span], ground_truths: list[GroundTruth]) -> None:
+    self.spans = SimpleNamespace(list_by_trace=AsyncMock(return_value=spans))
+    self.ground_truths = SimpleNamespace(list_by_sample=AsyncMock(return_value=ground_truths))
+
+  async def __aenter__(self) -> '_RepositoryContext':
+    return self
+
+  async def __aexit__(self, exc_type, exc, tb) -> None:
+    del exc_type, exc, tb
+
+
+class TestMetricPlannerPiiMasking(unittest.IsolatedAsyncioTestCase):
+  async def test_metrics_receive_masked_spans_and_ground_truths_even_when_stored_unmasked(self) -> None:
+    now = datetime.now(tz=timezone.utc)
+    span = Span(
+      external_id='3331234567',
+      trace_id='trace-1',
+      span_type='agent_root',
+      name='agent',
+      start_time=now,
+      end_time=now,
+      input_data='I am jane@example.com',
+      output_data='Call +39 333 1234567',
+    )
+    ground_truth = GroundTruth(
+      id=uuid4(), sample_id=uuid4(), key='expected_output', ground_truth_value={'expected_output': 'jane@example.com'}
+    )
+    registry = MetricRegistry(db_manager=cast(Any, object()))
+    registry.register(_DummyMetric('masked_metric', ('agent_root',), ground_truth_keys=('expected_output',)))
+    planner = MetricPlanner(registry, cast(Any, object()), pii_masker=PiiMasker())
+
+    with patch(
+      'syllo_eval.evaluation.metric_planner.UnitOfWork', return_value=_RepositoryContext([span], [ground_truth])
+    ):
+      [item] = [item async for item in planner.iter_plan_items('trace-1', ground_truth.sample_id)]
+
+    assert isinstance(item.target, SpanTarget)
+    self.assertEqual(item.span_ids, ['3331234567'])
+    self.assertEqual((item.target.span.input_data, item.target.span.output_data), ('I am [EMAIL]', 'Call [PHONE]'))
+    self.assertEqual(item.ground_truths['expected_output'].ground_truth_value, {'expected_output': '[EMAIL]'})
+    self.assertEqual(span.input_data, 'I am jane@example.com')
 
 
 class TestMetricPlannerLifecyclePersistence(unittest.IsolatedAsyncioTestCase):

@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 
 from syllo_eval.API.app import create_app
 from syllo_eval.API.cli import main
-from syllo_eval.model import EvaluationStatus
+from syllo_eval.datasets import DatasetImportSummary
+from syllo_eval.model import Dataset, EvaluationStatus
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.settings import Settings
 
 FACTORY = MagicMock()
@@ -80,6 +82,43 @@ class ServiceFactoryTest(unittest.TestCase):
     )
     self.assertEqual(kwargs['rubric_additions'], {'answer_correctness_judge': 'Cite a source.'})
     service.close.assert_awaited_once()
+
+  def test_cli_mask_pii_turns_masking_on_and_never_off(self):
+    run = MagicMock(status=EvaluationStatus.COMPLETED, start_time=datetime.now(timezone.utc), end_time=None)
+    argv = ['run', '--agent-name', 'demo-agent', '--agent-version-tag', 'v1', '--dataset-id', str(uuid4())]
+    for flag, env, enabled in [
+      ([], {}, False),
+      (['--mask-pii'], {}, True),
+      ([], {'PII_MASKING_ENABLED': 'true'}, True),
+    ]:
+      factory = MagicMock()
+      factory.return_value.available_metric_names.return_value = ['custom_metric']
+      with (
+        self.subTest(flag=flag, env=env),
+        patch.dict('os.environ', env, clear=True),
+        patch('syllo_eval.API.cli.load_settings_env'),
+        patch('syllo_eval.API.cli._run', new=AsyncMock(return_value=run)),
+      ):
+        self.assertEqual(main(argv + flag, service_factory=factory), 0)
+      self.assertEqual(factory.call_args.args[0].pii_masking.enabled, enabled)
+
+  def test_cli_dataset_import_with_mask_pii_builds_a_masking_dataset_service(self):
+    summary = DatasetImportSummary(dataset=Dataset(id=uuid4(), name='demo'), sample_count=1, ground_truth_count=0)
+    with tempfile.TemporaryDirectory() as directory:
+      dataset_path = Path(directory) / 'demo.json'
+      dataset_path.write_text('{"samples": [{"input_prompt": "I am jane@example.com"}]}')
+      for flag, masked in [([], False), (['--mask-pii'], True)]:
+        with (
+          self.subTest(flag=flag),
+          patch.dict('os.environ', {}, clear=True),
+          patch('syllo_eval.API.cli.load_settings_env'),
+          patch('syllo_eval.API.cli.build_db_manager'),
+          patch('syllo_eval.API.cli.DatasetService') as dataset_service,
+          patch('syllo_eval.API.cli._import_dataset', new=AsyncMock(return_value=summary)),
+          patch('sys.stdout', new_callable=io.StringIO),
+        ):
+          self.assertEqual(main(['dataset', 'import', str(dataset_path), *flag]), 0)
+        self.assertEqual(isinstance(dataset_service.call_args.kwargs['pii_masker'], PiiMasker), masked)
 
   def test_app_builds_the_runtime_with_the_injected_factory(self):
     service = MagicMock(

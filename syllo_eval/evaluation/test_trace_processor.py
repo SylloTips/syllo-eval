@@ -8,6 +8,7 @@ from syllo_eval.evaluation.trace_processor import TraceProcessor
 from syllo_eval.infrastructure import UnitOfWork
 from syllo_eval.infrastructure.arize import PhoenixClient
 from syllo_eval.infrastructure.exceptions import ExternalServiceError
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.settings import PhoenixSettings, load_settings_env
 from syllo_eval.testing_database import setup_test_database as _setup_database
 
@@ -119,6 +120,38 @@ class TestTraceProcessorPersistence(unittest.IsolatedAsyncioTestCase):
     transactional_uow.span_types.create.assert_not_awaited()
     transactional_uow.traces.create.assert_awaited_once()
     transactional_uow.spans.bulk_create.assert_awaited_once_with(result.spans)
+
+  async def test_process_trace_with_a_masker_stores_masked_text_and_unchanged_identifiers(self) -> None:
+    now = datetime.now(timezone.utc)
+    records: list[dict[str, Any]] = [
+      {
+        'context.span_id': '3331234567',
+        'span_kind': 'agent',
+        'parent_id': None,
+        'name': 'demo-agent',
+        'start_time': now,
+        'end_time': now,
+        'attributes.input.value': '{"prompt": "Call me on +39 333 1234567"}',
+        'attributes.output.value': 'Sent to jane@example.com',
+        'attributes.user.id': 'jane@example.com',
+      }
+    ]
+    transactional_uow = _TransactionalUnitOfWorkStub()
+    processor = TraceProcessor(
+      trace_client=_StaticTraceClient(trace_id='trace-masked', records=records),
+      db_manager=cast(Any, object()),
+      pii_masker=PiiMasker(),
+    )
+
+    with patch('syllo_eval.evaluation.trace_processor.TransactionalUnitOfWork', return_value=transactional_uow):
+      result = await processor.process_trace('request-masked')
+
+    [span] = transactional_uow.spans.bulk_create.call_args.args[0]
+    self.assertEqual(result.spans, [span])
+    self.assertEqual((span.external_id, span.trace_id), ('3331234567', 'trace-masked'))
+    self.assertEqual(span.input_data, {'prompt': 'Call me on [PHONE]'})
+    self.assertEqual(span.output_data, 'Sent to [EMAIL]')
+    self.assertEqual((span.metadata or {})['attributes.user.id'], '[EMAIL]')
 
   async def test_process_trace_marks_only_root_span_as_agent_root(self) -> None:
     now = datetime.now(timezone.utc)

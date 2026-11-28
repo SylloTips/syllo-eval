@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, cast
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 from syllo_eval.evaluation.metric_planner import MetricPlanner
@@ -32,6 +32,7 @@ from syllo_eval.model import (
   Span,
   SpanType,
 )
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.testing_database import setup_test_database as _setup_database
 
 
@@ -565,6 +566,36 @@ class TestSampleExecutorTimeout(unittest.IsolatedAsyncioTestCase):
     self.assertTrue(result.succeeded)
     self.assertEqual(result.evaluation_run_sample.status, EvaluationSampleStatus.COMPLETED)
     self.assertEqual(result.evaluation_run_sample.trace_id, 'trace-repeat')
+
+
+class TestSampleExecutorPiiMasking(unittest.IsolatedAsyncioTestCase):
+  async def test_a_failed_sample_stores_its_error_masked(self) -> None:
+    agent = Agent(id=uuid4(), name='agent', version_tag='v1')
+    sample = Sample(id=uuid4(), dataset_id=uuid4(), input_prompt='question')
+    row = EvaluationRunSample(id=uuid4(), evaluation_run_id=uuid4(), sample_id=sample.id)
+    caller = AsyncMock()
+    caller.call.side_effect = ValueError('Agent rejected jane@example.com')
+    update_status = AsyncMock(return_value=row)
+    uow = MagicMock()
+    uow.__aenter__.return_value = SimpleNamespace(evaluation_run_samples=SimpleNamespace(update_status=update_status))
+    executor = SampleExecutor(
+      cast(Any, object()),
+      caller,
+      AsyncMock(),
+      cast(Any, _NoOpMetricPlanner()),
+      cast(Any, _NoOpPlanExecutor()),
+      pii_masker=PiiMasker(),
+    )
+
+    with (
+      patch.object(executor, '_create_evaluation_run_sample', AsyncMock(return_value=row)),
+      patch('syllo_eval.execution.sample_executor.UnitOfWork', return_value=uow),
+    ):
+      result = await executor.execute(row.evaluation_run_id, agent, sample)
+
+    self.assertFalse(result.succeeded)
+    assert update_status.await_args is not None
+    self.assertEqual(update_status.await_args.kwargs['error_message'], 'Agent rejected [EMAIL]')
 
 
 class TestSampleExecutorLifecyclePersistence(unittest.IsolatedAsyncioTestCase):

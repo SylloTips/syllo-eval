@@ -59,6 +59,7 @@ Repeat evaluation reuses stored traces and runs only metric planning and computa
 - Agent/trace failures fail the sample. Individual metric failures become failed computations; judge metrics return them with a `metadata.failure` class and the usage of every judge call. Orchestration or persistence failures fail the compute phase. Persist missing-target skips so reporting retains metric coverage.
 - Trace and compute have separate optional deadlines. The trace deadline includes the agent call; lifecycle persistence stays outside deadlines. On cancellation, persist sample failure with shielding, then propagate cancellation.
 - Reports read persisted data. Use saved sample/metric plans for totals and coverage, including missing samples and metrics with zero computations. Keep agent usage separate from judge usage and deduplicate by trace/call identity.
+- PII masking (`pii_masking.py`) is off by default. When on, free text is masked before every write and when the planner hands spans and ground truths to metrics. Never mask identifiers or a finished judge prompt, since metrics compare IDs and judges echo them. A new stored text field, or a new path that sends text out, must go through the masker.
 - Alembic migrations are raw SQL in `syllo_eval/migrations/`, without ORM autogeneration. Never run them from application startup or the image's command: the Compose `migrate` service applies them before the API starts, and other deployments apply them as their own step. Confirm the database target before `poetry run alembic upgrade head`.
 
 ## Where to look
@@ -72,6 +73,7 @@ Paths below are relative to `syllo_eval/`, unless linked otherwise. Read only th
 | Canonical models, adapters, ingestion | `model.py`, `trace_semantics.py`, `evaluation/trace_adapter.py`, `evaluation/trace_processor.py`, `evaluation/trace_import.py` |
 | Metrics, judges, reporting | `evaluation/metrics/`, `evaluation/metric_planner.py`, `evaluation/plan_executor.py`, `evaluation/judge/`, `evaluation/evaluation_report.py` |
 | Datasets, settings, persistence | `datasets/`, `settings.py`, `infrastructure/`, `migrations/` |
+| Personal data masking | `pii_masking.py`; behavior in the README's "Personal data masking" |
 | Paper experiments (downstream package) | [experiments/README.md](experiments/README.md) |
 
 Read [trace normalization](docs/trace-normalization.md) for adapter contracts and retrieval semantics.

@@ -31,13 +31,14 @@ from syllo_eval.model import (
   SpanType,
   Trace,
 )
+from syllo_eval.pii_masking import CATEGORIES
 from syllo_eval.service import (
   AgentCallerSelectionError,
   EvaluationService,
   MetricSelectionError,
   _build_metric_registry,
 )
-from syllo_eval.settings import EvaluationSettings, LlmJudgeSettings, Settings
+from syllo_eval.settings import EvaluationSettings, LlmJudgeSettings, PiiMaskingSettings, Settings
 
 
 class _CustomMetric(SpanEvaluationMetric):
@@ -477,6 +478,100 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(repeated.status, EvaluationStatus.COMPLETED)
     self.assertEqual(metric.span_ids, ['trace-1-root', 'trace-1-root'])
 
+  async def test_with_masking_on_imports_store_masked_traces_and_metrics_and_runs_see_only_masked_text(self) -> None:
+    dataset_id = uuid4()
+    question = 'I am jane@example.com, call me on +39 333 1234567'
+    # The sample was stored before masking was turned on; the masked trace must still bind to it.
+    sample = Sample(id=uuid4(), dataset_id=dataset_id, input_prompt=question)
+    persistence = _MemoryPersistence(Agent(id=uuid4(), name='custom-agent', version_tag='v1'), sample)
+    persistence.ground_truths_by_sample[sample.id] = [
+      GroundTruth(
+        id=uuid4(), sample_id=sample.id, key='expected_output', ground_truth_value={'expected_output': question}
+      )
+    ]
+    received: list[tuple[Any, Any]] = []
+
+    class RecordingMetric(_CustomMetric):
+      @property
+      def ground_truth_keys(self) -> tuple[str, ...]:
+        return ('expected_output',)
+
+      async def compute(self, span: Span, ground_truths: Mapping[str, GroundTruth]) -> MetricComputationResult:
+        received.append((span.input_data, ground_truths['expected_output'].ground_truth_value))
+        return MetricComputationResult(score=1.0, reasoning=f'The user wrote {question}')
+
+    service = EvaluationService(
+      settings=Settings(pii_masking=PiiMaskingSettings(enabled=True)),
+      db_manager=cast(DatabaseManager, object()),
+      custom_metrics=[RecordingMetric()],
+      include_builtin_metrics=False,
+    )
+
+    def memory_uow(_db_manager: Any) -> _AsyncRepositoryContext:
+      return _AsyncRepositoryContext(_MemoryRepositoryContext(persistence))
+
+    with (
+      patch('syllo_eval.service.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.service.TransactionalUnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_registry.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_registry.TransactionalUnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.metric_planner.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.evaluation.plan_executor.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.execution.sample_executor.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.orchestration.evaluation_orchestrator.UnitOfWork', side_effect=memory_uow),
+      patch('syllo_eval.orchestration.evaluation_orchestrator.TransactionalUnitOfWork', side_effect=memory_uow),
+    ):
+      run = await (
+        await service.import_evaluation(
+          agent_name='custom-agent',
+          agent_version_tag='v1',
+          dataset_id=dataset_id,
+          traces=[phoenix_trace('trace-1', question)],
+          selected_metric_names=['custom_metric'],
+          metadata={'requested_by': 'jane@example.com'},
+        )
+      ).execute()
+
+    masked = 'I am [EMAIL], call me on [PHONE]'
+    self.assertEqual(run.status, EvaluationStatus.COMPLETED)
+    self.assertEqual(persistence.spans_by_id['trace-1-root'].input_data, masked)
+    self.assertEqual(received, [(masked, {'expected_output': masked})])
+    [computation] = persistence.computations_by_run_sample[persistence.run_samples_by_run[run.id][0].id]
+    self.assertEqual(computation.reasoning, f'The user wrote {masked}')
+    stored_run = persistence.runs_by_id[run.id]
+    self.assertEqual(stored_run.metadata, {'requested_by': '[EMAIL]'})
+    self.assertEqual((stored_run.config or {})['pii_masking'], {'categories': list(CATEGORIES), 'keyed': False})
+
+  async def test_with_masking_on_rubric_additions_are_masked_for_the_judge_and_the_run_record(self) -> None:
+    judge_client = MagicMock(provider='llm_manager', models=('primary',))
+    judge_client.aclose = AsyncMock()
+    service = EvaluationService(
+      settings=Settings(llm_judge=LlmJudgeSettings(provider='openai'), pii_masking=PiiMaskingSettings(enabled=True)),
+      db_manager=cast(DatabaseManager, object()),
+      judge_client_factory=lambda _: judge_client,
+    )
+
+    with (
+      patch('syllo_eval.service.MetricRegistry.sync_with_persistence', new_callable=AsyncMock),
+      patch('syllo_eval.service._build_metric_registry', wraps=_build_metric_registry) as build_registry,
+    ):
+      execution = await service._build_execution_from_plan(
+        agent_id=uuid4(),
+        dataset_id=uuid4(),
+        selected_metric_names=['answer_correctness_judge'],
+        planned_sample_ids=[],
+        max_concurrent_samples=None,
+        max_concurrent_tasks=None,
+        sample_trace_timeout=None,
+        sample_compute_timeout=None,
+        rubric_additions={'answer_correctness_judge': 'The answer must name jane@example.com.'},
+      )
+    await execution.close()
+
+    masked = {'answer_correctness_judge': 'The answer must name [EMAIL].'}
+    self.assertEqual(build_registry.call_args.kwargs['rubric_additions'], masked)
+    self.assertEqual(cast(dict[str, object], execution.config.config)['rubric_additions'], masked)
+
   async def test_import_stores_all_traces_in_one_transaction_that_a_conflict_rolls_back(self) -> None:
     dataset_id = uuid4()
     samples = [Sample(id=uuid4(), dataset_id=dataset_id, input_prompt=prompt) for prompt in ('first', 'second')]
@@ -725,7 +820,9 @@ class TestExtensionPoints(unittest.IsolatedAsyncioTestCase):
         sample_compute_timeout=None,
       )
 
-    trace_processor_factory.assert_called_once_with(trace_client=trace_client, db_manager=db_manager, adapter=None)
+    trace_processor_factory.assert_called_once_with(
+      trace_client=trace_client, db_manager=db_manager, adapter=None, pii_masker=None
+    )
 
   async def test_evaluation_overrides_reach_orchestrator_and_run_snapshot(self) -> None:
     orchestrator = MagicMock()

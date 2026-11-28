@@ -6,6 +6,7 @@ from syllo_eval.evaluation.trace_adapter import PhoenixTraceAdapter, TraceAdapte
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import TransactionalUnitOfWork
 from syllo_eval.model import SpanType
+from syllo_eval.pii_masking import PiiMasker
 
 
 class TraceSourceClient(Protocol):
@@ -21,25 +22,38 @@ class TraceIntegration(Protocol):
 
 
 class TraceProcessor:
-  def __init__(self, trace_client: TraceSourceClient, db_manager: DatabaseManager, adapter: TraceAdapter | None = None):
+  def __init__(
+    self,
+    trace_client: TraceSourceClient,
+    db_manager: DatabaseManager,
+    adapter: TraceAdapter | None = None,
+    pii_masker: PiiMasker | None = None,
+  ):
     self.trace_client = trace_client
     self.db_manager = db_manager
     self.adapter = adapter if adapter is not None else PhoenixTraceAdapter()
+    self.pii_masker = pii_masker
 
   async def process_trace(self, request_id: str) -> TraceProcessingResult:
     trace_id = await self.trace_client.get_trace_id_by_request_id(request_id)
     if trace_id is None:
       raise ValueError(f'No trace found for request_id={request_id}')
     records = await self.trace_client.get_trace_json(trace_id)
-    result = normalize_trace(self.adapter, trace_id, records)
+    result = normalize_trace(self.adapter, trace_id, records, self.pii_masker)
     async with TransactionalUnitOfWork(self.db_manager) as uow:
       return await persist_trace(uow, result)
 
 
-def normalize_trace(adapter: TraceAdapter, trace_id: str, records: list[dict[str, Any]]) -> TraceProcessingResult:
+def normalize_trace(
+  adapter: TraceAdapter, trace_id: str, records: list[dict[str, Any]], pii_masker: PiiMasker | None = None
+) -> TraceProcessingResult:
+  """Normalize and validate a trace; with a masker, mask its free text after validation, so identifiers stay intact."""
   normalized = adapter.normalize(trace_id, records)
   # Validate even when an injected adapter used model_construct or mutated its result.
-  return TraceProcessingResult.model_validate(_storable(normalized.model_dump()))
+  result = TraceProcessingResult.model_validate(_storable(normalized.model_dump()))
+  if pii_masker is None:
+    return result
+  return result.model_copy(update={'spans': [pii_masker.mask_model(span) for span in result.spans]})
 
 
 def _storable(value: Any) -> Any:

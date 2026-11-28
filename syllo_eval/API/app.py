@@ -203,7 +203,9 @@ def create_app(
 
     if service is not None:
       app.state.evaluation_service = service
-      app.state.dataset_service = dataset_service or DatasetService(db_manager=service.db_manager)
+      app.state.dataset_service = dataset_service or DatasetService(
+        db_manager=service.db_manager, pii_masker=service.pii_masker
+      )
       await _fail_orphaned_running_evaluations(service)
       try:
         yield
@@ -217,7 +219,9 @@ def create_app(
     try:
       await runtime_service.initialize()
       app.state.evaluation_service = runtime_service
-      app.state.dataset_service = dataset_service or DatasetService(db_manager=runtime_service.db_manager)
+      app.state.dataset_service = dataset_service or DatasetService(
+        db_manager=runtime_service.db_manager, pii_masker=runtime_service.pii_masker
+      )
       await _fail_orphaned_running_evaluations(runtime_service)
       yield
     finally:

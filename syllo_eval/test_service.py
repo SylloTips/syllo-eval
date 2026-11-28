@@ -29,6 +29,7 @@ from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.exceptions import NotFoundError
 from syllo_eval.model import EvaluationRun, EvaluationRunSample, EvaluationSampleStatus, EvaluationStatus
 from syllo_eval.model import Agent
+from syllo_eval.settings import PiiMaskingSettings
 
 
 _JUDGE_METRIC_NAMES = [
@@ -225,7 +226,11 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
     service = EvaluationService(
       settings=cast(
         Any,
-        SimpleNamespace(llm_judge=SimpleNamespace(provider=None), orbitals=SimpleNamespace(api_key=None)),
+        SimpleNamespace(
+          llm_judge=SimpleNamespace(provider=None),
+          pii_masking=PiiMaskingSettings(enabled=False),
+          orbitals=SimpleNamespace(api_key=None),
+        ),
       ),
       db_manager=cast(DatabaseManager, object()),
     )
@@ -251,7 +256,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       start_time=datetime.now(tz=timezone.utc),
     )
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(get_by_id_result=run)
@@ -265,7 +272,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
   async def test_get_evaluation_run_raises_not_found_for_missing_run(self) -> None:
     run_id = uuid4()
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(get_by_id_result=None)
@@ -305,7 +314,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       ),
     ]
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(get_by_id_result=run)
@@ -338,7 +349,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       end_time=datetime.now(tz=timezone.utc),
     )
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(list_result=[run], count_result=7)
@@ -363,7 +376,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       end_time=datetime.now(tz=timezone.utc),
     )
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(fail_running_result=[run])
@@ -385,7 +400,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       end_time=datetime.now(tz=timezone.utc),
     )
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(update_status_if_current_result=failed_run)
@@ -406,7 +423,9 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
       start_time=datetime.now(tz=timezone.utc),
     )
     service = EvaluationService(
-      settings=cast(Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None))),
+      settings=cast(
+        Any, SimpleNamespace(llm_judge=SimpleNamespace(provider=None), pii_masking=PiiMaskingSettings(enabled=False))
+      ),
       db_manager=cast(DatabaseManager, object()),
     )
     evaluation_runs = _EvaluationRunsRepositoryStub(get_by_id_result=source_run)
@@ -435,7 +454,11 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
     service = EvaluationService(
       settings=cast(
         Any,
-        SimpleNamespace(llm_judge=SimpleNamespace(provider=None), orbitals=SimpleNamespace(api_key=None)),
+        SimpleNamespace(
+          llm_judge=SimpleNamespace(provider=None),
+          pii_masking=PiiMaskingSettings(enabled=False),
+          orbitals=SimpleNamespace(api_key=None),
+        ),
       ),
       db_manager=cast(DatabaseManager, object()),
     )
@@ -494,7 +517,11 @@ class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
     service = EvaluationService(
       settings=cast(
         Any,
-        SimpleNamespace(llm_judge=SimpleNamespace(provider=None), orbitals=SimpleNamespace(api_key=None)),
+        SimpleNamespace(
+          llm_judge=SimpleNamespace(provider=None),
+          pii_masking=PiiMaskingSettings(enabled=False),
+          orbitals=SimpleNamespace(api_key=None),
+        ),
       ),
       db_manager=cast(DatabaseManager, object()),
     )

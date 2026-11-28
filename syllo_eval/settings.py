@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -154,6 +154,19 @@ class EvaluationSettings(EnvSettings):
     return tuple(span_type.strip() for span_type in span_types)
 
 
+# The kinds of personal data the masker finds, in the order it masks them (see `syllo_eval/pii_masking.py`).
+PiiCategory = Literal['url', 'email', 'iban', 'it_tax_code', 'mac', 'ip', 'card', 'ssn', 'it_vat', 'phone', 'handle']
+
+
+class PiiMaskingSettings(EnvSettings):
+  model_config = SettingsConfigDict(env_prefix='PII_MASKING_')
+
+  enabled: bool = False
+  categories: tuple[PiiCategory, ...] = Field(default=get_args(PiiCategory), min_length=1)
+  # With a key, each label carries a code of the value, e.g. `[PHONE_3fa2c19b]`; a database must keep one key.
+  key: SecretStr | None = Field(default=None, min_length=16)
+
+
 class Settings(EnvSettings):
   """Engine configuration consumed by ``EvaluationService``."""
 
@@ -162,3 +175,4 @@ class Settings(EnvSettings):
   llm_judge: LlmJudgeSettings = Field(default_factory=LlmJudgeSettings)
   orbitals: OrbitalsSettings = Field(default_factory=OrbitalsSettings)
   evaluation: EvaluationSettings = Field(default_factory=EvaluationSettings)
+  pii_masking: PiiMaskingSettings = Field(default_factory=PiiMaskingSettings)

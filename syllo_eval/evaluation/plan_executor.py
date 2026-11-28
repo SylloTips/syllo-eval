@@ -13,6 +13,7 @@ from syllo_eval.evaluation.metrics.contracts import MetricComputationResult
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import MetricComputation, MetricComputationStatus
+from syllo_eval.pii_masking import PiiMasker
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,11 @@ class PlanExecutor:
     self,
     db_manager: DatabaseManager,
     max_concurrent_tasks: int = 10,
+    pii_masker: PiiMasker | None = None,
   ):
     self.db_manager = db_manager
     self._max_concurrent_tasks = max_concurrent_tasks
+    self._pii_masker = pii_masker
 
   async def execute(
     self,
@@ -143,6 +146,9 @@ class PlanExecutor:
         **(metric_computation.metadata or {}),
         'latency_seconds': round(time.monotonic() - started, 3),
       }
+    if self._pii_masker is not None:
+      # Metric inputs are masked already; reasoning and errors can also quote other text, such as an exception's.
+      metric_computation = self._pii_masker.mask_model(metric_computation)
 
     async with UnitOfWork(self.db_manager) as uow:
       record = await uow.metric_computations.create(metric_computation)

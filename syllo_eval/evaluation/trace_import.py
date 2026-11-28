@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError
 from syllo_eval.evaluation.trace_adapter import TraceAdapter, TraceProcessingResult
 from syllo_eval.evaluation.trace_processor import normalize_trace
 from syllo_eval.model import Sample
+from syllo_eval.pii_masking import PiiMasker
 
 
 class TraceImportError(ValueError):
@@ -28,18 +29,26 @@ def load_trace_file(path: Path) -> ImportedTrace:
     raise TraceImportError(f'Invalid trace file {path}: {err}') from err
 
 
-def normalize_imported_trace(adapter: TraceAdapter, trace: ImportedTrace) -> TraceProcessingResult:
+def normalize_imported_trace(
+  adapter: TraceAdapter, trace: ImportedTrace, pii_masker: PiiMasker | None = None
+) -> TraceProcessingResult:
   try:
-    return normalize_trace(adapter, trace.trace_id, trace.spans)
+    return normalize_trace(adapter, trace.trace_id, trace.spans, pii_masker)
   except (KeyError, TypeError, ValueError) as err:
     raise TraceImportError(f'Trace {trace.trace_id} could not be normalized: {err}') from err
 
 
-def match_traces_to_samples(results: Sequence[TraceProcessingResult], samples: Sequence[Sample]) -> dict[UUID, str]:
-  """Bind each trace to the one sample whose prompt equals the trace request; every trace must bind."""
+def match_traces_to_samples(
+  results: Sequence[TraceProcessingResult], samples: Sequence[Sample], pii_masker: PiiMasker | None = None
+) -> dict[UUID, str]:
+  """Bind each trace to the one sample whose prompt equals the trace request; every trace must bind.
+
+  With a masker, the traces are masked and the prompts are compared masked, whether or not the dataset was stored so.
+  """
   samples_by_prompt: dict[str, list[Sample]] = {}
   for sample in samples:
-    samples_by_prompt.setdefault(sample.input_prompt.strip(), []).append(sample)
+    prompt = sample.input_prompt if pii_masker is None else pii_masker.mask_text(sample.input_prompt)
+    samples_by_prompt.setdefault(prompt.strip(), []).append(sample)
 
   trace_ids_by_sample_id: dict[UUID, str] = {}
   for result in results:

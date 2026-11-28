@@ -8,6 +8,7 @@ from syllo_eval.settings import (
   DatabaseSettings,
   EvaluationSettings,
   LlmJudgeSettings,
+  PiiMaskingSettings,
   Settings,
   load_settings_env,
 )
@@ -43,6 +44,32 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(settings.llm_judge.openai.output_attempts, 3)
     self.assertEqual(settings.evaluation.max_concurrent_samples, 1)
     self.assertEqual(settings.evaluation.retrieval_span_types, ('agent_root',))
+    self.assertFalse(settings.pii_masking.enabled)
+    self.assertEqual(
+      settings.pii_masking.categories,
+      ('url', 'email', 'iban', 'it_tax_code', 'mac', 'ip', 'card', 'ssn', 'it_vat', 'phone', 'handle'),
+    )
+    self.assertIsNone(settings.pii_masking.key)
+
+  def test_pii_masking_reads_a_switch_a_json_list_of_categories_and_a_secret_key(self) -> None:
+    key = 'a-secret-key-of-24-chars'
+    environment = {'PII_MASKING_ENABLED': 'true', 'PII_MASKING_CATEGORIES': '["email", "iban"]', 'PII_MASKING_KEY': key}
+    with patch.dict(os.environ, environment, clear=True):
+      masking = PiiMaskingSettings()
+
+    self.assertTrue(masking.enabled)
+    self.assertEqual(masking.categories, ('email', 'iban'))
+    assert masking.key is not None
+    self.assertEqual(masking.key.get_secret_value(), key)
+    self.assertNotIn(key, repr(masking))
+    for invalid in (
+      {'PII_MASKING_CATEGORIES': '["name"]'},
+      {'PII_MASKING_CATEGORIES': '[]'},
+      {'PII_MASKING_KEY': 'short'},
+    ):
+      with self.subTest(invalid=invalid), patch.dict(os.environ, invalid, clear=True):
+        with self.assertRaises(ValueError):
+          PiiMaskingSettings()
 
   def test_retrieval_span_types_are_a_json_list_of_names(self) -> None:
     with patch.dict(os.environ, {'EVALUATION_RETRIEVAL_SPAN_TYPES': '[" retrieval "]'}, clear=True):

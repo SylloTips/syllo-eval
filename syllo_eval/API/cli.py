@@ -28,6 +28,7 @@ from syllo_eval.datasets import (
 from syllo_eval.evaluation.trace_import import load_trace_file
 from syllo_eval.logging_utils import LoggingSettings, configure_logging
 from syllo_eval.model import EvaluationRun, EvaluationStatus
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.settings import Settings, load_settings_env
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,23 @@ def _add_metadata_argument(parser: argparse.ArgumentParser) -> None:
   parser.add_argument(
     '--metadata', type=_parse_metadata, help='JSON object recorded on the run, e.g. \'{"arm": "main"}\'.'
   )
+
+
+def _add_mask_pii_argument(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument(
+    '--mask-pii',
+    action='store_true',
+    help='Mask personal data, such as emails, phone numbers and IBANs, before storing it or sending it to a model. '
+    'Same as PII_MASKING_ENABLED=true; without the flag, the configured setting applies.',
+  )
+
+
+def _settings(mask_pii: bool) -> Settings:
+  """Settings from the environment; `--mask-pii` turns masking on and never turns it off."""
+  settings = Settings()
+  if not mask_pii:
+    return settings
+  return settings.model_copy(update={'pii_masking': settings.pii_masking.model_copy(update={'enabled': True})})
 
 
 def build_main_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
@@ -178,6 +196,7 @@ def build_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   )
   _add_rubric_additions_argument(parser)
   _add_metadata_argument(parser)
+  _add_mask_pii_argument(parser)
   return parser
 
 
@@ -322,6 +341,7 @@ def build_dataset_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
     default=None,
     help='Logging level.',
   )
+  _add_mask_pii_argument(import_parser)
 
   list_parser = subparsers.add_parser('list', help='List registered datasets.')
   list_parser.add_argument('--limit', type=int, default=50, help='Maximum number of datasets to return.')
@@ -376,6 +396,7 @@ def build_repeat_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   )
   _add_rubric_additions_argument(parser)
   _add_metadata_argument(parser)
+  _add_mask_pii_argument(parser)
   return parser
 
 
@@ -420,6 +441,7 @@ def build_import_parser(prog: str = 'syllo-eval') -> argparse.ArgumentParser:
   parser.add_argument('--report-path', type=Path, default=None, help='If set, write the JSON report to this path.')
   _add_rubric_additions_argument(parser)
   _add_metadata_argument(parser)
+  _add_mask_pii_argument(parser)
   parser.add_argument(
     '--log-level',
     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -453,7 +475,7 @@ def _main_run(argv: Sequence[str], service_factory: ServiceFactory, prog: str) -
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = Settings()
+    settings = _settings(args.mask_pii)
     service = service_factory(settings)
     selected_metric_names = resolve_selected_metric_names_csv(args.metrics, service.available_metric_names())
   except MetricSelectionError as err:
@@ -509,8 +531,10 @@ def _main_dataset(argv: Sequence[str], prog: str) -> int:
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = Settings()
-    service = DatasetService(db_manager=build_db_manager(settings))
+    settings = _settings(args.command == 'import' and args.mask_pii)
+    service = DatasetService(
+      db_manager=build_db_manager(settings), pii_masker=PiiMasker.from_settings(settings.pii_masking)
+    )
 
     if args.command == 'import':
       payload = load_dataset_json(args.dataset_path)
@@ -561,7 +585,7 @@ def _main_import(argv: Sequence[str], service_factory: ServiceFactory, prog: str
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    run = asyncio.run(_import(service_factory(Settings()), args))
+    run = asyncio.run(_import(service_factory(_settings(args.mask_pii)), args))
   except Exception:
     logger.exception('Evaluation import failed')
     return 1
@@ -588,7 +612,7 @@ def _main_repeat(argv: Sequence[str], service_factory: ServiceFactory, prog: str
   configure_logging(LoggingSettings.from_env(level_override=args.log_level))
 
   try:
-    settings = Settings()
+    settings = _settings(args.mask_pii)
     selected_metric_names = None if args.metrics is None else [metric.strip() for metric in args.metrics.split(',')]
   except Exception:
     logger.exception('Evaluation repeat failed')

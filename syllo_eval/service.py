@@ -44,6 +44,7 @@ from syllo_eval.infrastructure.orbitals import OrbitalsClaimExtractorClient
 from syllo_eval.infrastructure.unit_of_work import TransactionalUnitOfWork, UnitOfWork
 from syllo_eval.model import EvaluationRun, EvaluationRunSample, EvaluationSampleStatus, EvaluationStatus
 from syllo_eval.orchestration.evaluation_orchestrator import EvaluationConfig, EvaluationOrchestrator
+from syllo_eval.pii_masking import PiiMasker
 from syllo_eval.settings import EnvSettings, EvaluationSettings, LlmJudgeSettings, Settings
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,7 @@ class EvaluationService:
     self._trace_client = trace_client
     self._trace_integration = trace_integration
     self._judge_client_factory = judge_client_factory
+    self._pii_masker = PiiMasker.from_settings(self._settings.pii_masking)
     builtins = [metric_class.metric_name for metric_class in BUILTIN_METRICS] if include_builtin_metrics else []
     _reject_bad_metric_names([*builtins, *(metric.name for metric in self._custom_metrics)])
 
@@ -331,6 +333,11 @@ class EvaluationService:
   @property
   def db_manager(self) -> DatabaseManager:
     return self._db_manager
+
+  @property
+  def pii_masker(self) -> PiiMasker | None:
+    """The masker built from ``settings.pii_masking``, or None when masking is off."""
+    return self._pii_masker
 
   def available_metric_names(self) -> list[str]:
     """List the combined inventory without constructing provider clients."""
@@ -402,9 +409,10 @@ class EvaluationService:
     )
 
   async def update_evaluation_metadata(self, run_id: UUID, metadata: Mapping[str, JsonValue]) -> EvaluationRun:
+    validated: dict[str, JsonValue] = TypeAdapter(dict[str, JsonValue]).validate_python(metadata)
     async with UnitOfWork(self._db_manager) as uow:
       return await uow.evaluation_runs.merge_metadata(
-        run_id, TypeAdapter(dict[str, JsonValue]).validate_python(metadata)
+        run_id, validated if self._pii_masker is None else self._pii_masker.mask_json(validated)
       )
 
   async def get_evaluation_report(self, run_id: UUID) -> EvaluationReport:
@@ -519,10 +527,10 @@ class EvaluationService:
       raise TraceImportError(
         f'Unknown trace adapter {trace_adapter_name!r}. Valid adapters: {", ".join(self._import_adapters)}'
       )
-    results = [normalize_imported_trace(adapter, trace) for trace in traces]
+    results = [normalize_imported_trace(adapter, trace, self._pii_masker) for trace in traces]
     async with UnitOfWork(self._db_manager) as uow:
       samples = await uow.samples.list_by_dataset(dataset_id)
-    trace_ids_by_sample_id = match_traces_to_samples(results, samples)
+    trace_ids_by_sample_id = match_traces_to_samples(results, samples, self._pii_masker)
     async with TransactionalUnitOfWork(self._db_manager) as uow:
       for result in results:
         try:
@@ -682,6 +690,11 @@ class EvaluationService:
     )
     max_concurrent_samples = options.max_concurrent_samples
     max_concurrent_tasks = options.max_concurrent_tasks
+    masker = self._pii_masker
+    if masker is not None:
+      # Both are stored with the run, and rubric additions also reach the judge prompts.
+      rubric_additions = {name: masker.mask_text(text) for name, text in (rubric_additions or {}).items()}
+      metadata = None if metadata is None else masker.mask_json(dict(metadata))
     uses_stored_traces = source_run_id is not None or imported_trace_ids is not None
     sample_trace_timeout = None if uses_stored_traces else options.sample_trace_timeout
     sample_compute_timeout = options.sample_compute_timeout
@@ -738,12 +751,13 @@ class EvaluationService:
           if trace_client is None:
             trace_client = PhoenixClient(self._settings.phoenix)
           trace_processor = TraceProcessor(
-            trace_client=trace_client, db_manager=self._db_manager, adapter=trace_adapter
+            trace_client=trace_client, db_manager=self._db_manager, adapter=trace_adapter, pii_masker=masker
           )
-      metric_planner = MetricPlanner(metric_registry=metric_registry, db_manager=self._db_manager)
+      metric_planner = MetricPlanner(metric_registry=metric_registry, db_manager=self._db_manager, pii_masker=masker)
       plan_executor = PlanExecutor(
         db_manager=self._db_manager,
         max_concurrent_tasks=max_concurrent_tasks,
+        pii_masker=masker,
       )
       sample_executor = SampleExecutor(
         db_manager=self._db_manager,
@@ -751,6 +765,7 @@ class EvaluationService:
         trace_processor=trace_processor,
         metric_planner=metric_planner,
         plan_executor=plan_executor,
+        pii_masker=masker,
       )
 
       orchestrator = EvaluationOrchestrator(
@@ -820,6 +835,8 @@ class EvaluationService:
       'sample_compute_timeout_seconds': sample_compute_timeout,
       # The span types the built-in retrieval metrics scored; custom metrics declare their own.
       'retrieval_span_types': list(retrieval_span_types) if self._include_builtin_metrics else None,
+      # Whether metrics saw masked text, and which kinds; never the key.
+      'pii_masking': None if self._pii_masker is None else self._pii_masker.describe(),
       'prompt_versions': {
         name: version
         for name, version in (

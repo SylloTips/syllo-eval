@@ -13,6 +13,7 @@ from syllo_eval.evaluation.metrics.contracts import EvaluationMetric
 from syllo_eval.infrastructure.database import DatabaseManager
 from syllo_eval.infrastructure.unit_of_work import UnitOfWork
 from syllo_eval.model import GroundTruth, MetricTargetingMode, Span
+from syllo_eval.pii_masking import PiiMasker
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,10 @@ class MetricPlanItem:
 class MetricPlanner:
   """Builds metric plan items for all applicable spans and span groups in a trace."""
 
-  def __init__(self, metric_registry: MetricRegistry, db_manager: DatabaseManager):
+  def __init__(self, metric_registry: MetricRegistry, db_manager: DatabaseManager, pii_masker: PiiMasker | None = None):
     self.metric_registry = metric_registry
     self.db_manager = db_manager
+    self.pii_masker = pii_masker
 
   async def iter_plan_items(self, trace_id: str, sample_id: UUID) -> AsyncIterator[MetricPlanItem]:
     """
@@ -156,10 +158,14 @@ class MetricPlanner:
 
     Each item carries the sample's ground truths for the keys its metric declares; the metric's
     ``ground_truth_skip_reason`` decides whether they are enough, and insufficient ones are skipped and logged.
+    With a masker, metrics receive masked spans and ground truths, even ones stored before masking was turned on.
     """
     async with UnitOfWork(self.db_manager) as uow:
       spans = await uow.spans.list_by_trace(trace_id)
       ground_truths = await uow.ground_truths.list_by_sample(sample_id)
+      if self.pii_masker is not None:
+        spans = [self.pii_masker.mask_model(span) for span in spans]
+        ground_truths = [self.pii_masker.mask_ground_truth(ground_truth) for ground_truth in ground_truths]
 
       ground_truth_by_key = {gt.key: gt for gt in ground_truths}
       warned_metrics: set[str] = set()
